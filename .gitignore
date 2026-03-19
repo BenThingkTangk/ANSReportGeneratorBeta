@@ -9,3 +9,5 @@ algorithm.txt
 test-sample.ans
 ANS_FILE_FORMAT.md
 dist/
+.vercel_output/
+.vercel/

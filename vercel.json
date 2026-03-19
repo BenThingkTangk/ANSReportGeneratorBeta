@@ -1,6 +1,7 @@
 {
   "buildCommand": "npm run build:vercel",
-  "outputDirectory": "dist/public",
+  "outputDirectory": ".vercel_output",
+  "installCommand": "npm install",
   "framework": null,
   "functions": {
     "api/**/*.ts": {
