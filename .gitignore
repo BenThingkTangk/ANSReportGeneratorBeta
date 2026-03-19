@@ -11,3 +11,4 @@ ANS_FILE_FORMAT.md
 dist/
 .vercel_output/
 .vercel/
+build_output/
