@@ -1,0 +1,11 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gz
+Pare-Alex-Thu-Jul-11-2024.ans
+algorithm.txt
+test-sample.ans
+ANS_FILE_FORMAT.md
+dist/
