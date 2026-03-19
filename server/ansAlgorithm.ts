@@ -6,7 +6,7 @@
  */
 
 import type { ParsedANSData } from "./ansParser";
-import type { ANSReport, PhaseResult, DysfunctionPatterns, Classification } from "@shared/schema";
+import type { ANSReport, PhaseResult, DysfunctionPatterns, Classification } from "../shared/schema";
 
 // Normative reference ranges by age group
 const NORMATIVE_RANGES: Record<string, Record<string, { low: number; high: number }>> = {
