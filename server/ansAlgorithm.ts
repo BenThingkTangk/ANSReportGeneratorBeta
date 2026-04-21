@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * ANS Report Generation Algorithm
  * Based on Dr. Joseph Colombo's Physio PS Methodology

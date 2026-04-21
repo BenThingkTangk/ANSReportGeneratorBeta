@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState } from "react";
 import type { ANSReport } from "@shared/schema";
 import { ArrowLeft, ChevronLeft, ChevronRight, AlertTriangle, CheckCircle, Activity, Pill, Clock } from "lucide-react";

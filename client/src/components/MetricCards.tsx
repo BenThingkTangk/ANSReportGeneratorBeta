@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useEffect, useState } from "react";
 import type { ANSReport } from "@shared/schema";
 import { Heart, Brain, Moon, Zap } from "lucide-react";

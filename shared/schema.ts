@@ -1,102 +1,169 @@
-import { z } from "zod";
+// Shared types for the HumanOS ANS application.
+// Kept in sync with api/upload.ts (Colombo methodology V2).
+//
+// NOTE: We use TypeScript interfaces here instead of Zod schemas because the
+// frontend treats these as opaque transport types. Validation happens on the
+// server where the algorithm generates them.
 
-// ANS Patient Data parsed from .ans file
-export const ansPatientDataSchema = z.object({
-  lastName: z.string(),
-  firstName: z.string(),
-  gender: z.string(),
-  physician: z.string(),
-  height: z.string(),
-  age: z.number(),
-  weight: z.number().optional(),
-  bmi: z.number().optional(),
-  dobString: z.string().optional(),
-  testDate: z.string().optional(),
-  eiRatio: z.number(),
-  valsalvaRatio: z.number(),
-  thirtyFifteenRatio: z.number(),
-  ectopicBeats: z.number(),
-  testNotes: z.string(),
-  procedureType: z.string(),
-  samplingInterval: z.number(),
-  dataPointCount: z.number(),
-  ecgData: z.array(z.number()),
-});
+export interface ANSPatientData {
+  lastName: string;
+  firstName: string;
+  gender: string;
+  physician: string;
+  height: string;
+  age: number;
+  weight?: number;
+  bmi?: number;
+  dobString?: string;
+  testDate?: string;
+  eiRatio: number;
+  valsalvaRatio: number;
+  thirtyFifteenRatio: number;
+  ectopicBeats: number;
+  testNotes: string;
+  procedureType: string;
+  samplingInterval: number;
+  dataPointCount: number;
+  ecgData: number[];
+  anesMedications?: string;
+  otherMedicationsSymptoms?: string;
+  baselineSystolicBP?: number;
+  baselineDiastolicBP?: number;
+}
 
-export type ANSPatientData = z.infer<typeof ansPatientDataSchema>;
+export interface PhaseMetrics {
+  phase: "Baseline-A" | "DeepBreathing-B" | "Baseline-C" | "Valsalva-D" | "Baseline-E" | "Stand-F";
+  label: string;
+  duration: string;
+  durationSec: number;
+  meanHR: number;
+  rangeHR: number;
+  FRF: number;
+  LFa: number;
+  RFa: number;
+  SB: number;
+  SBP?: number;
+  DBP?: number;
+  PP?: number;
+  MAP?: number;
+  HRV_SDNN: number;
+  HRV_RMSSD: number;
+}
 
-// Classification result
-export const classificationSchema = z.object({
-  classification: z.enum(["Low", "Borderline Low", "Normal", "Borderline High", "High"]),
-  severity: z.enum(["Abnormal", "Warning", "Normal"]),
-  measuredValue: z.number(),
-});
+export interface Classification {
+  label: "Low" | "Borderline Low" | "Normal" | "Borderline High" | "High" | "Low Normal";
+  severity: "Abnormal" | "Warning" | "Normal";
+  value: number;
+  lo: number;
+  hi: number;
+}
 
-export type Classification = z.infer<typeof classificationSchema>;
+export interface DysfunctionPatterns {
+  parasympatheticDominance: boolean;
+  parasympatheticExcess: boolean;
+  parasympatheticWithdrawal: boolean;
+  sympatheticExcess: boolean;
+  sympatheticWithdrawal: boolean;
+  maskedSW: boolean;
+  advancedAutonomicDysfunction: boolean;
+  CAN: boolean;
+  POTS: boolean;
+  orthostaticHypotension: boolean;
+  vasovagalRisk: boolean;
+  preSyncopeRisk: boolean;
+  bradycardia: boolean;
+  highFRF: boolean;
+}
 
-// Phase analysis results
-export const phaseResultSchema = z.object({
-  phase: z.string(),
-  indication: z.string(),
-  findings: z.array(z.string()),
-  measurements: z.record(z.number()).optional(),
-  classifications: z.record(classificationSchema).optional(),
-});
+export interface SubScore {
+  score: number;
+  weight: number;
+  contribution: number;
+  notes: string[];
+}
 
-export type PhaseResult = z.infer<typeof phaseResultSchema>;
+export interface WellnessBreakdown {
+  baselineAutonomic: SubScore;
+  sympathovagalBalance: SubScore;
+  reflexIntegrity: SubScore;
+  orthostaticResponse: SubScore;
+  hrvReserve: SubScore;
+  ageMultiplier: number;
+  rawTotal: number;
+  ageAdjusted: number;
+  final: number;
+}
 
-// Dysfunction patterns
-export const dysfunctionPatternsSchema = z.object({
-  parasympatheticExcess: z.boolean(),
-  parasympatheticWithdrawal: z.boolean(),
-  sympatheticExcess: z.boolean(),
-  sympatheticWithdrawal: z.boolean(),
-  advancedAutonomicDysfunction: z.boolean(),
-  POTS: z.boolean(),
-  orthostaticDysfunction: z.boolean(),
-  syncopeRisk: z.boolean(),
-});
+export interface PhaseFinding {
+  phase: string;
+  indication: string;
+  findings: string[];
+}
 
-export type DysfunctionPatterns = z.infer<typeof dysfunctionPatternsSchema>;
+export interface TherapyRecommendation {
+  category: string;
+  intervention: string;
+  dose?: string;
+  rationale: string;
+  contraindications?: string[];
+  priority: "primary" | "secondary" | "optional";
+}
 
-// Complete ANS Report
-export const ansReportSchema = z.object({
-  patientData: ansPatientDataSchema,
-  wellnessScore: z.number(),
-  riskLevel: z.string(),
-  heartRateVariability: z.number(),
-  stressIndex: z.number(),
-  sleepQuality: z.number().optional(),
-  energyLevel: z.string(),
-  autonomicBalance: z.object({
-    parasympathetic: z.number(),
-    sympathetic: z.number(),
-    balance: z.number(),
-  }),
-  phaseResults: z.array(phaseResultSchema),
-  dysfunctionPatterns: dysfunctionPatternsSchema,
-  therapyRecommendations: z.array(z.object({
-    category: z.string(),
-    intervention: z.string(),
-    details: z.string(),
-    rationale: z.string(),
-  })),
-  followUp: z.object({
-    retestInterval: z.string(),
-    rationale: z.string(),
-    monitorParameters: z.array(z.string()),
-  }),
-  generatedAt: z.string(),
-});
+export interface BodySystemImpact {
+  system: "cardiovascular" | "respiratory" | "digestive" | "nervous" | "endocrine" | "musculoskeletal" | "immune";
+  impact: number;
+  label: string;
+  description: string;
+}
 
-export type ANSReport = z.infer<typeof ansReportSchema>;
+export type WellnessTier = "Optimal" | "Resilient" | "Balanced" | "Stressed" | "Depleted" | "Critical";
 
-// API types
-export const uploadResponseSchema = z.object({
-  success: z.boolean(),
-  patientData: ansPatientDataSchema.optional(),
-  report: ansReportSchema.optional(),
-  error: z.string().optional(),
-});
+export interface ANSReport {
+  patientData: ANSPatientData;
+  wellnessScore: number;
+  wellnessTier: WellnessTier;
+  wellnessBreakdown: WellnessBreakdown;
+  riskLevel: string;
+  energyLevel: "Low" | "Moderate" | "High";
+  autonomicBalance: {
+    parasympathetic: number;
+    sympathetic: number;
+    balance: number;
+    interpretation: string;
+  };
+  phaseEvents: PhaseMetrics[];
+  ratios: {
+    eiRatio: { value: number; normal: string; classification: Classification };
+    valsalvaRatio: { value: number; normal: string; classification: Classification };
+    thirtyFifteenRatio: { value: number; normal: string; classification: Classification };
+  };
+  phaseFindings: PhaseFinding[];
+  dysfunctionPatterns: DysfunctionPatterns;
+  therapyRecommendations: TherapyRecommendation[];
+  contraindications: string[];
+  followUp: { retestInterval: string; rationale: string; monitorParameters: string[] };
+  bodySystemImpact: BodySystemImpact[];
+  clinicalFlags: string[];
+  overallImpression: string;
+  samplingRate: number;
+  respiratoryFrequency: number;
+  rPeakCount: number;
+  generatedAt: string;
+  patientSynopsis?: string;
+  clinicianSynopsis?: string;
+}
 
-export type UploadResponse = z.infer<typeof uploadResponseSchema>;
+export interface UploadResponse {
+  success: boolean;
+  patientData?: ANSPatientData;
+  report?: ANSReport;
+  error?: string;
+}
+
+// Ask Atom chat message
+export interface AtomMessage {
+  role: "user" | "assistant";
+  content: string;
+  citations?: string[];
+  timestamp?: string;
+}
