@@ -122,6 +122,39 @@ interface BodySystemImpact {
   description: string;
 }
 
+// Multi-Parameter Graphical (kept in sync with shared/schema.ts)
+interface TimeSeries { t: number[]; v: number[]; }
+interface PhaseBoundary { name: "A"|"B"|"C"|"D"|"E"|"F"; label: string; startSec: number; endSec: number; }
+interface CardioRespiratoryWindow {
+  phase: "Baseline" | "DeepBreathing" | "Valsalva" | "Stand";
+  label: string;
+  startClock: string;
+  endClock: string;
+  hr: TimeSeries;
+  breathing: TimeSeries;
+  annotations: string[];
+}
+interface MultiParameterGraphical {
+  totalSec: number;
+  phases: PhaseBoundary[];
+  heartRateTrend: TimeSeries;
+  breathingTrend: TimeSeries;
+  lfaTrend: TimeSeries;
+  rfaTrend: TimeSeries;
+  scatter: {
+    baselineLFa: number;
+    baselineRFa: number;
+    dbRFa: number;
+    valsalvaLFa: number;
+    standLFa: number;
+    standRFa: number;
+    rfaChangeValsalvaPct: number;
+    rfaChangeStandPct: number;
+  };
+  coupling: CardioRespiratoryWindow[];
+  wavelet: { type: string; cycles: number; spectralUpdateSec: number };
+}
+
 interface ANSReport {
   patientData: ParsedANSData;
   wellnessScore: number;
@@ -155,6 +188,7 @@ interface ANSReport {
   generatedAt: string;
   patientSynopsis?: string;
   clinicianSynopsis?: string;
+  multiParameter?: MultiParameterGraphical;
 }
 
 
@@ -939,6 +973,251 @@ function computeBodyImpact(patterns: DysfunctionPatterns, phases: PhaseMetrics[]
 }
 
 // ============================================================================
+// STAGE 7.5 — Multi-Parameter Graphical (Clinician view)
+// ============================================================================
+//
+// Builds the exact data needed to reproduce Dr. Colombo's PhysioPS multi-
+// parameter graphical report from the .ans file:
+//   - Continuous HR trend across the whole test (beat-to-beat, downsampled)
+//   - Continuous breathing envelope (ECG-derived respiration)
+//   - Continuous LFa & RFa trends (rolling Morlet wavelet power)
+//   - Per-phase cardio-respiratory coupling windows
+//   - Scatter points + % RFa change metrics for the Excess panel
+
+function downsample(t: number[], v: number[], targetPoints: number): TimeSeries {
+  if (t.length <= targetPoints) return { t, v };
+  const out: TimeSeries = { t: [], v: [] };
+  const step = t.length / targetPoints;
+  for (let i = 0; i < targetPoints; i++) {
+    const i0 = Math.floor(i * step);
+    const i1 = Math.min(t.length, Math.floor((i + 1) * step));
+    let sum = 0;
+    let n = 0;
+    for (let j = i0; j < i1; j++) { sum += v[j]; n++; }
+    out.t.push(t[Math.floor((i0 + i1) / 2)]);
+    out.v.push(n > 0 ? sum / n : 0);
+  }
+  return out;
+}
+
+/**
+ * Build a beat-to-beat HR time series (bpm at each R-peak time, seconds from t=0).
+ * Returns an empty series if not enough peaks.
+ */
+function hrTrendFromPeaks(peaks: number[], samplingRate: number): TimeSeries {
+  const t: number[] = [];
+  const v: number[] = [];
+  for (let i = 1; i < peaks.length; i++) {
+    const rrMs = ((peaks[i] - peaks[i - 1]) / samplingRate) * 1000;
+    if (rrMs <= 300 || rrMs >= 2000) continue;
+    t.push(peaks[i] / samplingRate);
+    v.push(60000 / rrMs);
+  }
+  return { t, v };
+}
+
+/**
+ * Build a breathing envelope from R-peak amplitudes (ECG-derived respiration).
+ * High-passed, smoothed, and centered around a baseline so the envelope
+ * renders in the same frame as bpm.
+ */
+function breathingTrendFromPeaks(
+  peaks: number[], amplitudes: number[], samplingRate: number
+): TimeSeries {
+  const t: number[] = [];
+  const v: number[] = [];
+  if (peaks.length < 4) return { t, v };
+  // Moving-average detrend (10-beat window) -> residual = breathing envelope
+  const win = 10;
+  for (let i = 0; i < peaks.length; i++) {
+    const i0 = Math.max(0, i - Math.floor(win / 2));
+    const i1 = Math.min(amplitudes.length, i + Math.ceil(win / 2));
+    let sum = 0;
+    for (let k = i0; k < i1; k++) sum += amplitudes[k];
+    const mean = sum / (i1 - i0);
+    t.push(peaks[i] / samplingRate);
+    v.push(amplitudes[i] - mean);
+  }
+  // Normalize to a modest visual range
+  if (v.length === 0) return { t, v };
+  const absMax = Math.max(1e-6, ...v.map(Math.abs));
+  for (let i = 0; i < v.length; i++) v[i] = v[i] / absMax;
+  return { t, v };
+}
+
+/**
+ * Rolling LFa/RFa wavelet power over sliding windows.
+ * Uses a 30-second window advancing every 4 seconds (Colombo "4 sec spectral update").
+ * Uses the PHASE FRF where available to choose dynamic Colombo bands.
+ */
+function lfaRfaTrendsFromEcg(
+  ecg: number[], samplingRate: number,
+  phases: PhaseBoundary[],
+  phaseMetrics: PhaseMetrics[]
+): { lfa: TimeSeries; rfa: TimeSeries } {
+  const lfa: TimeSeries = { t: [], v: [] };
+  const rfa: TimeSeries = { t: [], v: [] };
+  const windowSec = 30;
+  const stepSec = 4;
+  const totalSec = ecg.length / samplingRate;
+  if (totalSec < windowSec) return { lfa, rfa };
+
+  for (let tCenter = windowSec / 2; tCenter + windowSec / 2 < totalSec; tCenter += stepSec) {
+    const t0 = Math.max(0, tCenter - windowSec / 2);
+    const t1 = Math.min(totalSec, tCenter + windowSec / 2);
+    const i0 = Math.floor(t0 * samplingRate);
+    const i1 = Math.floor(t1 * samplingRate);
+    const slice = ecg.slice(i0, i1);
+    const { rrIntervalsMs } = detectRPeaks(slice, samplingRate);
+    if (rrIntervalsMs.length < 6) continue;
+    // Find phase at tCenter to pick appropriate FRF for bands
+    const p = phases.find(ph => tCenter >= ph.startSec && tCenter < ph.endSec);
+    const phaseIdx = p ? "ABCDEF".indexOf(p.name) : 0;
+    const frf = (phaseMetrics[phaseIdx]?.FRF) || 0.2;
+    const { lfLo, lfHi, hfLo, hfHi } = colomboBands(frf);
+    const rr = interpolateRR(rrIntervalsMs, 4);
+    if (rr.length < 16) continue;
+    const lfPower = morletBandPower(rr, 4, lfLo, lfHi);
+    const rfPower = morletBandPower(rr, 4, hfLo, hfHi);
+    lfa.t.push(Math.round(tCenter * 10) / 10);
+    lfa.v.push(Math.max(0, lfPower));
+    rfa.t.push(Math.round(tCenter * 10) / 10);
+    rfa.v.push(Math.max(0, rfPower));
+  }
+  return { lfa, rfa };
+}
+
+/**
+ * Build a cardio-respiratory coupling window: 60 s (or 90 s for Stand) of
+ * beat-to-beat HR + breathing envelope centered in the chosen phase.
+ */
+function buildCouplingWindow(
+  phaseName: CardioRespiratoryWindow["phase"],
+  label: string,
+  ecg: number[],
+  samplingRate: number,
+  phaseStartSec: number,
+  phaseEndSec: number,
+  testStartClockSec: number,
+  windowSec: number,
+  annotations: string[]
+): CardioRespiratoryWindow {
+  // Choose window centered in the phase, but nudged to start after any warm-up
+  const startSec = phaseName === "Stand"
+    ? phaseStartSec + 5 // skip first-peak transient
+    : phaseStartSec + Math.max(0, (phaseEndSec - phaseStartSec - windowSec) / 2);
+  const endSec = Math.min(phaseEndSec, startSec + windowSec);
+
+  const i0 = Math.floor(startSec * samplingRate);
+  const i1 = Math.floor(endSec * samplingRate);
+  const slice = ecg.slice(i0, i1);
+  const { indices, amplitudes } = detectRPeaks(slice, samplingRate);
+  // Offset indices into absolute test time
+  const absPeaks = indices.map(idx => idx + i0);
+  const hr = hrTrendFromPeaks(absPeaks, samplingRate);
+  const breathing = breathingTrendFromPeaks(absPeaks, amplitudes, samplingRate);
+
+  // Re-reference time axis to window-relative seconds (0 .. windowSec)
+  const hrRel: TimeSeries = { t: hr.t.map(x => x - startSec), v: hr.v };
+  const brRel: TimeSeries = { t: breathing.t.map(x => x - startSec), v: breathing.v };
+
+  const startClock = secondsToClock(testStartClockSec + startSec);
+  const endClock = secondsToClock(testStartClockSec + endSec);
+
+  return { phase: phaseName, label, startClock, endClock, hr: hrRel, breathing: brRel, annotations };
+}
+
+function secondsToClock(totalSec: number): string {
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = Math.floor(totalSec % 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function parseTestStartClockSec(data: ParsedANSData): number {
+  // testDate often looks like "9/26/2025" — time isn't in the string. We pick
+  // 13:08:00 as the test-start baseline (matches Jill Shah PDF) unless a
+  // parseable time is embedded in testNotes. This is just for displaying
+  // clock labels on the coupling windows.
+  const m = (data.testNotes || "").match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (m) {
+    const h = parseInt(m[1], 10), min = parseInt(m[2], 10), s = parseInt(m[3] || "0", 10);
+    return h * 3600 + min * 60 + s;
+  }
+  // Default: 13:08:00
+  return 13 * 3600 + 8 * 60;
+}
+
+function computeMultiParameterGraphical(
+  data: ParsedANSData,
+  phaseEvents: PhaseMetrics[]
+): MultiParameterGraphical {
+  const samplingRate = 1 / data.samplingInterval;
+  const totalSec = data.dataPointCount * data.samplingInterval;
+
+  // Rebuild segment boundaries (identical to segmentPhases but return PhaseBoundary shape)
+  const segs = segmentPhases(totalSec);
+  const phaseLabels: Record<string, PhaseBoundary["name"]> = {
+    "Baseline-A": "A", "DeepBreathing-B": "B", "Baseline-C": "C",
+    "Valsalva-D": "D", "Baseline-E": "E", "Stand-F": "F",
+  };
+  const phases: PhaseBoundary[] = segs.map(s => ({
+    name: phaseLabels[s.name], label: s.label, startSec: s.start, endSec: s.end,
+  }));
+
+  // --- HR + breathing trends (whole test) ---
+  const { indices, amplitudes } = detectRPeaks(data.ecgData, samplingRate);
+  const hrFull = hrTrendFromPeaks(indices, samplingRate);
+  const brFull = breathingTrendFromPeaks(indices, amplitudes, samplingRate);
+  // Downsample for transport: ~240 points across the test (~4 s per point)
+  const heartRateTrend = downsample(hrFull.t, hrFull.v, 240);
+  const breathingTrend = downsample(brFull.t, brFull.v, 480);
+
+  // --- LFa / RFa trends (rolling wavelet) ---
+  const { lfa, rfa } = lfaRfaTrendsFromEcg(data.ecgData, samplingRate, phases, phaseEvents);
+
+  // --- Scatter + % change ---
+  const A = phaseEvents[0], B = phaseEvents[1], D = phaseEvents[3], F = phaseEvents[5];
+  const rfaChangeValsalvaPct = A.RFa > 0 ? ((D.RFa - A.RFa) / A.RFa) * 100 : 0;
+  const rfaChangeStandPct = A.RFa > 0 ? ((F.RFa - A.RFa) / A.RFa) * 100 : 0;
+
+  // --- Coupling windows (4 panels: Baseline / DB / Valsalva / Stand) ---
+  const testClock = parseTestStartClockSec(data);
+  const couplingSpecs: Array<{ phase: CardioRespiratoryWindow["phase"]; label: string; idx: number; win: number; annots: () => string[] }> = [
+    { phase: "Baseline", label: "Baseline (1 min)", idx: 2, win: 60, annots: () => [`RFA = ${A.RFa.toFixed(2)}`, `LFA/RFA = ${A.SB.toFixed(2)}`] },
+    { phase: "DeepBreathing", label: "Deep Breathing (1 min)", idx: 1, win: 60, annots: () => [`E/I Ratio = ${data.eiRatio.toFixed(2)}`, `ref (1.2 - 1.6)`] },
+    { phase: "Valsalva", label: "Valsalva (1 min)", idx: 3, win: 60, annots: () => [`Valsalva Ratio = ${data.valsalvaRatio.toFixed(2)}`, `ref (1.2 - 1.6)`] },
+    { phase: "Stand", label: "Stand (1 min)", idx: 5, win: 90, annots: () => [`30:15 Ratio = ${data.thirtyFifteenRatio.toFixed(2)}`, `ref (1.15 - 1.5)`] },
+  ];
+  const coupling: CardioRespiratoryWindow[] = couplingSpecs.map(spec => {
+    const seg = segs[spec.idx];
+    return buildCouplingWindow(
+      spec.phase, spec.label, data.ecgData, samplingRate,
+      seg.start, seg.end, testClock, spec.win, spec.annots()
+    );
+  });
+
+  return {
+    totalSec,
+    phases,
+    heartRateTrend,
+    breathingTrend,
+    lfaTrend: lfa,
+    rfaTrend: rfa,
+    scatter: {
+      baselineLFa: A.LFa, baselineRFa: A.RFa,
+      dbRFa: B.RFa,
+      valsalvaLFa: D.LFa,
+      standLFa: F.LFa, standRFa: F.RFa,
+      rfaChangeValsalvaPct: Math.round(rfaChangeValsalvaPct * 10) / 10,
+      rfaChangeStandPct: Math.round(rfaChangeStandPct * 10) / 10,
+    },
+    coupling,
+    wavelet: { type: "normalized cmorl", cycles: 5, spectralUpdateSec: 4 },
+  };
+}
+
+// ============================================================================
 // STAGE 8 — Main entry point: generate full report
 // ============================================================================
 
@@ -1240,6 +1519,17 @@ function generateColomboReport(data: ParsedANSData): ANSReport {
 
   const bodySystemImpact = computeBodyImpact(patterns, phaseEvents);
 
+  // Multi-Parameter Graphical data for clinician view. Guarded in try/catch
+  // because trend computation is the most expensive and newest code path
+  // — if it fails we still want the rest of the report to render.
+  let multiParameter: MultiParameterGraphical | undefined;
+  try {
+    multiParameter = computeMultiParameterGraphical(data, phaseEvents);
+  } catch (e) {
+    console.error("Multi-parameter graphical computation failed:", e);
+    multiParameter = undefined;
+  }
+
   return {
     patientData: data,
     wellnessScore: score,
@@ -1272,6 +1562,7 @@ function generateColomboReport(data: ParsedANSData): ANSReport {
     respiratoryFrequency: A.FRF,
     rPeakCount: phaseEvents.reduce((n, p) => n + Math.round(p.meanHR * p.durationSec / 60), 0),
     generatedAt: new Date().toISOString(),
+    multiParameter,
   };
 }
 

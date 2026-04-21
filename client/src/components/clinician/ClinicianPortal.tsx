@@ -14,6 +14,7 @@ import { WellnessBreakdownPanel } from "./WellnessBreakdownPanel";
 import { FollowUpPanel } from "./FollowUpPanel";
 import { ColomboReferences } from "./ColomboReferences";
 import { AutonomicWave } from "@/components/AutonomicWave";
+import { MultiParameterGraphical } from "./MultiParameterGraphical";
 
 interface ClinicianPortalProps {
   report: ANSReport;
@@ -58,6 +59,8 @@ export function ClinicianPortal({ report }: ClinicianPortalProps) {
         error={synopsisError}
         onRetry={fetchSynopsis}
       />
+
+      <MultiParameterGraphical report={report} />
 
       <PhaseEventTable phaseEvents={report.phaseEvents} />
 

@@ -130,6 +130,70 @@ export interface BodySystemImpact {
 
 export type WellnessTier = "Optimal" | "Resilient" | "Balanced" | "Stressed" | "Depleted" | "Critical";
 
+// --- Multi-Parameter Graphical (Clinician) ---------------------------------
+// Everything needed to reproduce Dr. Colombo's PhysioPS multi-parameter
+// graphical report directly from the .ans file.
+
+export interface TimeSeries {
+  /** Time axis, seconds from test start, downsampled for rendering (~1 Hz or 0.5 Hz). */
+  t: number[];
+  /** Value at each t. */
+  v: number[];
+}
+
+/** A phase boundary in seconds from test start — used to draw A/B/C/D/E/F vertical dividers. */
+export interface PhaseBoundary {
+  name: "A" | "B" | "C" | "D" | "E" | "F";
+  label: string;
+  startSec: number;
+  endSec: number;
+}
+
+/** One minute of HR + breathing waveform shown in the Cardio-Respiratory Coupling grid. */
+export interface CardioRespiratoryWindow {
+  phase: "Baseline" | "DeepBreathing" | "Valsalva" | "Stand";
+  label: string;
+  startClock: string;  // e.g. "13:12:18"
+  endClock: string;
+  /** Per-beat HR (bpm) sampled at the R-peaks in this window, uniformly time-referenced. */
+  hr: TimeSeries;
+  /** Breathing envelope (EDR) over the same window, offset to the bottom of the plot. */
+  breathing: TimeSeries;
+  /** Annotations like "RFA = 5.13" or "E/I Ratio = 1.21". */
+  annotations: string[];
+}
+
+export interface MultiParameterGraphical {
+  /** Total recording length in seconds. */
+  totalSec: number;
+  /** A-F phase boundaries. */
+  phases: PhaseBoundary[];
+  /** Continuous HR (beats/min) trend across the whole test. */
+  heartRateTrend: TimeSeries;
+  /** Breathing envelope across the whole test (ECG-derived respiration). */
+  breathingTrend: TimeSeries;
+  /** LFa (sympathetic) trend — rolling wavelet power. */
+  lfaTrend: TimeSeries;
+  /** RFa (parasympathetic) trend — rolling wavelet power. */
+  rfaTrend: TimeSeries;
+  /** Per-phase LFa/RFa scatter points with age-banded normal regions. */
+  scatter: {
+    baselineLFa: number;      // A
+    baselineRFa: number;      // A
+    dbRFa: number;            // B
+    valsalvaLFa: number;      // D
+    standLFa: number;         // F
+    standRFa: number;         // F
+    /** % change A→D for Valsalva and A→F for Stand RFa, for the Excess panel. */
+    rfaChangeValsalvaPct: number;
+    rfaChangeStandPct: number;
+  };
+  /** Per-phase cardio-respiratory coupling windows (60 s each for Baseline/DB/Valsalva; 90 s for Stand). */
+  coupling: CardioRespiratoryWindow[];
+  /** Wavelet analysis metadata for the footer. */
+  wavelet: { type: string; cycles: number; spectralUpdateSec: number };
+}
+
 export interface ANSReport {
   patientData: ANSPatientData;
   wellnessScore: number;
@@ -163,6 +227,7 @@ export interface ANSReport {
   generatedAt: string;
   patientSynopsis?: string;
   clinicianSynopsis?: string;
+  multiParameter?: MultiParameterGraphical;
 }
 
 export interface UploadResponse {

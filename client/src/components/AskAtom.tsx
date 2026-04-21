@@ -133,7 +133,7 @@ export function AskAtom({ report, viewerRole }: AskAtomProps) {
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold leading-tight">Ask Atom</p>
-                <p className="text-[10px] text-muted-foreground">powered by Perplexity</p>
+                <p className="text-[10px] text-muted-foreground">Powered by ATOM</p>
               </div>
               <button
                 onClick={() => setOpen(false)}

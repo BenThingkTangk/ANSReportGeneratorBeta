@@ -50,7 +50,7 @@ export function ClinicianSynopsis({ synopsis, loading, error, onRetry }: Clinici
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
           <p className="text-sm leading-6 text-foreground/85 whitespace-pre-wrap">{synopsis}</p>
           <p className="text-[10px] text-muted-foreground mt-3 pt-3 border-t border-border/20">
-            — powered by Perplexity Sonar
+            — Powered by ATOM
           </p>
         </motion.div>
       )}

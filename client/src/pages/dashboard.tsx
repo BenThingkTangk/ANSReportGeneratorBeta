@@ -3,7 +3,7 @@ import type { ANSReport } from "@shared/schema";
 import { UploadScreen } from "@/components/UploadScreen";
 import { AnalyzingScreen } from "@/components/AnalyzingScreen";
 import { ReportDashboard } from "@/components/ReportDashboard";
-import { PerplexityAttribution } from "@/components/PerplexityAttribution";
+import { AtomAttribution } from "@/components/AtomAttribution";
 import { apiRequest } from "@/lib/queryClient";
 
 type AppState = "upload" | "analyzing" | "report";
@@ -92,7 +92,7 @@ export default function Dashboard() {
           <ReportDashboard report={report} onReset={handleReset} />
         )}
       </div>
-      <PerplexityAttribution />
+      <AtomAttribution />
     </div>
   );
 }

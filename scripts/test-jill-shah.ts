@@ -131,6 +131,20 @@ console.log("");
 console.log("Clinical flags:");
 for (const f of report.clinicalFlags) console.log("  !", f);
 
+console.log("");
+console.log("Multi-parameter graphical:");
+const mpg = report.multiParameter;
+if (!mpg) {
+  console.log("  (absent)");
+} else {
+  console.log(`  totalSec=${mpg.totalSec}  phases=${mpg.phases.length}`);
+  console.log(`  HR points=${mpg.heartRateTrend.t.length}  Breath points=${mpg.breathingTrend.t.length}`);
+  console.log(`  LFa points=${mpg.lfaTrend.t.length}  RFa points=${mpg.rfaTrend.t.length}`);
+  console.log(`  Scatter: baseline LFa=${mpg.scatter.baselineLFa.toFixed(2)} RFa=${mpg.scatter.baselineRFa.toFixed(2)}; DB RFa=${mpg.scatter.dbRFa.toFixed(2)}; Valsalva LFa=${mpg.scatter.valsalvaLFa.toFixed(2)}; Stand LFa=${mpg.scatter.standLFa.toFixed(2)} RFa=${mpg.scatter.standRFa.toFixed(2)}`);
+  console.log(`  Coupling windows: ${mpg.coupling.map((c: any) => c.phase).join(", ")}`);
+  console.log(`  Wavelet: ${mpg.wavelet.type} ${mpg.wavelet.cycles} cycles, update ${mpg.wavelet.spectralUpdateSec}s`);
+}
+
 // Assertions — Jill Shah PDF narrative
 const assertions: { label: string; pass: boolean }[] = [];
 assertions.push({ label: "Risk is Mild (not High/Moderate)", pass: /Mild/i.test(report.riskLevel) });

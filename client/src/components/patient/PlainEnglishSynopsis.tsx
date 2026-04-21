@@ -60,7 +60,7 @@ export function PlainEnglishSynopsis({ report: _report, synopsis, loading, error
             {synopsis}
           </p>
           <p className="text-[10px] text-muted-foreground mt-4 pt-3 border-t border-border/20">
-            — powered by Perplexity Sonar
+            — Powered by ATOM
           </p>
         </motion.div>
       )}
