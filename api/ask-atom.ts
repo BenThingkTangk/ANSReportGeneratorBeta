@@ -73,21 +73,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!apiKey) return res.status(500).json({ success: false, error: "PPLX_API_KEY not configured" });
 
     const body: any = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-    const messages = Array.isArray(body?.messages) ? body.messages : [];
+    let messages = Array.isArray(body?.messages) ? body.messages : [];
     const viewerRole = body?.viewerRole === "clinician" ? "clinician" : "patient";
     const report = body?.report;
+
+    // Back-compat: accept {question, context} shape as a single-turn user message
+    if (messages.length === 0 && typeof body?.question === "string" && body.question.trim()) {
+      messages = [{ role: "user", content: body.question.trim() }];
+    }
+
+    // Normalize: keep only valid user/assistant turns
+    messages = messages
+      .filter((m: any) => m && typeof m.content === "string" && (m.role === "user" || m.role === "assistant"))
+      .slice(-10);
+
+    // Sonar requires the last message to be role=user. If missing or ends with
+    // assistant, reject with a clear 400 rather than forwarding a bad request.
+    if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
+      return res.status(400).json({
+        success: false,
+        error: "messages must be a non-empty array ending with a user message (or provide a 'question' field)",
+      });
+    }
 
     // Inject system prompt + report digest at the front
     const contextMsg = {
       role: "system",
       content: `${COLOMBO_SYSTEM}\n\n${reportDigest(report, viewerRole)}`,
     };
-    const conversation = [
-      contextMsg,
-      ...messages
-        .filter((m: any) => m && typeof m.content === "string" && (m.role === "user" || m.role === "assistant"))
-        .slice(-10), // keep the last 10 turns
-    ];
+    const conversation = [contextMsg, ...messages];
 
     const r = await fetch(SONAR_URL, {
       method: "POST",

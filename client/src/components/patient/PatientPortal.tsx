@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { WellnessMeter } from "./WellnessMeter";
+import { WellnessBreakdown } from "./WellnessBreakdown";
 import { PlainEnglishSynopsis } from "./PlainEnglishSynopsis";
 import { BodyHeatmap } from "./BodyHeatmap";
 import { KeyMetricsStrip } from "./KeyMetricsStrip";
@@ -77,6 +78,9 @@ export function PatientPortal({ report }: PatientPortalProps) {
 
       {/* Hero — Wellness Meter */}
       <WellnessMeter report={report} />
+
+      {/* Wellness Breakdown — what's driving the score */}
+      <WellnessBreakdown report={report} />
 
       {/* Plain-English Synopsis */}
       <PlainEnglishSynopsis

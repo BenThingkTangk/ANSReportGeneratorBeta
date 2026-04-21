@@ -75,10 +75,18 @@ export interface DysfunctionPatterns {
   highFRF: boolean;
 }
 
+export interface WellnessDriver {
+  label: string;
+  value: string;
+  points: number;                                                        // signed: + boosts, − drags
+  severity: "positive" | "neutral" | "mild" | "moderate" | "severe";
+}
+
 export interface SubScore {
   score: number;
   weight: number;
   contribution: number;
+  drivers?: WellnessDriver[];
   notes: string[];
 }
 
@@ -88,10 +96,14 @@ export interface WellnessBreakdown {
   reflexIntegrity: SubScore;
   orthostaticResponse: SubScore;
   hrvReserve: SubScore;
+  patternPenalty?: { total: number; items: WellnessDriver[] };
   ageMultiplier: number;
   rawTotal: number;
   ageAdjusted: number;
   final: number;
+  topPositiveDrivers?: WellnessDriver[];
+  topNegativeDrivers?: WellnessDriver[];
+  headline?: string;
 }
 
 export interface PhaseFinding {

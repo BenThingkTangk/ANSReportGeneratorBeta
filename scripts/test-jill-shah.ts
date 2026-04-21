@@ -148,3 +148,22 @@ for (const a of assertions) {
 }
 console.log(`\n${assertions.length - failed}/${assertions.length} passed`);
 process.exit(failed > 0 ? 1 : 0);
+
+console.log("\n=== WELLNESS BREAKDOWN ===");
+const bd = report.wellnessBreakdown;
+console.log(`\nHeadline: ${bd.headline}`);
+console.log(`\nSub-scores (score × weight = contribution):`);
+console.log(`  Baseline Autonomic Tone:     ${bd.baselineAutonomic.score.toFixed(1)}/100 × ${bd.baselineAutonomic.weight} = ${bd.baselineAutonomic.contribution}`);
+console.log(`  Sympathovagal Balance:       ${bd.sympathovagalBalance.score.toFixed(1)}/100 × ${bd.sympathovagalBalance.weight} = ${bd.sympathovagalBalance.contribution}`);
+console.log(`  Reflex Integrity:            ${bd.reflexIntegrity.score.toFixed(1)}/100 × ${bd.reflexIntegrity.weight} = ${bd.reflexIntegrity.contribution}`);
+console.log(`  Orthostatic Response:        ${bd.orthostaticResponse.score.toFixed(1)}/100 × ${bd.orthostaticResponse.weight} = ${bd.orthostaticResponse.contribution}`);
+console.log(`  HRV Reserve:                 ${bd.hrvReserve.score.toFixed(1)}/100 × ${bd.hrvReserve.weight} = ${bd.hrvReserve.contribution}`);
+console.log(`  Raw total: ${bd.rawTotal} → × age ${bd.ageMultiplier} = ${bd.ageAdjusted}`);
+console.log(`  Pattern penalty: -${bd.patternPenalty.total}`);
+console.log(`  FINAL: ${bd.final}`);
+console.log(`\nTop DRAGGERS (points lost):`);
+for (const d of bd.topNegativeDrivers) console.log(`  ${d.points.toFixed(1)} | [${d.severity}] ${d.label} (${d.value})`);
+console.log(`\nTop BOOSTERS (points gained):`);
+for (const d of bd.topPositiveDrivers) console.log(`  +${d.points.toFixed(1)} | [${d.severity}] ${d.label} (${d.value})`);
+console.log(`\nPattern penalties applied:`);
+for (const p of bd.patternPenalty.items) console.log(`  ${p.points.toFixed(1)} | [${p.severity}] ${p.label}`);

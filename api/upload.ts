@@ -84,11 +84,19 @@ interface DysfunctionPatterns {
   highFRF: boolean;
 }
 
+interface WellnessDriver {
+  label: string;       // human-readable, e.g. "Baseline SB 0.18 — parasympathetic-dominant"
+  value: string;       // the observed value, e.g. "0.18" or "56 bpm"
+  points: number;      // signed contribution to the *final* score (positive boosts, negative drags)
+  severity: "positive" | "neutral" | "mild" | "moderate" | "severe";
+}
+
 interface SubScore {
-  score: number;
-  weight: number;
-  contribution: number;
-  notes: string[];
+  score: number;        // 0–100, the sub-score itself
+  weight: number;       // fractional weight in the composite
+  contribution: number; // score × weight (points contributed to rawTotal out of 100)
+  drivers: WellnessDriver[]; // ordered top-down by absolute |points|
+  notes: string[];      // legacy plain-text notes for back-compat
 }
 
 interface WellnessBreakdown {
@@ -97,10 +105,14 @@ interface WellnessBreakdown {
   reflexIntegrity: SubScore;
   orthostaticResponse: SubScore;
   hrvReserve: SubScore;
+  patternPenalty: { total: number; items: WellnessDriver[] }; // negative points applied after composite
   ageMultiplier: number;
   rawTotal: number;
   ageAdjusted: number;
   final: number;
+  topPositiveDrivers: WellnessDriver[]; // top 3 boosters across all categories
+  topNegativeDrivers: WellnessDriver[]; // top 3 draggers across all categories
+  headline: string;                     // one-sentence summary under the number
 }
 
 interface PhaseFinding {
@@ -783,14 +795,93 @@ function thresholdScore(value: number, lo: number, hi: number): number {
   return Math.round(((value - lo) / (hi - lo)) * 1000) / 10;
 }
 
+// ---------------------------------------------------------------------------
+// Wellness Score v2 — Colombo-accurate bands, structured drivers, pattern penalties
+// ---------------------------------------------------------------------------
+// Design principles:
+//   1. Every sub-score emits an explicit list of signed "drivers" in score·weight
+//      space so the UI can show "Jill's score is 58 because: ↓ SB 0.18 cost 6pts,
+//      ↓ bradycardia cost 4pts, ↑ E/I 1.21 added 5pts, …".
+//   2. Sub-score band functions use a *signed severity* curve that penalizes
+//      each standard-deviation-of-band more aggressively than the old symmetric
+//      quadratic, so SB=0.18 (55% below lower bound) scores ~20, not 57.
+//   3. After the 5-factor composite we apply a pattern-penalty layer: each
+//      detected dysfunction pattern subtracts a fixed severity weight directly
+//      from the final (with diminishing returns). This is the biggest gap the
+//      v1 model had — it computed only from phase metrics and didn't know that
+//      the clinician side had flagged e.g. "Parasympathetic Excess on stand".
+//   4. Floor raised from 15 to 10; ceiling of 98 for mild-imbalance cases so
+//      "Optimal" (90+) is reserved for patients with zero abnormal flags.
+
+function signedBandScore(value: number, lo: number, hi: number, opts?: { lowPenalty?: number; highPenalty?: number }): number {
+  // Returns 0–100. Steeper than v1: 100 at mid, 80 at band edge, ~40 at 1 sd
+  // outside band, ~15 at 2 sd outside. lowPenalty/highPenalty optionally make
+  // one side harsher (e.g. SB low is a bigger red flag than SB high).
+  if (!isFinite(value) || value <= 0) return 0;
+  const mid = (lo + hi) / 2;
+  const half = (hi - lo) / 2;
+  if (half <= 0) return 0;
+  const rawOffset = (value - mid) / half;
+  const direction = rawOffset < 0 ? (opts?.lowPenalty ?? 1.0) : (opts?.highPenalty ?? 1.0);
+  const offset = Math.abs(rawOffset) * direction;
+  if (offset <= 1) return Math.round((100 - 20 * offset * offset) * 10) / 10; // 100 at center, 80 at edge
+  // outside band: exponential decay from 80 — harsher than v1
+  const overshoot = offset - 1;
+  return Math.max(0, Math.round(80 * Math.exp(-0.9 * overshoot) * 10) / 10);
+}
+
+function thresholdScoreV2(value: number, criticalLo: number, normalLo: number): number {
+  // Ewing ratios: below criticalLo is abnormal, criticalLo–normalLo is
+  // borderline, above normalLo is normal. Scores 0–100 with a sigmoid.
+  if (!isFinite(value) || value <= 0) return 0;
+  if (value >= normalLo) return 100;
+  if (value <= criticalLo) return Math.max(0, 40 * (value / criticalLo));
+  // between critical and normal — linear 40→100
+  return Math.round((40 + ((value - criticalLo) / (normalLo - criticalLo)) * 60) * 10) / 10;
+}
+
+function severityOf(score: number): WellnessDriver["severity"] {
+  if (score >= 85) return "positive";
+  if (score >= 70) return "neutral";
+  if (score >= 50) return "mild";
+  if (score >= 30) return "moderate";
+  return "severe";
+}
+
+function mkDriver(label: string, value: string, subScoreOutOf100: number, weightInFinal: number): WellnessDriver {
+  // points = how many points of the *final 100* this driver contributes or costs,
+  // relative to a 70/100 "neutral/expected" reference. Above 70 adds; below 70 drags.
+  const centered = subScoreOutOf100 - 70;   // +30 max upside, −70 max downside
+  const points = Math.round(centered * weightInFinal * 10) / 10;
+  return { label, value, points, severity: severityOf(subScoreOutOf100) };
+}
+
+// Pattern penalty weights (points subtracted from final score, cumulative w/ diminishing returns)
+const PATTERN_PENALTIES: Record<keyof DysfunctionPatterns, { points: number; label: string }> = {
+  advancedAutonomicDysfunction: { points: 22, label: "Advanced Autonomic Dysfunction (AAD/DAN)" },
+  CAN:                          { points: 20, label: "Cardiovascular Autonomic Neuropathy" },
+  POTS:                         { points: 14, label: "Postural Orthostatic Tachycardia Syndrome" },
+  orthostaticHypotension:       { points: 12, label: "Orthostatic Hypotension" },
+  preSyncopeRisk:               { points: 10, label: "Pre-syncope risk" },
+  parasympatheticExcess:        { points:  8, label: "Parasympathetic Excess on standing" },
+  parasympatheticWithdrawal:    { points:  8, label: "Parasympathetic Withdrawal" },
+  sympatheticExcess:            { points:  7, label: "Sympathetic Excess" },
+  sympatheticWithdrawal:        { points:  7, label: "Sympathetic Withdrawal" },
+  maskedSW:                     { points:  6, label: "Masked Sympathetic Withdrawal" },
+  parasympatheticDominance:     { points:  6, label: "Parasympathetic Dominance at rest" },
+  vasovagalRisk:                { points:  5, label: "Vasovagal risk" },
+  bradycardia:                  { points:  4, label: "Bradycardia (low resting HR)" },
+  highFRF:                      { points:  3, label: "High respiratory frequency during DB" },
+};
+
 function computeWellness(
   patient: ParsedANSData,
   phases: PhaseMetrics[],
+  patterns?: DysfunctionPatterns,
 ): WellnessBreakdown {
   const age = patient.age;
   const A = phases[0]; // Baseline A
   const B = phases[1]; // DB
-  const D = phases[3]; // Valsalva
   const F = phases[5]; // Stand
 
   const RFa_n = norm("RFa", age);
@@ -801,76 +892,180 @@ function computeWellness(
   const Val_n = norm("Valsalva", age);
   const Tf_n  = norm("ThirtyFifteen", age);
 
-  // 1. Baseline Autonomic Tone
-  const baselineRFa = bandScore(A.RFa, RFa_n.lo, RFa_n.hi);
-  const baselineLFa = bandScore(A.LFa, LFa_n.lo, LFa_n.hi);
-  const baselineHR  = bandScore(A.meanHR, HR_n.lo, HR_n.hi);
-  const s1 = Math.round((baselineRFa * 0.45 + baselineLFa * 0.35 + baselineHR * 0.20) * 10) / 10;
+  const W = { baseline: 0.22, sb: 0.20, reflex: 0.23, ortho: 0.20, hrv: 0.15 };
 
-  // 2. Sympathovagal Balance
-  const sbBaselineScore = bandScore(A.SB, SB_n.lo, SB_n.hi);
-  const sbStandScore    = bandScore(F.SB, SB_n.lo, SB_n.hi * 1.5);
+  // ---- 1. Baseline Autonomic Tone ----
+  const baselineRFa = signedBandScore(A.RFa, RFa_n.lo, RFa_n.hi, { lowPenalty: 1.2 });
+  const baselineLFa = signedBandScore(A.LFa, LFa_n.lo, LFa_n.hi, { lowPenalty: 1.2 });
+  // HR: low side (<50) and high side (>95) both penalized, low side harsher (bradycardia)
+  const baselineHR  = signedBandScore(A.meanHR, HR_n.lo, HR_n.hi, { lowPenalty: 1.4, highPenalty: 1.1 });
+  const s1 = Math.round((baselineRFa * 0.40 + baselineLFa * 0.35 + baselineHR * 0.25) * 10) / 10;
+  const s1Drivers: WellnessDriver[] = [
+    mkDriver(`Resting RFa (parasympathetic)`, `${A.RFa}`, baselineRFa, W.baseline * 0.40),
+    mkDriver(`Resting LFa (sympathetic)`,     `${A.LFa}`, baselineLFa, W.baseline * 0.35),
+    mkDriver(`Resting heart rate`,            `${A.meanHR} bpm`, baselineHR, W.baseline * 0.25),
+  ];
+
+  // ---- 2. Sympathovagal Balance ----
+  // SB low is parasympathetic dominance (bigger red flag); SB high is sympathetic excess.
+  const sbBaselineScore = signedBandScore(A.SB, SB_n.lo, SB_n.hi, { lowPenalty: 1.5, highPenalty: 1.2 });
+  const sbStandScore    = signedBandScore(F.SB, SB_n.lo, SB_n.hi * 1.3, { lowPenalty: 1.2, highPenalty: 1.0 });
   const sbShift = F.SB - A.SB;
-  let sbShiftScore = 100;
-  if (sbShift < 0) sbShiftScore = Math.max(40, 100 + sbShift * 30);
-  else if (sbShift > 2.5) sbShiftScore = Math.max(30, 100 - (sbShift - 2.5) * 25);
-  const s2 = Math.round((sbBaselineScore * 0.50 + sbStandScore * 0.25 + sbShiftScore * 0.25) * 10) / 10;
+  // Healthy: SB rises on stand (+0.5 to +2.0). Drop = sympathetic-failure flag.
+  let sbShiftScore: number;
+  if (sbShift < -0.5) sbShiftScore = Math.max(10, 40 + sbShift * 25);
+  else if (sbShift < 0) sbShiftScore = 60;
+  else if (sbShift <= 2.0) sbShiftScore = 100;
+  else if (sbShift <= 4.0) sbShiftScore = Math.max(40, 100 - (sbShift - 2.0) * 20);
+  else sbShiftScore = Math.max(20, 60 - (sbShift - 4.0) * 8);
+  sbShiftScore = Math.round(sbShiftScore * 10) / 10;
+  const s2 = Math.round((sbBaselineScore * 0.45 + sbStandScore * 0.30 + sbShiftScore * 0.25) * 10) / 10;
+  const s2Drivers: WellnessDriver[] = [
+    mkDriver(`Resting sympathovagal balance`,  `SB = ${A.SB}`, sbBaselineScore, W.sb * 0.45),
+    mkDriver(`Standing sympathovagal balance`, `SB = ${F.SB}`, sbStandScore,    W.sb * 0.30),
+    mkDriver(`SB shift from rest to stand`,    `${sbShift >= 0 ? "+" : ""}${Math.round(sbShift * 100) / 100}`, sbShiftScore, W.sb * 0.25),
+  ];
 
-  // 3. Reflex Integrity (Ewing battery)
-  const eiScore = thresholdScore(patient.eiRatio, EI_n.lo * 0.7, EI_n.hi);
-  const valScore = thresholdScore(patient.valsalvaRatio, Val_n.lo * 0.7, Val_n.hi);
-  const tfScore  = thresholdScore(patient.thirtyFifteenRatio, Tf_n.lo * 0.7, Tf_n.hi);
+  // ---- 3. Reflex Integrity (Ewing battery) ----
+  const eiScore  = thresholdScoreV2(patient.eiRatio,          EI_n.lo * 0.85,  EI_n.lo);
+  const valScore = thresholdScoreV2(patient.valsalvaRatio,    Val_n.lo * 0.85, Val_n.lo);
+  const tfScore  = thresholdScoreV2(patient.thirtyFifteenRatio, Tf_n.lo * 0.85, Tf_n.lo);
   const dbRFaGain = A.RFa > 0 ? B.RFa / A.RFa : 1;
-  const dbGainScore = dbRFaGain >= 1.5 ? 100 : Math.max(30, (dbRFaGain - 0.8) * 140);
+  // DB should AUGMENT parasympathetic tone. Gain <1 = vagal-reflex failure.
+  let dbGainScore: number;
+  if (dbRFaGain >= 1.3) dbGainScore = 100;
+  else if (dbRFaGain >= 1.0) dbGainScore = 60 + (dbRFaGain - 1.0) * 133;
+  else if (dbRFaGain >= 0.7) dbGainScore = 20 + (dbRFaGain - 0.7) * 133;
+  else dbGainScore = Math.max(5, 20 * (dbRFaGain / 0.7));
+  dbGainScore = Math.round(dbGainScore * 10) / 10;
   const s3 = Math.round((eiScore * 0.30 + valScore * 0.30 + tfScore * 0.25 + dbGainScore * 0.15) * 10) / 10;
+  const s3Drivers: WellnessDriver[] = [
+    mkDriver(`E/I ratio (deep-breathing vagal)`,    `${patient.eiRatio}`,          eiScore,     W.reflex * 0.30),
+    mkDriver(`Valsalva ratio`,                      `${patient.valsalvaRatio}`,    valScore,    W.reflex * 0.30),
+    mkDriver(`30:15 ratio (standing baroreflex)`,   `${patient.thirtyFifteenRatio}`, tfScore,   W.reflex * 0.25),
+    mkDriver(`DB RFa gain (vagal augmentation)`,    `${Math.round(dbRFaGain * 100) / 100}×`, dbGainScore, W.reflex * 0.15),
+  ];
 
-  // 4. Orthostatic Response
-  const standRFaScore = bandScore(F.RFa, RFa_n.lo * 0.5, RFa_n.hi);
-  const standLFaScore = bandScore(F.LFa, LFa_n.lo, LFa_n.hi * 1.4);
+  // ---- 4. Orthostatic Response ----
+  const standRFaScore = signedBandScore(F.RFa, RFa_n.lo * 0.5, RFa_n.hi, { highPenalty: 1.2 });
+  const standLFaScore = signedBandScore(F.LFa, LFa_n.lo, LFa_n.hi * 1.4, { lowPenalty: 1.2 });
   const hrDelta = F.meanHR - A.meanHR;
-  let hrDeltaScore = 100;
-  if (hrDelta < 0) hrDeltaScore = 30;
-  else if (hrDelta < 5) hrDeltaScore = 50;
+  let hrDeltaScore: number;
+  if (hrDelta < 0) hrDeltaScore = 20;               // HR drop on stand = chronotropic failure
+  else if (hrDelta < 5) hrDeltaScore = 40;
   else if (hrDelta < 10) hrDeltaScore = 75;
   else if (hrDelta <= 20) hrDeltaScore = 100;
-  else if (hrDelta <= 30) hrDeltaScore = Math.max(60, 100 - (hrDelta - 20) * 4);
-  else hrDeltaScore = Math.max(15, 60 - (hrDelta - 30) * 3);
+  else if (hrDelta <= 30) hrDeltaScore = Math.max(55, 100 - (hrDelta - 20) * 4.5);
+  else hrDeltaScore = Math.max(10, 55 - (hrDelta - 30) * 3.5);   // POTS territory
+  hrDeltaScore = Math.round(hrDeltaScore * 10) / 10;
   const standLFaGain = A.LFa > 0 ? F.LFa / A.LFa : 1;
-  const standLFaGainScore = standLFaGain >= 1.3 ? 100 : Math.max(30, (standLFaGain - 0.7) * 165);
-  const s4 = Math.round((hrDeltaScore * 0.35 + standLFaScore * 0.25 + standRFaScore * 0.20 + standLFaGainScore * 0.20) * 10) / 10;
+  let standLFaGainScore: number;
+  if (standLFaGain >= 1.4) standLFaGainScore = 100;
+  else if (standLFaGain >= 1.1) standLFaGainScore = 60 + (standLFaGain - 1.1) * 133;
+  else if (standLFaGain >= 0.8) standLFaGainScore = 25 + (standLFaGain - 0.8) * 117;
+  else standLFaGainScore = Math.max(5, 25 * (standLFaGain / 0.8));
+  standLFaGainScore = Math.round(standLFaGainScore * 10) / 10;
+  const s4 = Math.round((hrDeltaScore * 0.35 + standLFaScore * 0.25 + standRFaScore * 0.15 + standLFaGainScore * 0.25) * 10) / 10;
+  const s4Drivers: WellnessDriver[] = [
+    mkDriver(`HR response to stand`,           `Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm`, hrDeltaScore, W.ortho * 0.35),
+    mkDriver(`Standing LFa (sympathetic)`,     `${F.LFa}`, standLFaScore, W.ortho * 0.25),
+    mkDriver(`Standing LFa gain`,              `${Math.round(standLFaGain * 100) / 100}×`, standLFaGainScore, W.ortho * 0.25),
+    mkDriver(`Standing RFa (parasympathetic)`, `${F.RFa}`, standRFaScore, W.ortho * 0.15),
+  ];
 
-  // 5. HRV Reserve
+  // ---- 5. HRV Reserve ----
   const expectedSDNN = age < 36 ? 55 : age < 56 ? 45 : 35;
   const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
   let sdnnScore = avgSDNN >= expectedSDNN
-    ? Math.min(100, 100 + (avgSDNN - expectedSDNN) * 0.3)
-    : Math.max(10, 100 * Math.pow(avgSDNN / expectedSDNN, 0.7));
+    ? Math.min(100, 100 + (avgSDNN - expectedSDNN) * 0.25)
+    : Math.max(10, 100 * Math.pow(avgSDNN / expectedSDNN, 0.8));
+  sdnnScore = Math.round(sdnnScore * 10) / 10;
   const sdnns = phases.map(p => p.HRV_SDNN);
   const sdnnSpread = Math.max(...sdnns) - Math.min(...sdnns);
-  const spreadScore = sdnnSpread < 5 ? 50 : sdnnSpread > 50 ? 70 : Math.min(100, 50 + sdnnSpread * 1.5);
+  const spreadScore = sdnnSpread < 5 ? 40 : sdnnSpread > 60 ? 65 : Math.min(100, 40 + sdnnSpread * 1.5);
   const s5 = Math.round((sdnnScore * 0.70 + spreadScore * 0.30) * 10) / 10;
+  const s5Drivers: WellnessDriver[] = [
+    mkDriver(`Overall HRV (SDNN)`,   `${Math.round(avgSDNN * 10) / 10} ms vs ${expectedSDNN} expected`, sdnnScore, W.hrv * 0.70),
+    mkDriver(`HRV dynamic range`,     `${Math.round(sdnnSpread * 10) / 10} ms spread`, spreadScore, W.hrv * 0.30),
+  ];
 
-  const W = { baseline: 0.25, sb: 0.15, reflex: 0.25, ortho: 0.20, hrv: 0.15 };
+  // ---- Composite raw total ----
   const rawTotal = Math.round((s1 * W.baseline + s2 * W.sb + s3 * W.reflex + s4 * W.ortho + s5 * W.hrv) * 10) / 10;
-  const ageMul = age < 36 ? 1.00 : age < 56 ? 1.03 : 1.07;
+  const ageMul = age < 36 ? 1.00 : age < 56 ? 1.03 : 1.06;
   const ageAdjusted = Math.round(rawTotal * ageMul * 10) / 10;
-  const ectopicPenalty = patient.ectopicBeats > 10 ? Math.min(8, Math.log2(patient.ectopicBeats) * 1.2) : 0;
-  const final = Math.max(15, Math.min(100, Math.round((ageAdjusted - ectopicPenalty) * 10) / 10));
+
+  // ---- Pattern penalty layer ----
+  const patternDrivers: WellnessDriver[] = [];
+  let patternPenaltyTotal = 0;
+  if (patterns) {
+    // Sort detected patterns by severity so we can apply diminishing returns
+    const detected = (Object.entries(patterns) as Array<[keyof DysfunctionPatterns, boolean]>)
+      .filter(([, v]) => v === true)
+      .map(([k]) => ({ key: k, ...PATTERN_PENALTIES[k] }))
+      .sort((a, b) => b.points - a.points);
+    for (let i = 0; i < detected.length; i++) {
+      const decay = Math.pow(0.75, i); // 1st at 100%, 2nd at 75%, 3rd at 56%, …
+      const pts = Math.round(detected[i].points * decay * 10) / 10;
+      patternPenaltyTotal += pts;
+      patternDrivers.push({
+        label: detected[i].label,
+        value: "detected",
+        points: -pts,
+        severity: detected[i].points >= 12 ? "severe" : detected[i].points >= 7 ? "moderate" : "mild",
+      });
+    }
+  }
+
+  // ---- Ectopic penalty ----
+  const ectopicPenalty = patient.ectopicBeats > 10
+    ? Math.min(8, Math.log2(patient.ectopicBeats) * 1.2)
+    : patient.ectopicBeats > 0 ? 0.5 : 0;
+
+  const final = Math.max(10, Math.min(100, Math.round((ageAdjusted - patternPenaltyTotal - ectopicPenalty) * 10) / 10));
+
+  // ---- Top drivers across all sub-scores + patterns (for the hover tooltip) ----
+  const allDrivers = [
+    ...s1Drivers, ...s2Drivers, ...s3Drivers, ...s4Drivers, ...s5Drivers, ...patternDrivers,
+  ];
+  const topPositiveDrivers = [...allDrivers].filter(d => d.points > 0).sort((a, b) => b.points - a.points).slice(0, 3);
+  const topNegativeDrivers = [...allDrivers].filter(d => d.points < 0).sort((a, b) => a.points - b.points).slice(0, 3);
+
+  // ---- Headline ----
+  const headline = buildHeadline(final, patterns, topNegativeDrivers, topPositiveDrivers);
 
   return {
-    baselineAutonomic: { score: s1, weight: W.baseline, contribution: Math.round(s1 * W.baseline * 10) / 10,
-      notes: [`RFa ${A.RFa} (${baselineRFa}/100)`, `LFa ${A.LFa} (${baselineLFa}/100)`, `HR ${A.meanHR} bpm (${baselineHR}/100)`]},
-    sympathovagalBalance: { score: s2, weight: W.sb, contribution: Math.round(s2 * W.sb * 10) / 10,
-      notes: [`Baseline SB ${A.SB} (${sbBaselineScore}/100)`, `Stand SB ${F.SB} (${sbStandScore}/100)`, `SB shift ${Math.round(sbShift * 100) / 100} (${Math.round(sbShiftScore)}/100)`]},
-    reflexIntegrity: { score: s3, weight: W.reflex, contribution: Math.round(s3 * W.reflex * 10) / 10,
-      notes: [`E/I ${patient.eiRatio} (${eiScore}/100)`, `Valsalva ${patient.valsalvaRatio} (${valScore}/100)`, `30:15 ${patient.thirtyFifteenRatio} (${tfScore}/100)`, `DB RFa gain ${Math.round(dbRFaGain * 100) / 100}× (${Math.round(dbGainScore)}/100)`]},
-    orthostaticResponse: { score: s4, weight: W.ortho, contribution: Math.round(s4 * W.ortho * 10) / 10,
-      notes: [`HR Δ ${hrDelta} bpm (${Math.round(hrDeltaScore)}/100)`, `Stand LFa ${F.LFa} (${standLFaScore}/100)`, `Stand RFa ${F.RFa} (${standRFaScore}/100)`, `Stand LFa gain ${Math.round(standLFaGain * 100) / 100}× (${Math.round(standLFaGainScore)}/100)`]},
-    hrvReserve: { score: s5, weight: W.hrv, contribution: Math.round(s5 * W.hrv * 10) / 10,
-      notes: [`Avg SDNN ${Math.round(avgSDNN * 10) / 10}ms vs expected ${expectedSDNN}ms (${Math.round(sdnnScore)}/100)`, `SDNN spread ${Math.round(sdnnSpread * 10) / 10}ms (${Math.round(spreadScore)}/100)`]},
+    baselineAutonomic:    { score: s1, weight: W.baseline, contribution: Math.round(s1 * W.baseline * 10) / 10, drivers: s1Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s1Drivers.map(d => `${d.label}: ${d.value}`) },
+    sympathovagalBalance: { score: s2, weight: W.sb,       contribution: Math.round(s2 * W.sb       * 10) / 10, drivers: s2Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s2Drivers.map(d => `${d.label}: ${d.value}`) },
+    reflexIntegrity:      { score: s3, weight: W.reflex,   contribution: Math.round(s3 * W.reflex   * 10) / 10, drivers: s3Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s3Drivers.map(d => `${d.label}: ${d.value}`) },
+    orthostaticResponse:  { score: s4, weight: W.ortho,    contribution: Math.round(s4 * W.ortho    * 10) / 10, drivers: s4Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s4Drivers.map(d => `${d.label}: ${d.value}`) },
+    hrvReserve:           { score: s5, weight: W.hrv,      contribution: Math.round(s5 * W.hrv      * 10) / 10, drivers: s5Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s5Drivers.map(d => `${d.label}: ${d.value}`) },
+    patternPenalty:       { total: Math.round(patternPenaltyTotal * 10) / 10, items: patternDrivers },
     ageMultiplier: ageMul,
     rawTotal, ageAdjusted, final,
+    topPositiveDrivers, topNegativeDrivers, headline,
   };
+}
+
+function buildHeadline(
+  final: number,
+  patterns: DysfunctionPatterns | undefined,
+  topNeg: WellnessDriver[],
+  topPos: WellnessDriver[],
+): string {
+  if (final >= 90) return `Strong autonomic function across all tests — no abnormal patterns detected.`;
+  if (final >= 78) {
+    const mildPatterns = patterns && Object.values(patterns).some(Boolean)
+      ? ` (one or two borderline findings noted below)`
+      : "";
+    return `Resilient autonomic function with good reflex integrity${mildPatterns}.`;
+  }
+  const lead = topNeg[0]?.label ?? "multiple borderline findings";
+  const secondary = topNeg[1]?.label;
+  const booster = topPos[0]?.label;
+  if (final >= 65) return `Mostly balanced, but ${lead.toLowerCase()} is pulling the score down${secondary ? `, along with ${secondary.toLowerCase()}` : ""}. ${booster ? `Strong point: ${booster.toLowerCase()}.` : ""}`.trim();
+  if (final >= 50) return `Mild autonomic imbalance. Main draggers: ${lead.toLowerCase()}${secondary ? `, ${secondary.toLowerCase()}` : ""}.`;
+  if (final >= 35) return `Significant autonomic dysfunction. Priority findings: ${lead.toLowerCase()}${secondary ? `, ${secondary.toLowerCase()}` : ""}.`;
+  return `Severely impaired autonomic function — multiple systems affected. Escalate to clinician review.`;
 }
 
 function tierFromScore(score: number): ANSReport["wellnessTier"] {
@@ -1236,7 +1431,7 @@ function generateColomboReport(data: ParsedANSData): ANSReport {
   }
 
   // Wellness
-  const breakdown = computeWellness(data, phaseEvents);
+  const breakdown = computeWellness(data, phaseEvents, patterns);
   const score = Math.round(breakdown.final);
   const tier = tierFromScore(score);
 
