@@ -49,13 +49,20 @@ export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps
         </div>
       ) : (
         <>
-          <TrendPanel mpg={mpg} />
+          {mpg.ecgAvailable ? (
+            <TrendPanel mpg={mpg} />
+          ) : (
+            <EcgUnavailableNotice />
+          )}
+
           <ScatterPanel mpg={mpg} patientAge={report.patientData.age} />
-          <CouplingGrid mpg={mpg} />
+
+          {mpg.ecgAvailable && <CouplingGrid mpg={mpg} />}
+
           <RatiosPanel ratios={report.ratios} patientAge={report.patientData.age} />
           <NumericalSummary report={report} />
 
-          <MethodFooter mpg={mpg} />
+          {mpg.ecgAvailable && <MethodFooter mpg={mpg} />}
         </>
       )}
     </section>
@@ -89,6 +96,30 @@ function Header({ report }: { report: ANSReport }) {
         </div>
       </div>
     </motion.div>
+  );
+}
+
+function EcgUnavailableNotice() {
+  return (
+    <div
+      className="rounded-2xl border border-amber-400/25 bg-amber-400/5 p-5"
+      data-testid="mpg-ecg-unavailable"
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 text-amber-300" aria-hidden="true">⚠</div>
+        <div className="space-y-1.5">
+          <div className="text-[12px] font-semibold text-amber-200">
+            Raw ECG waveform not present in this .ans file
+          </div>
+          <p className="text-[11px] text-amber-200/80 leading-relaxed max-w-2xl">
+            The uploaded file contains the numerical summary (per-phase LFa, RFa, E/I, Valsalva and 30:15 ratios) but does not include the beat-to-beat ECG samples needed for the HR, Breathing, LFa/RFa trend, and Cardio-Respiratory Coupling charts. The scatter, ratio-vs-age, and numerical summary panels below are fully populated from the header metrics.
+          </p>
+          <p className="text-[11px] text-amber-200/60 leading-relaxed">
+            To generate the trend charts, re-export the test from the PhysioPS system with the raw ECG waveform included.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -150,6 +150,7 @@ interface CardioRespiratoryWindow {
   annotations: string[];
 }
 interface MultiParameterGraphical {
+  ecgAvailable: boolean;
   totalSec: number;
   phases: PhaseBoundary[];
   heartRateTrend: TimeSeries;
@@ -277,7 +278,7 @@ function readLPString(buffer: Buffer, offset: number): { value: string; nextOffs
   return { value, nextOffset: offset };
 }
 
-function parseANSFile(buffer: Buffer): ParsedANSData {
+export function parseANSFile(buffer: Buffer): ParsedANSData {
   let pos = 0;
 
   const lastNameResult = readLPString(buffer, pos);
@@ -1373,10 +1374,60 @@ function parseTestStartClockSec(data: ParsedANSData): number {
   return 13 * 3600 + 8 * 60;
 }
 
+// Returns true iff the raw ECG samples contain real signal (not all-zero / constant).
+function hasRealEcg(ecg: number[]): boolean {
+  if (!ecg || ecg.length < 100) return false;
+  let mn = Infinity, mx = -Infinity;
+  const step = Math.max(1, Math.floor(ecg.length / 500));
+  for (let i = 0; i < ecg.length; i += step) {
+    const v = ecg[i];
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  return (mx - mn) > 10; // any meaningful dynamic range = real ECG
+}
+
 function computeMultiParameterGraphical(
   data: ParsedANSData,
   phaseEvents: PhaseMetrics[]
 ): MultiParameterGraphical {
+  const ecgAvailable = hasRealEcg(data.ecgData);
+  // Short-circuit if the file has no real ECG — still emit scatter/ratios so
+  // the clinician panels that rely on header metrics keep working.
+  if (!ecgAvailable) {
+    const samplingRate = 1 / data.samplingInterval;
+    const totalSec = data.dataPointCount * data.samplingInterval;
+    const segs = segmentPhases(totalSec);
+    const phaseLabels: Record<string, PhaseBoundary["name"]> = {
+      "Baseline-A": "A", "DeepBreathing-B": "B", "Baseline-C": "C",
+      "Valsalva-D": "D", "Baseline-E": "E", "Stand-F": "F",
+    };
+    const phases: PhaseBoundary[] = segs.map(s => ({
+      name: phaseLabels[s.name], label: s.label, startSec: s.start, endSec: s.end,
+    }));
+    const A = phaseEvents[0], B = phaseEvents[1], D = phaseEvents[3], F = phaseEvents[5];
+    const rfaChangeValsalvaPct = A.RFa > 0 ? ((D.RFa - A.RFa) / A.RFa) * 100 : 0;
+    const rfaChangeStandPct = A.RFa > 0 ? ((F.RFa - A.RFa) / A.RFa) * 100 : 0;
+    return {
+      ecgAvailable: false,
+      totalSec,
+      phases,
+      heartRateTrend: { t: [], v: [] },
+      breathingTrend: { t: [], v: [] },
+      lfaTrend: { t: [], v: [] },
+      rfaTrend: { t: [], v: [] },
+      scatter: {
+        baselineLFa: A.LFa, baselineRFa: A.RFa,
+        dbRFa: B.RFa,
+        valsalvaLFa: D.LFa,
+        standLFa: F.LFa, standRFa: F.RFa,
+        rfaChangeValsalvaPct: Math.round(rfaChangeValsalvaPct * 10) / 10,
+        rfaChangeStandPct: Math.round(rfaChangeStandPct * 10) / 10,
+      },
+      coupling: [],
+      wavelet: { type: "n/a", cycles: 0, spectralUpdateSec: 0 },
+    };
+  }
   const samplingRate = 1 / data.samplingInterval;
   const totalSec = data.dataPointCount * data.samplingInterval;
 
@@ -1423,6 +1474,7 @@ function computeMultiParameterGraphical(
   });
 
   return {
+    ecgAvailable: true,
     totalSec,
     phases,
     heartRateTrend,
@@ -1446,7 +1498,7 @@ function computeMultiParameterGraphical(
 // STAGE 8 — Main entry point: generate full report
 // ============================================================================
 
-function generateColomboReport(data: ParsedANSData): ANSReport {
+export function generateColomboReport(data: ParsedANSData): ANSReport {
   const samplingRate = 1 / data.samplingInterval;
   const totalSec = data.dataPointCount * data.samplingInterval;
 

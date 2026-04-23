@@ -164,6 +164,13 @@ export interface CardioRespiratoryWindow {
 }
 
 export interface MultiParameterGraphical {
+  /**
+   * True iff the uploaded .ans file actually contained real ECG sample data.
+   * If false, time-series panels (HR / Breathing / LFa-RFa trends, coupling
+   * windows) render as informative empty states; scatter + ratio panels
+   * that rely on per-phase metrics still render as normal.
+   */
+  ecgAvailable: boolean;
   /** Total recording length in seconds. */
   totalSec: number;
   /** A-F phase boundaries. */
