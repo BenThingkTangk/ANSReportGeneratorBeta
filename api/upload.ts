@@ -344,7 +344,11 @@ export function parseANSFile(buffer: Buffer): ParsedANSData {
     const maxSamples = Math.min(dataPointCount, (buffer.length - dataStart) / 2);
     for (let i = 0; i < maxSamples; i++) {
       const offset = dataStart + i * 2;
-      if (offset + 2 <= buffer.length) ecgData.push(buffer.readUInt16BE(offset));
+      // ECG samples are signed big-endian int16. Reading them as unsigned
+      // causes the deep Q/S deflections (negative values) to wrap around to
+      // ~33000+, which then looks like huge one-sample spikes that break the
+      // Pan-Tompkins peak detector. Use readInt16BE.
+      if (offset + 2 <= buffer.length) ecgData.push(buffer.readInt16BE(offset));
     }
   }
 
@@ -411,7 +415,10 @@ export function parseANSFile(buffer: Buffer): ParsedANSData {
     procedureType,
     samplingInterval,
     dataPointCount: ecgData.length,
-    ecgData: ecgData.slice(0, 5000),
+    // Keep the full ECG on the server so spectral / wavelet analysis sees the
+    // entire recording. The handler trims the response payload before sending
+    // it back to the client so the JSON wire transport stays small.
+    ecgData,
     anesMedications: medsMatch ? medsMatch[1] : undefined,
     baselineSystolicBP,
     baselineDiastolicBP,
@@ -1862,7 +1869,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const patientData = parseANSFile(fileBuffer);
     const report = generateColomboReport(patientData);
-    return res.status(200).json({ success: true, patientData, report });
+    // Send only a preview of the raw ECG to the client — the full waveform
+    // stays server-side (we'd blow past the Vercel payload limit otherwise).
+    // The Multi-Parameter Graphical and Colombo analysis have already run
+    // on the full waveform at this point, so the report is complete.
+    const ECG_PREVIEW_SAMPLES = 5000;
+    const wirePatient = {
+      ...patientData,
+      ecgData: patientData.ecgData.slice(0, ECG_PREVIEW_SAMPLES),
+    };
+    return res.status(200).json({ success: true, patientData: wirePatient, report });
   } catch (error: any) {
     console.error("Error processing file:", error);
     return res.status(500).json({

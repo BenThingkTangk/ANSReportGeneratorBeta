@@ -127,14 +127,15 @@ export function parseANSFile(buffer: Buffer): ParsedANSData {
     }
   }
 
-  // Read ECG data as uint16 BE values
+  // Read ECG data as signed int16 BE values (signed is correct; unsigned
+  // causes negative Q/S deflections to wrap to ~33000+ and breaks detection).
   const ecgData: number[] = [];
   if (dataStart > 0 && dataPointCount > 0) {
     const maxSamples = Math.min(dataPointCount, (buffer.length - dataStart) / 2);
     for (let i = 0; i < maxSamples; i++) {
       const offset = dataStart + i * 2;
       if (offset + 2 <= buffer.length) {
-        ecgData.push(buffer.readUInt16BE(offset));
+        ecgData.push(buffer.readInt16BE(offset));
       }
     }
   }
