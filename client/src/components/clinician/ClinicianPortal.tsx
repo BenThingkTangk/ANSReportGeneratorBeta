@@ -7,14 +7,14 @@ import { PhaseEventTable } from "./PhaseEventTable";
 import { EwingRatiosTable } from "./EwingRatiosTable";
 import { PhaseFindings } from "./PhaseFindings";
 import { OverallImpression } from "./OverallImpression";
-import { DysfunctionGrid } from "./DysfunctionGrid";
 import { TherapyOptions } from "./TherapyOptions";
 import { ContraindicationsPanel } from "./ContraindicationsPanel";
-import { WellnessBreakdownPanel } from "./WellnessBreakdownPanel";
 import { FollowUpPanel } from "./FollowUpPanel";
 import { ColomboReferences } from "./ColomboReferences";
-import { AutonomicWave } from "@/components/AutonomicWave";
 import { MultiParameterGraphical } from "./MultiParameterGraphical";
+import { RestingBaselinePanel } from "./RestingBaselinePanel";
+import { EcgRhythmStrip } from "./EcgRhythmStrip";
+import { CollapsibleSection } from "./CollapsibleSection";
 
 interface ClinicianPortalProps {
   report: ANSReport;
@@ -60,34 +60,31 @@ export function ClinicianPortal({ report }: ClinicianPortalProps) {
         onRetry={fetchSynopsis}
       />
 
+      <RestingBaselinePanel report={report} />
+
       <MultiParameterGraphical report={report} />
+
+      <EcgRhythmStrip report={report} />
 
       <PhaseEventTable phaseEvents={report.phaseEvents} />
 
-      <EwingRatiosTable ratios={report.ratios} />
-
-      <AutonomicWave
-        parasympathetic={report.autonomicBalance.parasympathetic}
-        sympathetic={report.autonomicBalance.sympathetic}
-        ecgData={report.patientData.ecgData}
-      />
+      <CollapsibleSection
+        title="Ewing Autonomic Ratios (Time-Domain)"
+        subtitle="Classical E/I, Valsalva, 30:15 ratios with normal ranges"
+        testId="toggle-ewing"
+      >
+        <EwingRatiosTable ratios={report.ratios} />
+      </CollapsibleSection>
 
       <PhaseFindings phaseFindings={report.phaseFindings} />
 
       <OverallImpression impression={report.overallImpression} />
-
-      <DysfunctionGrid patterns={report.dysfunctionPatterns} />
 
       <TherapyOptions recommendations={report.therapyRecommendations} />
 
       {report.contraindications.length > 0 && (
         <ContraindicationsPanel contraindications={report.contraindications} />
       )}
-
-      <WellnessBreakdownPanel
-        breakdown={report.wellnessBreakdown}
-        wellnessScore={report.wellnessScore}
-      />
 
       <FollowUpPanel followUp={report.followUp} />
 

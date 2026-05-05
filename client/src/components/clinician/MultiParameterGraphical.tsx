@@ -6,6 +6,7 @@ import { CouplingGrid } from "./mpg/CouplingGrid";
 import { RatiosPanel } from "./mpg/RatiosPanel";
 import { NumericalSummary } from "./mpg/NumericalSummary";
 import { ColomboExplainer } from "./ColomboExplainer";
+import { CollapsibleSection } from "./CollapsibleSection";
 
 interface MultiParameterGraphicalProps {
   report: ANSReport;
@@ -57,7 +58,15 @@ export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps
 
           <ScatterPanel mpg={mpg} patientAge={report.patientData.age} />
 
-          {mpg.ecgAvailable && <CouplingGrid mpg={mpg} />}
+          {mpg.ecgAvailable && (
+            <CollapsibleSection
+              title="Cardio-Respiratory Coupling"
+              subtitle="Per-beat HR overlaid on breathing envelope, one window per phase"
+              testId="toggle-coupling"
+            >
+              <CouplingGrid mpg={mpg} />
+            </CollapsibleSection>
+          )}
 
           <RatiosPanel ratios={report.ratios} patientAge={report.patientData.age} />
           <NumericalSummary report={report} />
@@ -92,7 +101,7 @@ function Header({ report }: { report: ANSReport }) {
         <div className="text-right text-[11px] text-muted-foreground tabular-nums space-y-0.5">
           <div className="font-medium text-foreground/80">{[p.firstName, p.lastName].filter(Boolean).join(" ") || "—"}</div>
           <div>Age {p.age} · {p.gender}</div>
-          <div>Test {new Date(report.generatedAt).toLocaleDateString()}</div>
+          <div>Test {p.testDate || new Date(report.generatedAt).toLocaleDateString()}</div>
         </div>
       </div>
     </motion.div>

@@ -5,6 +5,16 @@ interface ClinicianHeaderProps {
   report: ANSReport;
 }
 
+/**
+ * Render the physician with exactly one "Dr." prefix. Strips any duplicate or
+ * leading "Dr." / "Doctor" from the parsed value before re-prefixing.
+ */
+function formatPhysician(raw: string | undefined | null): string {
+  if (!raw) return "Dr. Unknown";
+  const cleaned = raw.replace(/^(?:dr\.?\s+|doctor\s+)+/i, "").trim();
+  return cleaned ? `Dr. ${cleaned}` : "Dr. Unknown";
+}
+
 export function ClinicianHeader({ report }: ClinicianHeaderProps) {
   const p = report.patientData;
   const testDateStr = p.testDate
@@ -31,8 +41,8 @@ export function ClinicianHeader({ report }: ClinicianHeaderProps) {
       <span className="text-xs text-muted-foreground">Age {p.age} · {p.gender}</span>
       {p.bmi && <span className="text-xs text-muted-foreground">BMI {p.bmi.toFixed(1)}</span>}
       <span className="text-xs text-muted-foreground">Test: {testDateStr}</span>
-      <span className="text-xs text-muted-foreground">Dr. {p.physician}</span>
-      <span className="text-xs text-muted-foreground">Ectopic: {p.ectopicBeats}</span>
+      <span className="text-xs text-muted-foreground">{formatPhysician(p.physician)}</span>
+      <span className="text-xs text-muted-foreground">Ectopy: {p.ectopicBeats}</span>
       <span
         className="ml-auto text-[10px] font-bold px-2.5 py-1 rounded-md uppercase tracking-widest"
         style={{ background: "hsl(270 60% 55% / 0.15)", color: "hsl(270 60% 70%)", border: "1px solid hsl(270 60% 55% / 0.3)" }}

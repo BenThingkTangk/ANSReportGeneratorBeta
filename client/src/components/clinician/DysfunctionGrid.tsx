@@ -8,7 +8,6 @@ interface DysfunctionGridProps {
 const patternDefs: { key: keyof DysfunctionPatterns; label: string; definition: string }[] = [
   { key: "parasympatheticDominance",     label: "Parasympathetic Dominance",      definition: "Elevated RFa at rest indicating vagal excess." },
   { key: "parasympatheticExcess",        label: "Parasympathetic Excess",         definition: "RFa rises abnormally on standing — vagal paradox." },
-  { key: "parasympatheticWithdrawal",    label: "Parasympathetic Withdrawal",     definition: "RFa falls below normal during DB maneuver." },
   { key: "sympatheticExcess",            label: "Sympathetic Excess",             definition: "LFa elevated at baseline or on challenge." },
   { key: "sympatheticWithdrawal",        label: "Sympathetic Withdrawal",         definition: "LFa fails to rise on standing — sympathetic failure." },
   { key: "maskedSW",                     label: "Masked Sympathetic Withdrawal",  definition: "SW obscured by high RFa; revealed after correction." },

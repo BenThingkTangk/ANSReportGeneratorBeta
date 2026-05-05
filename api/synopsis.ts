@@ -58,7 +58,9 @@ function summarizeReportForPrompt(report: any): string {
   return [
     `Patient: ${pd.firstName ?? "?"} ${pd.lastName ?? "?"}, age ${pd.age}, ${pd.gender}`,
     `Physician: ${pd.physician}`,
-    `Wellness score: ${report.wellnessScore}/100 (${report.wellnessTier}), risk: ${report.riskLevel}`,
+    // Wellness score intentionally omitted from clinician synopsis per Dr. Colombo —
+    // clinical view focuses on phase metrics and Colombo-defined patterns.
+    `Risk level: ${report.riskLevel}`,
     `Baseline HR ${A.meanHR} bpm, BP ${A.SBP ?? "?"}/${A.DBP ?? "?"} mmHg, LFa ${A.LFa}, RFa ${A.RFa}, SB ${A.SB}`,
     `Stand HR ${F.meanHR} bpm, BP ${F.SBP ?? "?"}/${F.DBP ?? "?"} mmHg, LFa ${F.LFa}, RFa ${F.RFa}, SB ${F.SB}`,
     `Ewing ratios: E/I ${ratios?.eiRatio?.value}, Valsalva ${ratios?.valsalvaRatio?.value}, 30:15 ${ratios?.thirtyFifteenRatio?.value}`,

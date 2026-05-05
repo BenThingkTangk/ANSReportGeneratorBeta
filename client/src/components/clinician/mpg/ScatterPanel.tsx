@@ -178,7 +178,7 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
             width={44}
             label={{ value: "RFa (bpm²)", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
           />
-          {/* draw normal band as overlapping scatters */}
+          {/* Age-normal band: clinical green = within norm. Outside band = gray/red flag. */}
           {bandData.map((b) => (
             <ReferenceArea
               key={b.age}
@@ -186,8 +186,9 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
               x2={b.age + 2.5}
               y1={b.lo}
               y2={b.hi}
-              fill="hsl(140 60% 55% / 0.12)"
-              stroke="hsl(140 60% 55% / 0.25)"
+              fill="hsl(140 60% 50% / 0.18)"
+              stroke="hsl(140 60% 50% / 0.45)"
+              strokeDasharray="3 3"
             />
           ))}
           <Tooltip
@@ -202,9 +203,9 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
       </ResponsiveContainer>
       <LegendRow
         items={[
-          { swatch: "hsl(140 60% 55% / 0.30)", label: "Age-normal band" },
+          { swatch: "hsl(140 60% 50% / 0.45)", label: "Age-normal band" },
+          { swatch: "hsl(148 16% 60%)", label: "Outside band" },
           { swatch: "hsl(0 72% 62%)", label: "Below normal" },
-          { swatch: "hsl(35 90% 60%)", label: "Above normal" },
         ]}
       />
     </MiniCard>
@@ -252,6 +253,7 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
             width={44}
             label={{ value: "LFa (bpm²)", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
           />
+          {/* Age-normal band: green = within norm. Outside band = gray/red flag. */}
           {bandData.map((b) => (
             <ReferenceArea
               key={b.age}
@@ -259,8 +261,9 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
               x2={b.age + 2.5}
               y1={b.lo}
               y2={b.hi}
-              fill="hsl(35 90% 60% / 0.12)"
-              stroke="hsl(35 90% 60% / 0.25)"
+              fill="hsl(140 60% 50% / 0.18)"
+              stroke="hsl(140 60% 50% / 0.45)"
+              strokeDasharray="3 3"
             />
           ))}
           <Tooltip
@@ -275,7 +278,8 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
       </ResponsiveContainer>
       <LegendRow
         items={[
-          { swatch: "hsl(35 90% 60% / 0.30)", label: "Age-normal band" },
+          { swatch: "hsl(140 60% 50% / 0.45)", label: "Age-normal band" },
+          { swatch: "hsl(148 16% 60%)", label: "Outside band" },
           { swatch: "hsl(0 72% 62%)", label: "Above normal (stroke-risk signal)" },
         ]}
       />
@@ -325,7 +329,7 @@ function StandResponse({ mpg }: { mpg: MultiParameterGraphical }) {
           />
           <Scatter data={data} fill="hsl(244 114 182)">
             {data.map((d, i) => (
-              <Cell key={i} fill={d.label === "Stand LFa" ? "hsl(35 90% 60%)" : "hsl(140 60% 55%)"} />
+              <Cell key={i} fill={d.label === "Stand LFa" ? "hsl(0 72% 51%)" : "hsl(217 91% 55%)"} />
             ))}
           </Scatter>
           {/* target markers */}
@@ -338,8 +342,8 @@ function StandResponse({ mpg }: { mpg: MultiParameterGraphical }) {
       </ResponsiveContainer>
       <LegendRow
         items={[
-          { swatch: "hsl(35 90% 60%)", label: "LFa (sympathetic engagement)" },
-          { swatch: "hsl(140 60% 55%)", label: "RFa (parasympathetic)" },
+          { swatch: "hsl(0 72% 51%)", label: "LFa — Sympathetic" },
+          { swatch: "hsl(217 91% 55%)", label: "RFa — Parasympathetic" },
           { swatch: "hsl(var(--foreground) / 0.6)", label: "Target marker (×)" },
         ]}
       />

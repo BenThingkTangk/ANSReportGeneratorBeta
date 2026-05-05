@@ -74,6 +74,47 @@
   --elevate-2: rgba(255,255,255, .09);
 }
 
+/* Light clinical theme — high-contrast medical layout for daytime/print review */
+.light {
+  --button-outline: rgba(0,0,0, .12);
+  --badge-outline: rgba(0,0,0, .08);
+  --opaque-button-border-intensity: -8;
+  --elevate-1: rgba(0,0,0, .03);
+  --elevate-2: rgba(0,0,0, .07);
+  --background: 210 30% 98%;
+  --foreground: 210 30% 12%;
+  --border: 210 20% 86%;
+  --card: 0 0% 100%;
+  --card-foreground: 210 30% 12%;
+  --card-border: 210 20% 86%;
+  --sidebar: 210 30% 96%;
+  --sidebar-foreground: 210 30% 12%;
+  --sidebar-border: 210 20% 86%;
+  --sidebar-primary: 185 85% 35%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 210 20% 92%;
+  --sidebar-accent-foreground: 210 30% 12%;
+  --sidebar-ring: 185 85% 35%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 210 30% 12%;
+  --popover-border: 210 20% 86%;
+  --primary: 185 85% 35%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 20% 92%;
+  --secondary-foreground: 210 30% 12%;
+  --muted: 210 20% 94%;
+  --muted-foreground: 210 12% 38%;
+  --accent: 270 60% 45%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 72% 45%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 210 20% 88%;
+  --ring: 185 85% 35%;
+  --shadow-sm: 0px 1px 2px 0px hsl(210 30% 12% / 0.06);
+  --shadow: 0px 2px 6px 0px hsl(210 30% 12% / 0.06);
+  --shadow-md: 0px 4px 12px 0px hsl(210 30% 12% / 0.08);
+}
+
 @layer base {
   * {
     @apply border-border;

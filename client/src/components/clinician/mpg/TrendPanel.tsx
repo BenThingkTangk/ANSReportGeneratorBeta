@@ -94,9 +94,19 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00" }: TrendPanelProps
   const ticks: number[] = [];
   for (let t = 0; t <= mpg.totalSec; t += 60) ticks.push(t);
 
-  const hrMin = Math.min(...mpg.heartRateTrend.v);
-  const hrMax = Math.max(...mpg.heartRateTrend.v);
-  const hrPad = Math.max(5, (hrMax - hrMin) * 0.12);
+  // HR domain — clinical default 40–160 bpm with auto-extension if patient ranges further.
+  // 100 bpm reference = tachycardia, 120 bpm reference = POTS-suggestive sustained tachy.
+  const hrMinObserved = Math.min(...mpg.heartRateTrend.v);
+  const hrMaxObserved = Math.max(...mpg.heartRateTrend.v);
+  const hrDomainLo = Math.min(40, Math.floor(hrMinObserved - 5));
+  const hrDomainHi = Math.max(160, Math.ceil(hrMaxObserved + 5));
+
+  // LFa/RFa fixed Y-axis at 60 (Colombo standard) so cross-test comparisons
+  // stay calibrated. We extend if the patient's spectral power genuinely
+  // exceeds 60 so we don't clip outliers off-screen.
+  const lfaMax = Math.max(...mpg.lfaTrend.v);
+  const rfaMax = Math.max(...mpg.rfaTrend.v);
+  const lfaRfaDomainHi = Math.max(60, Math.ceil(Math.max(lfaMax, rfaMax) * 1.05));
 
   return (
     <motion.div
@@ -134,7 +144,7 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00" }: TrendPanelProps
               fontSize={10}
             />
             <YAxis
-              domain={[Math.floor(hrMin - hrPad), Math.ceil(hrMax + hrPad)]}
+              domain={[hrDomainLo, hrDomainHi]}
               stroke="hsl(var(--muted-foreground))"
               fontSize={10}
               width={36}
@@ -145,7 +155,22 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00" }: TrendPanelProps
               formatter={(v: number) => [`${v.toFixed(0)} bpm`, "HR"]}
             />
             {renderPhaseShading(mpg)}
-            <Line type="monotone" dataKey="v" stroke="hsl(0 72% 62%)" strokeWidth={1.4} dot={false} isAnimationActive={false} />
+            {/* Clinical reference lines: 100 bpm = tachycardia threshold, 120 bpm = POTS-suggestive */}
+            <ReferenceLine
+              y={100}
+              stroke="hsl(35 90% 60%)"
+              strokeDasharray="4 4"
+              strokeWidth={1}
+              label={{ value: "Tachy 100", position: "insideTopRight", fill: "hsl(35 90% 60%)", fontSize: 9 }}
+            />
+            <ReferenceLine
+              y={120}
+              stroke="hsl(0 72% 60%)"
+              strokeDasharray="4 4"
+              strokeWidth={1}
+              label={{ value: "POTS 120", position: "insideTopRight", fill: "hsl(0 72% 60%)", fontSize: 9 }}
+            />
+            <Line type="monotone" dataKey="v" stroke="hsl(0 72% 50%)" strokeWidth={1.6} dot={false} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -200,19 +225,32 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00" }: TrendPanelProps
               stroke="hsl(var(--muted-foreground))"
               fontSize={10}
             />
-            <YAxis stroke="hsl(var(--muted-foreground))" fontSize={10} width={36} />
+            <YAxis
+              domain={[0, lfaRfaDomainHi]}
+              ticks={[0, 15, 30, 45, 60]}
+              stroke="hsl(var(--muted-foreground))"
+              fontSize={10}
+              width={36}
+            />
             <Tooltip
               contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
               labelFormatter={(t: number) => `t = ${t.toFixed(0)}s · ${fmtClock(t, testStartClock)}`}
-              formatter={(v: number, name: string) => [v == null ? "—" : v.toFixed(2), name === "lfa" ? "LFa" : "RFa"]}
+              formatter={(v: number, name: string) => [v == null ? "—" : v.toFixed(2), name === "lfa" ? "LFa (Sympathetic)" : "RFa (Parasympathetic)"]}
             />
             <Legend
-              wrapperStyle={{ fontSize: 10 }}
-              formatter={(val) => (val === "lfa" ? "LFa (Sympathetic)" : "RFa (Parasympathetic)")}
+              wrapperStyle={{ fontSize: 12, paddingTop: 6 }}
+              iconType="line"
+              iconSize={18}
+              formatter={(val) => (
+                <span style={{ fontSize: 12, fontWeight: 500, color: "hsl(var(--foreground) / 0.85)" }}>
+                  {val === "lfa" ? "LFa — Sympathetic" : "RFa — Parasympathetic"}
+                </span>
+              )}
             />
             {renderPhaseShading(mpg)}
-            <Line type="monotone" dataKey="lfa" stroke="hsl(35 90% 60%)" strokeWidth={1.4} dot={false} isAnimationActive={false} connectNulls />
-            <Line type="monotone" dataKey="rfa" stroke="hsl(140 60% 55%)" strokeWidth={1.4} dot={false} isAnimationActive={false} connectNulls />
+            {/* Clinical color convention: red = sympathetic, blue = parasympathetic */}
+            <Line type="monotone" dataKey="lfa" stroke="hsl(0 72% 51%)" strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls />
+            <Line type="monotone" dataKey="rfa" stroke="hsl(217 91% 55%)" strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls />
           </LineChart>
         </ResponsiveContainer>
       </div>
