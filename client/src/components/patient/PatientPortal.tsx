@@ -3,7 +3,6 @@ import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { NervousSystemBody } from "./NervousSystemBody";
-import { HrvRingGauge } from "./HrvRingGauge";
 import { AnimatedVenn } from "./AnimatedVenn";
 import { CinematicEcg } from "./CinematicEcg";
 import { DiagnosisExplainer } from "./DiagnosisExplainer";
@@ -96,27 +95,27 @@ export function PatientPortal({ report }: PatientPortalProps) {
           style={{ backgroundImage: "radial-gradient(circle at 1px 1px, white 1px, transparent 0)", backgroundSize: "32px 32px" }}
         />
 
-        <div className="relative grid lg:grid-cols-2 gap-6 p-6 lg:p-8">
-          {/* Left — Neural profile */}
+        <div className="relative p-6 lg:p-8">
+          <div className="ps-overline mb-3 text-center" style={{ color: "hsl(185 85% 70%)" }}>
+            Your Nervous System
+          </div>
           <div className="flex flex-col items-center justify-center">
-            <div className="ps-overline mb-2 text-center" style={{ color: "hsl(185 85% 70%)" }}>
-              Your Nervous System
-            </div>
             <NervousSystemBody
               parasympathetic={ab.parasympathetic}
               sympathetic={ab.sympathetic}
-              wellnessScore={report.wellnessScore}
             />
           </div>
-
-          {/* Right — HRV ring + Venn + caption */}
-          <div className="flex flex-col gap-5 justify-center">
-            <HrvRingGauge value={report.wellnessScore} status={tier} caption={ab.interpretation} />
+          <div className="mt-4 max-w-2xl mx-auto">
             <AnimatedVenn
               sympathetic={ab.sympathetic}
               parasympathetic={ab.parasympathetic}
               balanceLabel={tier}
             />
+            {ab.interpretation && (
+              <p className="text-sm text-white/70 leading-relaxed mt-4 text-center max-w-xl mx-auto">
+                {ab.interpretation}
+              </p>
+            )}
           </div>
         </div>
       </motion.div>
