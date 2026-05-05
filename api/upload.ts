@@ -1571,6 +1571,228 @@ function computeMultiParameterGraphical(
 }
 
 // ============================================================================
+// STAGE 7.5 — Path B: Colombo indication detector
+// ============================================================================
+
+interface Indication {
+  code: string;
+  name: string;
+  description: string;
+  severity: "high" | "moderate" | "low";
+}
+
+function pctChangeLocal(a: number, b: number): number {
+  if (a === 0) return b > 0 ? Infinity : 0;
+  return ((b - a) / a) * 100;
+}
+
+/** Cheynes-Stokes detector via auto-corr of breathing envelope at 25–65s lags. */
+function detectCheynesStokesLocal(breathing?: { t: number[]; v: number[] }): boolean {
+  if (!breathing || breathing.v.length < 120) return false;
+  const v = breathing.v, t = breathing.t;
+  if (t.length < 2) return false;
+  const dt = (t[t.length - 1] - t[0]) / (t.length - 1);
+  if (dt <= 0) return false;
+  const mean = v.reduce((a, b) => a + b, 0) / v.length;
+  const env = v.map(x => Math.abs(x - mean));
+  const minLag = Math.max(2, Math.round(25 / dt));
+  const maxLag = Math.min(v.length - 1, Math.round(65 / dt));
+  if (maxLag <= minLag + 2) return false;
+  const envMean = env.reduce((a, b) => a + b, 0) / env.length;
+  const envCentered = env.map(x => x - envMean);
+  const envVar = envCentered.reduce((a, b) => a + b * b, 0);
+  if (envVar < 1e-6) return false;
+  let peakCorr = 0;
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    let s = 0;
+    for (let i = 0; i + lag < envCentered.length; i++) s += envCentered[i] * envCentered[i + lag];
+    const corr = s / envVar;
+    if (corr > peakCorr) peakCorr = corr;
+  }
+  return peakCorr > 0.55;
+}
+
+function detectIndicationsLocal(phaseEvents: PhaseMetrics[], mpg?: MultiParameterGraphical): Indication[] {
+  if (!phaseEvents || phaseEvents.length === 0) return [];
+  const A = phaseEvents[0];
+  const D = phaseEvents[3] || null;
+  const F = phaseEvents[phaseEvents.length - 1];
+
+  const restingLfa = A?.LFa ?? null;
+  const restingRfa = A?.RFa ?? null;
+  const restingSb  = A?.SB ?? null;
+  const restingHr  = A?.meanHR ?? null;
+  const restingSbp = A?.SBP ?? null;
+  const restingDbp = A?.DBP ?? null;
+  const valsalvaLfa = D?.LFa ?? null;
+  const valsalvaRfa = D?.RFa ?? null;
+  const valsalvaSbp = D?.SBP ?? null;
+  const standLfa = F?.LFa ?? null;
+  const standRfa = F?.RFa ?? null;
+  const standHr  = F?.meanHR ?? null;
+  const standSbp = F?.SBP ?? null;
+  const standDbp = F?.DBP ?? null;
+
+  const out: Indication[] = [];
+  const has = (code: string) => out.some(i => i.code === code);
+
+  // CAN: RFa < 0.1
+  if (restingRfa != null && restingRfa < 0.1) {
+    if (restingSb != null && restingSb >= 0.4 && restingSb <= 3.0) {
+      out.push({ code: "CAN", name: "Cardiovascular Autonomic Neuropathy (CAN) with normal SB",
+        description: `Resting RFa ${restingRfa.toFixed(2)} bpm² (< 0.1), SB ${restingSb.toFixed(2)} (within 0.4–3.0). Findings consistent with CAN with preserved sympathovagal balance.`,
+        severity: "high" });
+    } else if (restingSb != null && restingSb > 3.0) {
+      out.push({ code: "CAN_HIGH_SB", name: "CAN with high SB",
+        description: `Resting RFa ${restingRfa.toFixed(2)} bpm², SB ${restingSb.toFixed(2)} (> 3.0). CAN plus concurrent Sympathetic Excess.`,
+        severity: "high" });
+    } else if (restingSb != null && restingSb < 0.4) {
+      out.push({ code: "CAN_LOW_SB", name: "CAN with low SB",
+        description: `Resting RFa ${restingRfa.toFixed(2)} bpm², SB ${restingSb.toFixed(2)} (< 0.4). CAN plus concurrent Parasympathetic Excess.`,
+        severity: "high" });
+    } else {
+      out.push({ code: "CAN", name: "Cardiovascular Autonomic Neuropathy (CAN)",
+        description: `Very low resting parasympathetic activity (RFa ${restingRfa.toFixed(2)} bpm² < 0.1).`,
+        severity: "high" });
+    }
+  }
+
+  // Resting SE: SB > 3.0
+  if (restingSb != null && restingSb > 3.0 && !has("CAN_HIGH_SB")) {
+    out.push({ code: "SE_REST", name: "Resting Sympathetic Excess (SE)",
+      description: `Sympathovagal balance ${restingSb.toFixed(2)} (> 3.0) at rest. Associated with hypertension, anxiety, cardiovascular events.`,
+      severity: "high" });
+  }
+
+  // Resting PE: SB < 0.4
+  if (restingSb != null && restingSb < 0.4 && !has("CAN_LOW_SB")) {
+    out.push({ code: "PE_REST", name: "Resting Parasympathetic Excess (PE)",
+      description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest. Associated with depression, fatigue, exercise intolerance, GI motility issues.`,
+      severity: "moderate" });
+  }
+
+  // AAN: LFa in [0.1, 0.5) OR RFa < 0.5
+  const aanFromLfa = restingLfa != null && restingLfa >= 0.1 && restingLfa < 0.5;
+  const aanFromRfa = restingRfa != null && restingRfa < 0.5;
+  if (aanFromLfa || aanFromRfa) {
+    const parts: string[] = [];
+    if (aanFromLfa) parts.push(`LFa ${restingLfa!.toFixed(2)} bpm²`);
+    if (aanFromRfa) parts.push(`RFa ${restingRfa!.toFixed(2)} bpm²`);
+    out.push({ code: "AAN", name: "Advanced Autonomic Neuropathy (AAN)",
+      description: `Very low autonomic activity at rest (${parts.join("; ")}). Consistent with significant autonomic nerve damage.`,
+      severity: "high" });
+  }
+
+  // Dynamic SE — Valsalva
+  if (restingLfa != null && valsalvaLfa != null && restingLfa > 0 && pctChangeLocal(restingLfa, valsalvaLfa) > 500) {
+    out.push({ code: "SE_VALSALVA", name: "Dynamic Sympathetic Excess (SE) — Valsalva",
+      description: `Sympathetic surge during Valsalva: LFa ${restingLfa.toFixed(2)} → ${valsalvaLfa.toFixed(2)} bpm² (+${pctChangeLocal(restingLfa, valsalvaLfa).toFixed(0)}%). Associated with hypertension and anxiety.`,
+      severity: "moderate" });
+  }
+
+  // Dynamic SE — Standing
+  if (restingLfa != null && standLfa != null && restingLfa > 0 && pctChangeLocal(restingLfa, standLfa) > 500) {
+    out.push({ code: "SE_STAND", name: "Dynamic Sympathetic Excess (SE) — Standing",
+      description: `Sympathetic surge on standing: LFa ${restingLfa.toFixed(2)} → ${standLfa.toFixed(2)} bpm² (+${pctChangeLocal(restingLfa, standLfa).toFixed(0)}%).`,
+      severity: "moderate" });
+  }
+
+  // Dynamic PE — Valsalva
+  if (restingRfa != null && valsalvaRfa != null && restingRfa > 0 && pctChangeLocal(restingRfa, valsalvaRfa) > 600) {
+    out.push({ code: "PE_VALSALVA", name: "Dynamic Parasympathetic Excess (PE) — Valsalva",
+      description: `Parasympathetic surge during Valsalva: RFa ${restingRfa.toFixed(2)} → ${valsalvaRfa.toFixed(2)} bpm² (+${pctChangeLocal(restingRfa, valsalvaRfa).toFixed(0)}%). Associated with difficult-to-control BP or blood sugar.`,
+      severity: "moderate" });
+  }
+
+  // Dynamic PE — Standing
+  if (restingRfa != null && standRfa != null && standRfa > restingRfa) {
+    out.push({ code: "PE_STAND", name: "Dynamic Parasympathetic Excess (PE) — Standing",
+      description: `RFa rose on standing (${restingRfa.toFixed(2)} → ${standRfa.toFixed(2)} bpm²) — atypical; normally parasympathetic withdraws on standing.`,
+      severity: "moderate" });
+  }
+
+  // Orthostatic Dysfunction (OD)
+  const hasOD = restingLfa != null && standLfa != null && standLfa < restingLfa;
+  if (hasOD) {
+    const isHighRisk = restingSb != null && (restingSb < 0.4 || restingSb > 3.0);
+    const sbNote = restingSb != null ? ` Resting SB ${restingSb.toFixed(2)} (${isHighRisk ? "outside" : "within"} 0.4–3.0).` : "";
+    out.push({
+      code: isHighRisk ? "OD_HIGH" : "OD_NORMAL",
+      name: `Orthostatic Dysfunction (OD) — ${isHighRisk ? "High Risk" : "Normal Risk"}`,
+      description: `LFa decreased rest → standing (${restingLfa!.toFixed(2)} → ${standLfa!.toFixed(2)} bpm²). Consistent with impaired sympathetic support of posture.${sbNote}`,
+      severity: isHighRisk ? "high" : "moderate",
+    });
+  }
+
+  // POTS / Pre-POTS
+  if (hasOD && standHr != null && restingHr != null) {
+    const rise = standHr - restingHr;
+    if (rise > 30 || standHr > 120) {
+      out.push({ code: "POTS", name: "Postural Orthostatic Tachycardia Syndrome (POTS)",
+        description: `OD with HR rise ${rise.toFixed(0)} bpm on standing (${restingHr.toFixed(0)} → ${standHr.toFixed(0)})${standHr > 120 ? ", exceeding 120 bpm" : ""}.`,
+        severity: "high" });
+    } else if (rise >= 20 && rise <= 30) {
+      out.push({ code: "PRE_POTS", name: "Pre-POTS",
+        description: `Borderline orthostatic tachycardia: HR rose ${rise.toFixed(0)} bpm on standing (${restingHr.toFixed(0)} → ${standHr.toFixed(0)}). Below 30 bpm POTS threshold but warrants monitoring.`,
+        severity: "moderate" });
+    }
+  }
+
+  // VVS
+  if (restingLfa != null && standLfa != null && restingLfa > 0 &&
+      restingRfa != null && standRfa != null &&
+      standLfa > 5 * restingLfa && standRfa > restingRfa) {
+    out.push({ code: "VVS", name: "Vasovagal Syncope (VVS) Predisposition",
+      description: `Large sympathetic surge on standing (LFa ${restingLfa.toFixed(2)} → ${standLfa.toFixed(2)} bpm²) with concurrent parasympathetic excess (RFa ${restingRfa.toFixed(2)} → ${standRfa.toFixed(2)}). Pattern consistent with predisposition to fainting on postural change.`,
+      severity: "high" });
+  }
+
+  // Baroreceptor reflex impairment
+  if (restingSbp != null && valsalvaSbp != null && restingSbp > 0) {
+    const sbpRisePct = pctChangeLocal(restingSbp, valsalvaSbp);
+    if (sbpRisePct < 10) {
+      out.push({ code: "BARORECEPTOR", name: "Baroreceptor Reflex Impairment",
+        description: `Systolic BP rose only ${sbpRisePct.toFixed(1)}% during Valsalva (${restingSbp} → ${valsalvaSbp} mmHg, expected ≥ 10%). Consistent with impaired baroreceptor sensitivity.`,
+        severity: "moderate" });
+    }
+  }
+
+  // Neurogenic syncope risk
+  if ((has("OD_HIGH") || has("VVS")) && (has("AAN") || has("CAN") || has("CAN_HIGH_SB") || has("CAN_LOW_SB"))) {
+    out.push({ code: "NEUROGENIC_SYNCOPE", name: "Neurogenic Syncope Risk",
+      description: "Orthostatic dysfunction (high risk) combined with autonomic neuropathy markers raises concern for neurogenic syncope. Counsel on fall precautions; consider tilt-table referral.",
+      severity: "high" });
+  }
+
+  // Cardiogenic syncope risk
+  if (restingHr != null && restingHr < 50 && hasOD) {
+    out.push({ code: "CARDIOGENIC_SYNCOPE", name: "Cardiogenic Syncope Risk",
+      description: `Resting bradycardia (${restingHr.toFixed(0)} bpm) with orthostatic dysfunction. Consider cardiology evaluation for sinus node or conduction system disease.`,
+      severity: "high" });
+  }
+
+  // Cheynes-Stokes
+  if (detectCheynesStokesLocal(mpg?.breathingTrend)) {
+    out.push({ code: "CHEYNES_STOKES", name: "Cheynes-Stokes Breathing",
+      description: "Cyclical crescendo-decrescendo breathing (period 30–60 s) detected in the respiratory envelope. Often associated with congestive heart failure, stroke, or central sleep apnea.",
+      severity: "high" });
+  }
+
+  // Orthostatic Hypotension by BP
+  if (restingSbp != null && standSbp != null && (restingSbp - standSbp) >= 20) {
+    out.push({ code: "ORTHOSTATIC_HYPOTENSION", name: "Orthostatic Hypotension (BP)",
+      description: `SBP fell ≥ 20 mmHg on standing (${restingSbp} → ${standSbp}). Meets BP-criteria for orthostatic hypotension.`,
+      severity: "high" });
+  } else if (restingDbp != null && standDbp != null && (restingDbp - standDbp) >= 10) {
+    out.push({ code: "ORTHOSTATIC_HYPOTENSION", name: "Orthostatic Hypotension (BP)",
+      description: `DBP fell ≥ 10 mmHg on standing (${restingDbp} → ${standDbp}). Meets BP-criteria for orthostatic hypotension.`,
+      severity: "high" });
+  }
+
+  return out;
+}
+
+// ============================================================================
 // STAGE 8 — Main entry point: generate full report
 // ============================================================================
 
@@ -1883,6 +2105,9 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
     multiParameter = undefined;
   }
 
+  // -- Path B: Colombo indication detection -----------------------------
+  const indications = detectIndicationsLocal(phaseEvents, multiParameter);
+
   return {
     patientData: data,
     wellnessScore: score,
@@ -1916,6 +2141,7 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
     rPeakCount: phaseEvents.reduce((n, p) => n + Math.round(p.meanHR * p.durationSec / 60), 0),
     generatedAt: new Date().toISOString(),
     multiParameter,
+    indications,
   };
 }
 

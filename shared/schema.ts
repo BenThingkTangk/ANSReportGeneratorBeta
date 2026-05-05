@@ -235,6 +235,8 @@ export interface ANSReport {
   patientSynopsis?: string;
   clinicianSynopsis?: string;
   multiParameter?: MultiParameterGraphical;
+  /** Path B — Colombo indication detection (CAN, POTS, OD, VVS, etc.) */
+  indications?: Indication[];
 }
 
 export interface UploadResponse {
@@ -242,6 +244,14 @@ export interface UploadResponse {
   patientData?: ANSPatientData;
   report?: ANSReport;
   error?: string;
+}
+
+// Colombo P&S indication detection (Path B)
+export interface Indication {
+  code: string;
+  name: string;
+  description: string;
+  severity: "high" | "moderate" | "low";
 }
 
 // Ask Atom chat message

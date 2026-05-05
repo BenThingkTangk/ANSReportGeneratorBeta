@@ -15,6 +15,7 @@ import { MultiParameterGraphical } from "./MultiParameterGraphical";
 import { RestingBaselinePanel } from "./RestingBaselinePanel";
 import { EcgRhythmStrip } from "./EcgRhythmStrip";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { IndicationsPanel } from "./IndicationsPanel";
 
 interface ClinicianPortalProps {
   report: ANSReport;
@@ -61,6 +62,8 @@ export function ClinicianPortal({ report }: ClinicianPortalProps) {
       />
 
       <RestingBaselinePanel report={report} />
+
+      <IndicationsPanel report={report} />
 
       <MultiParameterGraphical report={report} />
 
