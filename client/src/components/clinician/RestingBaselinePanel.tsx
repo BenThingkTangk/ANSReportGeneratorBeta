@@ -63,14 +63,14 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className="rounded-2xl bg-card/50 border border-border/30 p-5"
+      className="ps-glass p-5"
       data-testid="resting-baseline-panel"
     >
       <div className="flex items-baseline justify-between gap-4 mb-4 flex-wrap">
-        <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium">
+        <h3 className="ps-overline ps-underline-cyan">
           Resting Baseline (Phase A)
         </h3>
-        <span className="text-[10px] text-muted-foreground/70">
+        <span className="text-[10px] text-muted-foreground/70 ps-text-mono">
           Sympathovagal balance & FRF flagged when out of Colombo norm
         </span>
       </div>
@@ -93,10 +93,10 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
                 {c.label}
               </div>
               <div className="mt-1 flex items-baseline gap-1.5">
-                <span className="text-xl font-semibold tabular-nums" style={{ color }}>
+                <span className="text-xl font-semibold tabular-nums ps-text-mono" style={{ color }}>
                   {c.value.toFixed(2)}
                 </span>
-                {c.unit && <span className="text-[10px] text-muted-foreground/70">{c.unit}</span>}
+                {c.unit && <span className="text-[10px] text-muted-foreground/70 ps-text-mono">{c.unit}</span>}
               </div>
               <div className="mt-1 text-[10px]" style={{ color }}>
                 {classLabel(cls)} · norm {c.norm.lo}–{c.norm.hi}

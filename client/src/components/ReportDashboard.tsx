@@ -18,7 +18,7 @@ interface ReportDashboardProps {
  */
 export function ReportDashboard({ report, onReset }: ReportDashboardProps) {
   return (
-    <div className="min-h-screen">
+    <div className="ps-bg-deep min-h-screen">
       {/* Top bar */}
       <div
         className="sticky top-0 z-40 px-4 py-3 flex items-center justify-between gap-4"

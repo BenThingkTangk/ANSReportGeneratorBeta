@@ -26,26 +26,26 @@ export function ClinicianHeader({ report }: ClinicianHeaderProps) {
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className="rounded-2xl bg-card/50 border border-border/30 px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1"
+      className="ps-glass px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1"
       data-testid="clinician-header"
     >
       <div className="flex items-center gap-2">
         <div
-          className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-          style={{ background: "hsl(270 60% 55% / 0.15)", color: "hsl(270 60% 70%)" }}
+          className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ps-pulse"
+          style={{ background: "oklch(0.85 0.18 200 / 0.15)", color: "var(--ps-brand-cyan)", border: "1px solid var(--ps-border-strong)" }}
         >
           {p.firstName[0]}{p.lastName[0]}
         </div>
-        <span className="text-sm font-semibold">{p.firstName} {p.lastName}</span>
+        <span className="text-sm font-semibold ps-text-display tracking-tight">{p.firstName} {p.lastName}</span>
       </div>
-      <span className="text-xs text-muted-foreground">Age {p.age} · {p.gender}</span>
-      {p.bmi && <span className="text-xs text-muted-foreground">BMI {p.bmi.toFixed(1)}</span>}
-      <span className="text-xs text-muted-foreground">Test: {testDateStr}</span>
+      <span className="text-xs text-muted-foreground ps-text-mono">Age {p.age} · {p.gender}</span>
+      {p.bmi && <span className="text-xs text-muted-foreground ps-text-mono">BMI {p.bmi.toFixed(1)}</span>}
+      <span className="text-xs text-muted-foreground">Test: <span className="ps-text-mono text-foreground/90">{testDateStr}</span></span>
       <span className="text-xs text-muted-foreground">{formatPhysician(p.physician)}</span>
-      <span className="text-xs text-muted-foreground">Ectopy: {p.ectopicBeats}</span>
+      <span className="text-xs text-muted-foreground">Ectopy: <span className="ps-text-mono text-foreground/90">{p.ectopicBeats}</span></span>
       <span
-        className="ml-auto text-[10px] font-bold px-2.5 py-1 rounded-md uppercase tracking-widest"
-        style={{ background: "hsl(270 60% 55% / 0.15)", color: "hsl(270 60% 70%)", border: "1px solid hsl(270 60% 55% / 0.3)" }}
+        className="ml-auto ps-overline px-2.5 py-1 rounded-md"
+        style={{ background: "oklch(0.85 0.18 200 / 0.10)", border: "1px solid var(--ps-border-strong)" }}
       >
         Clinician View
       </span>

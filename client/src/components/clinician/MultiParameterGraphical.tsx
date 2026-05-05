@@ -85,21 +85,21 @@ function Header({ report }: { report: ANSReport }) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35 }}
-      className="rounded-2xl border border-emerald-400/20 bg-gradient-to-br from-emerald-500/5 via-card/50 to-card/30 p-5"
+      className="ps-glass-featured p-6"
       data-testid="mpg-header"
     >
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <div className="text-[9px] uppercase tracking-[0.25em] text-emerald-400/80 font-semibold">
+          <div className="ps-overline">
             Clinician — PhysioPS Style Report
           </div>
-          <h2 className="text-lg font-semibold mt-1">Multi-Parameter Graphical</h2>
-          <p className="text-[11px] text-muted-foreground mt-1 max-w-2xl">
+          <h2 className="ps-text-display text-2xl mt-1">Multi-Parameter Graphical</h2>
+          <p className="text-[12px] text-muted-foreground mt-1.5 max-w-2xl leading-relaxed">
             Full-resolution reproduction of the six-phase Colombo autonomic report, derived directly from the uploaded .ans waveform. Every chart below includes Dr. Colombo's own plain-English explanation and analogy.
           </p>
         </div>
-        <div className="text-right text-[11px] text-muted-foreground tabular-nums space-y-0.5">
-          <div className="font-medium text-foreground/80">{[p.firstName, p.lastName].filter(Boolean).join(" ") || "—"}</div>
+        <div className="text-right text-[11px] text-muted-foreground space-y-0.5 ps-text-mono">
+          <div className="ps-text-display text-foreground tracking-tight" style={{fontFamily:'var(--ps-font-display)'}}>{[p.firstName, p.lastName].filter(Boolean).join(" ") || "—"}</div>
           <div>Age {p.age} · {p.gender}</div>
           <div>Test {p.testDate || new Date(report.generatedAt).toLocaleDateString()}</div>
         </div>

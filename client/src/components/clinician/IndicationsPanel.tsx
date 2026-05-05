@@ -22,8 +22,8 @@ export function IndicationsPanel({ report }: IndicationsPanelProps) {
   const indications = report.indications ?? [];
   if (indications.length === 0) {
     return (
-      <section className="rounded-lg border border-border bg-card/40 p-6">
-        <h3 className="text-xs font-mono font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+      <section className="ps-glass p-6">
+        <h3 className="ps-overline mb-2 ps-underline-cyan">
           Colombo P&amp;S Indications
         </h3>
         <p className="text-sm text-muted-foreground">
@@ -38,12 +38,12 @@ export function IndicationsPanel({ report }: IndicationsPanelProps) {
   const sorted = [...indications].sort((a, b) => order[a.severity] - order[b.severity]);
 
   return (
-    <section className="rounded-lg border border-border bg-card/40 p-6 space-y-4" data-testid="indications-panel">
+    <section className="ps-glass p-6 space-y-4" data-testid="indications-panel">
       <header className="flex items-baseline justify-between">
-        <h3 className="text-xs font-mono font-semibold uppercase tracking-wider text-muted-foreground">
+        <h3 className="ps-overline ps-underline-cyan">
           Colombo P&amp;S Indications
         </h3>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs text-muted-foreground ps-text-mono">
           {sorted.length} finding{sorted.length === 1 ? "" : "s"} detected
         </span>
       </header>

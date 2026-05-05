@@ -261,3 +261,181 @@
   .no-default-hover-elevate {}
   .no-default-active-elevate {}
 }
+
+/* ============================================================================ */
+/* PhysioPS — "Deep Space Clinical" Brand Layer (Path C)                        */
+/* Layered over the existing shadcn HSL token system — these tokens are used    */
+/* by .ps-* and brand component classes for hero, header, indications, MPG,    */
+/* upload, and chat surfaces.                                                   */
+/* ============================================================================ */
+
+:root {
+  /* --- Brand & signal palette --- */
+  --ps-brand-cyan: #00e5ff;
+  --ps-brand-cyan-dim: #00b8d9;
+  --ps-brand-teal: #00bcd4;
+  --ps-brand-white: #f0f4ff;
+  --ps-bg-deep: #060a10;
+  --ps-bg-1: #0a121a;
+  --ps-bg-2: #0e1620;
+  --ps-bg-glass: oklch(0.13 0.04 215 / 0.55);
+  --ps-text-primary: oklch(0.96 0.02 250);
+  --ps-text-secondary: oklch(0.78 0.02 230);
+  --ps-text-muted: oklch(0.62 0.02 230);
+  --ps-border: oklch(0.85 0.18 200 / 0.14);
+  --ps-border-strong: oklch(0.85 0.18 200 / 0.28);
+  --ps-parasym: #00e5ff;          /* Parasympathetic (RFa) signal — cyan */
+  --ps-sympathet: #ff6b35;        /* Sympathetic (LFa) signal — orange  */
+  --ps-status-good: oklch(0.74 0.16 155);
+  --ps-status-warn: oklch(0.78 0.16 75);
+  --ps-status-critical: oklch(0.65 0.22 28);
+
+  /* --- Typography --- */
+  --ps-font-display: 'Cabinet Grotesk', 'Inter', system-ui, sans-serif;
+  --ps-font-body:    'Inter', system-ui, sans-serif;
+  --ps-font-mono:    'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+  /* --- Type scale (clamp fluid) --- */
+  --ps-text-xs:    clamp(0.75rem,  0.70rem + 0.25vw, 0.875rem);
+  --ps-text-sm:    clamp(0.875rem, 0.82rem + 0.27vw, 1rem);
+  --ps-text-base:  clamp(1rem,     0.95rem + 0.25vw, 1.125rem);
+  --ps-text-lg:    clamp(1.125rem, 1rem    + 0.75vw, 1.5rem);
+  --ps-text-xl:    clamp(1.5rem,   1.2rem  + 1.25vw, 2.25rem);
+  --ps-text-2xl:   clamp(2rem,     1.2rem  + 2.5vw,  3.5rem);
+  --ps-text-3xl:   clamp(2.5rem,   1rem    + 4vw,    5rem);
+  --ps-text-hero:  clamp(3rem,     0.5rem  + 7vw,    8rem);
+  --ps-text-stat:  clamp(2.5rem,   1rem    + 4vw,    5rem);
+
+  /* --- Motion --- */
+  --ps-ease-spring:     cubic-bezier(0.16, 1, 0.3, 1);
+  --ps-ease-bounce:     cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ps-ease-neural:     cubic-bezier(0.22, 1, 0.36, 1);
+  --ps-duration-fast:   120ms;
+  --ps-duration-normal: 200ms;
+  --ps-duration-slow:   500ms;
+  --ps-duration-cinematic: 800ms;
+
+  /* --- Shadows --- */
+  --ps-glow-xs:  0 0 8px  oklch(0.85 0.18 200 / 0.20);
+  --ps-glow-sm:  0 0 16px oklch(0.85 0.18 200 / 0.25);
+  --ps-glow-md:  0 0 32px oklch(0.85 0.18 200 / 0.30);
+  --ps-glow-lg:  0 0 64px oklch(0.85 0.18 200 / 0.35);
+  --ps-glow-parasym:   0 0 24px oklch(0.85 0.18 200 / 0.35);
+  --ps-glow-sympathet: 0 0 24px oklch(0.67 0.19 35  / 0.35);
+  --ps-elev-2: 0 4px 6px oklch(0 0 0 / 0.40), 0 2px 4px oklch(0 0 0 / 0.30);
+  --ps-elev-3: 0 10px 15px oklch(0 0 0 / 0.45), 0 4px 6px oklch(0 0 0 / 0.35);
+  --ps-elev-4: 0 20px 25px oklch(0 0 0 / 0.50), 0 10px 10px oklch(0 0 0 / 0.40);
+
+  /* --- Radii --- */
+  --ps-radius-sm: 0.25rem;
+  --ps-radius-md: 0.5rem;
+  --ps-radius-lg: 0.75rem;
+  --ps-radius-xl: 1rem;
+  --ps-radius-2xl: 1.5rem;
+}
+
+/* Light theme P&S signal recolour: cyan stays, but page background flips */
+.light {
+  --ps-bg-deep: #f5f7fa;
+  --ps-bg-1: #ffffff;
+  --ps-bg-2: #f0f4f8;
+  --ps-bg-glass: oklch(0.99 0.005 215 / 0.85);
+  --ps-text-primary: oklch(0.20 0.02 230);
+  --ps-text-secondary: oklch(0.40 0.02 230);
+  --ps-text-muted: oklch(0.55 0.02 230);
+  --ps-border: oklch(0.55 0.10 215 / 0.20);
+  --ps-border-strong: oklch(0.55 0.10 215 / 0.40);
+}
+
+/* === Brand background — deep space radial === */
+.ps-bg-deep {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, oklch(0.18 0.06 220 / 0.65) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 100%, oklch(0.16 0.05 200 / 0.45) 0%, transparent 65%),
+    var(--ps-bg-deep);
+}
+
+/* === Glass cards === */
+.ps-glass {
+  background: var(--ps-bg-glass);
+  backdrop-filter: blur(12px) saturate(1.5);
+  -webkit-backdrop-filter: blur(12px) saturate(1.5);
+  border: 1px solid var(--ps-border);
+  border-radius: var(--ps-radius-lg);
+  box-shadow: var(--ps-elev-3), var(--ps-glow-xs);
+}
+.ps-glass-featured {
+  background: linear-gradient(135deg, oklch(0.15 0.05 215 / 0.70), oklch(0.10 0.03 200 / 0.50));
+  backdrop-filter: blur(20px) saturate(1.8) brightness(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8) brightness(1.1);
+  border: 1px solid var(--ps-border-strong);
+  border-radius: var(--ps-radius-xl);
+  box-shadow: var(--ps-elev-4), var(--ps-glow-sm), inset 0 1px 0 oklch(1 0 0 / 0.06);
+}
+.light .ps-glass {
+  background: oklch(0.99 0.005 215 / 0.85);
+  border-color: oklch(0.55 0.10 215 / 0.18);
+  box-shadow: 0 1px 3px oklch(0 0 0 / 0.06), 0 8px 24px oklch(0.55 0.10 215 / 0.06);
+}
+
+/* === Glow accents === */
+.ps-glow-cyan { box-shadow: var(--ps-glow-md); }
+.ps-text-cyan { color: var(--ps-brand-cyan); }
+.ps-text-display { font-family: var(--ps-font-display); font-weight: 700; letter-spacing: -0.015em; }
+.ps-text-mono { font-family: var(--ps-font-mono); }
+.ps-overline {
+  font-family: var(--ps-font-body); font-weight: 600;
+  font-size: var(--ps-text-xs); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ps-brand-cyan);
+}
+.ps-stat-value {
+  font-family: var(--ps-font-mono); font-weight: 700;
+  font-size: var(--ps-text-stat); letter-spacing: -0.02em;
+  background: linear-gradient(180deg, var(--ps-brand-cyan), var(--ps-brand-cyan-dim));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* === Animated underline for headings === */
+.ps-underline-cyan {
+  position: relative; padding-bottom: 0.5rem;
+}
+.ps-underline-cyan::after {
+  content: ""; position: absolute; left: 0; bottom: 0;
+  width: 3rem; height: 2px;
+  background: linear-gradient(90deg, var(--ps-brand-cyan), transparent);
+  border-radius: 1px;
+}
+
+/* === CTA button === */
+.ps-cta {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--ps-brand-cyan); color: #001017;
+  font-family: var(--ps-font-body); font-weight: 600;
+  font-size: var(--ps-text-sm); letter-spacing: 0.02em;
+  border-radius: var(--ps-radius-sm); border: none;
+  box-shadow: var(--ps-glow-sm);
+  transition: transform var(--ps-duration-normal) var(--ps-ease-spring),
+              box-shadow var(--ps-duration-normal) var(--ps-ease-spring);
+}
+.ps-cta:hover { transform: translateY(-2px); box-shadow: var(--ps-glow-md); }
+.ps-cta:active { transform: translateY(0); box-shadow: var(--ps-glow-xs); }
+
+/* === Pulse glow keyframe (signal indicators) === */
+@keyframes ps-pulse-glow {
+  0%, 100% { box-shadow: var(--ps-glow-sm); }
+  50%      { box-shadow: var(--ps-glow-lg); }
+}
+.ps-pulse { animation: ps-pulse-glow 2.4s var(--ps-ease-neural) infinite; }
+
+/* === Hero fade-up === */
+@keyframes ps-fade-up {
+  from { opacity: 0; transform: translate3d(0, 24px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+.ps-fade-up { animation: ps-fade-up var(--ps-duration-cinematic) var(--ps-ease-spring) both; }
+
+/* === Reduced motion === */
+@media (prefers-reduced-motion: reduce) {
+  .ps-fade-up, .ps-pulse { animation: none !important; }
+}
