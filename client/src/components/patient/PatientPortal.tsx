@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
-import { NeuralProfile } from "./NeuralProfile";
+import { NervousSystemBody } from "./NervousSystemBody";
 import { HrvRingGauge } from "./HrvRingGauge";
 import { AnimatedVenn } from "./AnimatedVenn";
 import { CinematicEcg } from "./CinematicEcg";
@@ -102,7 +102,7 @@ export function PatientPortal({ report }: PatientPortalProps) {
             <div className="ps-overline mb-2 text-center" style={{ color: "hsl(185 85% 70%)" }}>
               Your Nervous System
             </div>
-            <NeuralProfile
+            <NervousSystemBody
               parasympathetic={ab.parasympathetic}
               sympathetic={ab.sympathetic}
               wellnessScore={report.wellnessScore}
