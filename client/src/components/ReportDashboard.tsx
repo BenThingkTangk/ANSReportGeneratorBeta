@@ -1,8 +1,11 @@
-import { motion } from "framer-motion";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import { ClinicianPortal } from "./clinician/ClinicianPortal";
+import { PatientPortal } from "./patient/PatientPortal";
 import { AskAtom } from "./AskAtom";
 import { ThemeToggle } from "./ThemeToggle";
+import { ViewToggle } from "./ViewToggle";
 import { ArrowLeft } from "lucide-react";
 
 interface ReportDashboardProps {
@@ -10,13 +13,15 @@ interface ReportDashboardProps {
   onReset: () => void;
 }
 
+type ViewerRole = "patient" | "clinician";
+
 /**
- * Clinical-only dashboard. Per Dr. Colombo, the patient/wellness Venn-style
- * view has been deferred from the clinical surface — it now lives in the
- * gamified mobile companion (Path D). Here we render the full clinician
- * portal exclusively.
+ * Dashboard with Patient ⇄ Clinician toggle. Atom chat (blue logo) follows
+ * the active role and is always available.
  */
 export function ReportDashboard({ report, onReset }: ReportDashboardProps) {
+  const [role, setRole] = useState<ViewerRole>("patient");
+
   return (
     <div className="ps-bg-deep min-h-screen">
       {/* Top bar */}
@@ -60,23 +65,30 @@ export function ReportDashboard({ report, onReset }: ReportDashboardProps) {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
+          <ViewToggle role={role} onChange={setRole} />
           <ThemeToggle />
         </div>
       </div>
 
       {/* Portal content */}
-      <div className="max-w-4xl mx-auto px-4 pt-4">
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
-        >
-          <ClinicianPortal report={report} />
-        </motion.div>
+      <div className="max-w-5xl mx-auto px-4 pt-4">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={role}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.3 }}
+          >
+            {role === "patient"
+              ? <PatientPortal report={report} />
+              : <ClinicianPortal report={report} />}
+          </motion.div>
+        </AnimatePresence>
       </div>
 
-      {/* Floating chatbot */}
-      <AskAtom report={report} viewerRole="clinician" />
+      {/* Floating Atom chatbot (blue logo) — adapts to viewer role */}
+      <AskAtom report={report} viewerRole={role} />
     </div>
   );
 }

@@ -2,16 +2,16 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
-import { WellnessMeter } from "./WellnessMeter";
-import { WellnessBreakdown } from "./WellnessBreakdown";
+import { NeuralProfile } from "./NeuralProfile";
+import { HrvRingGauge } from "./HrvRingGauge";
+import { AnimatedVenn } from "./AnimatedVenn";
+import { CinematicEcg } from "./CinematicEcg";
+import { DiagnosisExplainer } from "./DiagnosisExplainer";
 import { PlainEnglishSynopsis } from "./PlainEnglishSynopsis";
 import { BodyHeatmap } from "./BodyHeatmap";
-import { KeyMetricsStrip } from "./KeyMetricsStrip";
-import { PatternChips } from "./PatternChips";
 import { SupplementsPanel } from "./SupplementsPanel";
 import { TreatmentsPanel } from "./TreatmentsPanel";
 import { NextTestCard } from "./NextTestCard";
-import { AutonomicWave } from "@/components/AutonomicWave";
 
 interface PatientPortalProps {
   report: ANSReport;
@@ -23,6 +23,8 @@ export function PatientPortal({ report }: PatientPortalProps) {
   const [synopsisError, setSynopsisError] = useState<string | null>(null);
 
   const p = report.patientData;
+  const ab = report.autonomicBalance;
+  const tier = report.wellnessTier;
 
   const fetchSynopsis = async () => {
     setSynopsisLoading(true);
@@ -43,9 +45,8 @@ export function PatientPortal({ report }: PatientPortalProps) {
   };
 
   useEffect(() => {
-    if (!report.patientSynopsis) {
-      fetchSynopsis();
-    }
+    if (!report.patientSynopsis) fetchSynopsis();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const testDateStr = p.testDate
@@ -53,18 +54,18 @@ export function PatientPortal({ report }: PatientPortalProps) {
     : "Date on file";
 
   return (
-    <div className="space-y-4 pb-16" data-testid="patient-portal">
-      {/* Header strip */}
+    <div className="space-y-6 pb-24" data-testid="patient-portal">
+      {/* Patient header strip */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
-        className="rounded-2xl bg-card/50 border border-border/30 px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1"
+        className="ps-glass rounded-2xl px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1"
       >
         <div className="flex items-center gap-2">
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-            style={{ background: "hsl(185 85% 42% / 0.15)", color: "hsl(185 85% 55%)" }}
+            style={{ background: "hsl(185 85% 42% / 0.15)", color: "hsl(185 85% 60%)" }}
           >
             {p.firstName[0]}{p.lastName[0]}
           </div>
@@ -76,43 +77,103 @@ export function PatientPortal({ report }: PatientPortalProps) {
         <span className="text-xs text-muted-foreground">Physician: Dr. {p.physician}</span>
       </motion.div>
 
-      {/* Hero — Wellness Meter */}
-      <WellnessMeter report={report} />
+      {/* HERO — Cinematic Neural Profile + HRV Ring */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6 }}
+        className="relative rounded-3xl overflow-hidden"
+        style={{
+          background: "radial-gradient(ellipse at 30% 30%, hsl(185 80% 25% / 0.35), transparent 60%), radial-gradient(ellipse at 80% 70%, hsl(295 80% 30% / 0.28), transparent 60%), hsl(220 30% 5%)",
+          border: "1px solid hsl(185 85% 42% / 0.15)",
+          boxShadow: "0 20px 60px hsl(185 85% 30% / 0.15), inset 0 0 40px hsl(220 30% 4% / 0.6)",
+        }}
+        data-testid="patient-hero"
+      >
+        {/* Decorative gridlines */}
+        <div
+          className="absolute inset-0 pointer-events-none opacity-[0.04]"
+          style={{ backgroundImage: "radial-gradient(circle at 1px 1px, white 1px, transparent 0)", backgroundSize: "32px 32px" }}
+        />
 
-      {/* Wellness Breakdown — what's driving the score */}
-      <WellnessBreakdown report={report} />
+        <div className="relative grid lg:grid-cols-2 gap-6 p-6 lg:p-8">
+          {/* Left — Neural profile */}
+          <div className="flex flex-col items-center justify-center">
+            <div className="ps-overline mb-2 text-center" style={{ color: "hsl(185 85% 70%)" }}>
+              Your Nervous System
+            </div>
+            <NeuralProfile
+              parasympathetic={ab.parasympathetic}
+              sympathetic={ab.sympathetic}
+              wellnessScore={report.wellnessScore}
+            />
+          </div>
 
-      {/* Plain-English Synopsis */}
-      <PlainEnglishSynopsis
-        report={report}
-        synopsis={synopsis}
-        loading={synopsisLoading}
-        error={synopsisError}
-        onRetry={fetchSynopsis}
-      />
+          {/* Right — HRV ring + Venn + caption */}
+          <div className="flex flex-col gap-5 justify-center">
+            <HrvRingGauge value={report.wellnessScore} status={tier} caption={ab.interpretation} />
+            <AnimatedVenn
+              sympathetic={ab.sympathetic}
+              parasympathetic={ab.parasympathetic}
+              balanceLabel={tier}
+            />
+          </div>
+        </div>
+      </motion.div>
 
-      {/* Body Heatmap */}
-      <BodyHeatmap bodySystemImpact={report.bodySystemImpact} />
+      {/* Cinematic flowing ECG */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.15 }}
+      >
+        <CinematicEcg parasympathetic={ab.parasympathetic} sympathetic={ab.sympathetic} />
+      </motion.div>
 
-      {/* Key Metrics Strip */}
-      <KeyMetricsStrip report={report} />
+      {/* Plain English synopsis */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.2 }}
+      >
+        <PlainEnglishSynopsis
+          report={report}
+          synopsis={synopsis}
+          loading={synopsisLoading}
+          error={synopsisError}
+          onRetry={fetchSynopsis}
+        />
+      </motion.div>
 
-      {/* Autonomic Wave */}
-      <AutonomicWave
-        parasympathetic={report.autonomicBalance.parasympathetic}
-        sympathetic={report.autonomicBalance.sympathetic}
-        ecgData={report.patientData.ecgData}
-      />
+      {/* What we found — diagnosis cards */}
+      <DiagnosisExplainer report={report} />
 
-      {/* Pattern Chips */}
-      <PatternChips patterns={report.dysfunctionPatterns} />
+      {/* Body heatmap */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: "-80px" }}
+        transition={{ duration: 0.5 }}
+      >
+        <BodyHeatmap bodySystemImpact={report.bodySystemImpact} />
+      </motion.div>
 
-      {/* Three stacked panels */}
-      <div className="space-y-4">
-        <SupplementsPanel recommendations={report.therapyRecommendations} />
-        <TreatmentsPanel recommendations={report.therapyRecommendations} />
-        <NextTestCard followUp={report.followUp} />
-      </div>
+      {/* Care plan stack */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: "-80px" }}
+        transition={{ duration: 0.5 }}
+      >
+        <h2 className="ps-text-display text-xl font-semibold ps-underline-cyan mb-4">
+          Your Path Forward
+        </h2>
+        <div className="space-y-4">
+          <SupplementsPanel recommendations={report.therapyRecommendations} />
+          <TreatmentsPanel recommendations={report.therapyRecommendations} />
+          <NextTestCard followUp={report.followUp} />
+        </div>
+      </motion.div>
     </div>
   );
 }
