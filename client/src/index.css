@@ -2,50 +2,51 @@
 @tailwind components;
 @tailwind utilities;
 
-/* HumanOS ANS - Medical Dark Theme */
+/* HumanOS ANS — PhysioPS × HumanOS v2.0.0 Deep Space Clinical Intelligence */
 :root {
-  --button-outline: rgba(0,0,0, .10);
-  --badge-outline: rgba(0,0,0, .05);
-  --opaque-button-border-intensity: -8;
-  --elevate-1: rgba(0,0,0, .03);
-  --elevate-2: rgba(0,0,0, .08);
-  --background: 210 20% 6%;
-  --foreground: 200 20% 95%;
-  --border: 210 15% 15%;
-  --card: 210 18% 9%;
-  --card-foreground: 200 20% 95%;
-  --card-border: 210 15% 13%;
-  --sidebar: 210 20% 8%;
-  --sidebar-foreground: 200 20% 95%;
-  --sidebar-border: 210 15% 12%;
-  --sidebar-primary: 185 85% 42%;
-  --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 210 15% 16%;
-  --sidebar-accent-foreground: 200 20% 95%;
-  --sidebar-ring: 185 85% 42%;
-  --popover: 210 18% 11%;
-  --popover-foreground: 200 20% 95%;
-  --popover-border: 210 15% 17%;
-  --primary: 185 85% 42%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 210 15% 18%;
-  --secondary-foreground: 200 20% 95%;
-  --muted: 210 12% 19%;
-  --muted-foreground: 210 10% 55%;
-  --accent: 270 60% 55%;
-  --accent-foreground: 0 0% 100%;
-  --destructive: 0 72% 51%;
+  --button-outline: rgba(255,255,255, .08);
+  --badge-outline: rgba(255,255,255, .05);
+  --opaque-button-border-intensity: 9;
+  --elevate-1: rgba(255,255,255, .04);
+  --elevate-2: rgba(255,255,255, .09);
+  /* shadcn HSL aliases mapped to PhysioPS Deep Space tokens */
+  --background: 215 43% 3%;          /* #03060a void */
+  --foreground: 222 100% 97%;        /* #f0f4ff */
+  --border: 220 30% 12%;
+  --card: 222 47% 11%;               /* surface-1 */
+  --card-foreground: 222 100% 97%;
+  --card-border: 220 30% 12%;
+  --sidebar: 215 35% 5%;
+  --sidebar-foreground: 222 100% 97%;
+  --sidebar-border: 220 30% 10%;
+  --sidebar-primary: 187 100% 50%;   /* brand cyan */
+  --sidebar-primary-foreground: 215 43% 3%;
+  --sidebar-accent: 220 30% 14%;
+  --sidebar-accent-foreground: 222 100% 97%;
+  --sidebar-ring: 187 100% 50%;
+  --popover: 222 47% 11%;
+  --popover-foreground: 222 100% 97%;
+  --popover-border: 220 30% 14%;
+  --primary: 187 100% 50%;           /* brand cyan #00e5ff */
+  --primary-foreground: 215 43% 3%;
+  --secondary: 220 30% 14%;
+  --secondary-foreground: 222 100% 97%;
+  --muted: 220 30% 12%;
+  --muted-foreground: 218 22% 60%;   /* text-muted */
+  --accent: 252 92% 76%;             /* violet hrv */
+  --accent-foreground: 215 43% 3%;
+  --destructive: 0 84% 60%;          /* status-critical */
   --destructive-foreground: 0 0% 98%;
-  --input: 210 12% 25%;
-  --ring: 185 85% 42%;
-  --chart-1: 185 85% 50%;
-  --chart-2: 140 60% 50%;
-  --chart-3: 35 90% 55%;
-  --chart-4: 270 60% 55%;
-  --chart-5: 340 70% 55%;
-  --font-sans: 'Inter', system-ui, sans-serif;
-  --font-serif: Georgia, serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --input: 220 30% 14%;
+  --ring: 187 100% 50%;
+  --chart-1: 187 100% 50%;           /* parasym cyan */
+  --chart-2: 17 100% 60%;            /* sympathetic ember */
+  --chart-3: 252 92% 76%;            /* hrv violet */
+  --chart-4: 142 71% 45%;            /* optimal green */
+  --chart-5: 38 92% 50%;             /* watch amber */
+  --font-sans: 'Satoshi', 'Inter', system-ui, sans-serif;
+  --font-serif: '"Cabinet Grotesk"', Georgia, serif;
+  --font-mono: '"JetBrains Mono"', ui-monospace, monospace;
   --radius: .625rem;
   --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
   --shadow-xs: 0px 2px 0px 0px hsl(0 0% 0% / 0.00);
@@ -74,45 +75,208 @@
   --elevate-2: rgba(255,255,255, .09);
 }
 
-/* Light clinical theme — high-contrast medical layout for daytime/print review */
+/* Light clinical theme — high-contrast PhysioPS report-paper style for daytime/print review */
 .light {
   --button-outline: rgba(0,0,0, .12);
   --badge-outline: rgba(0,0,0, .08);
   --opaque-button-border-intensity: -8;
   --elevate-1: rgba(0,0,0, .03);
   --elevate-2: rgba(0,0,0, .07);
-  --background: 210 30% 98%;
-  --foreground: 210 30% 12%;
-  --border: 210 20% 86%;
+  --background: 220 100% 99%;        /* #f8fbff report paper */
+  --foreground: 222 47% 11%;
+  --border: 218 30% 88%;
   --card: 0 0% 100%;
-  --card-foreground: 210 30% 12%;
-  --card-border: 210 20% 86%;
-  --sidebar: 210 30% 96%;
-  --sidebar-foreground: 210 30% 12%;
-  --sidebar-border: 210 20% 86%;
-  --sidebar-primary: 185 85% 35%;
+  --card-foreground: 222 47% 11%;
+  --card-border: 218 30% 88%;
+  --sidebar: 220 100% 97%;
+  --sidebar-foreground: 222 47% 11%;
+  --sidebar-border: 218 30% 86%;
+  --sidebar-primary: 187 100% 35%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 210 20% 92%;
-  --sidebar-accent-foreground: 210 30% 12%;
-  --sidebar-ring: 185 85% 35%;
+  --sidebar-accent: 218 30% 94%;
+  --sidebar-accent-foreground: 222 47% 11%;
+  --sidebar-ring: 187 100% 35%;
   --popover: 0 0% 100%;
-  --popover-foreground: 210 30% 12%;
-  --popover-border: 210 20% 86%;
-  --primary: 185 85% 35%;
+  --popover-foreground: 222 47% 11%;
+  --popover-border: 218 30% 88%;
+  --primary: 187 100% 38%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 210 20% 92%;
-  --secondary-foreground: 210 30% 12%;
-  --muted: 210 20% 94%;
-  --muted-foreground: 210 12% 38%;
-  --accent: 270 60% 45%;
+  --secondary: 218 30% 94%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 218 30% 96%;
+  --muted-foreground: 218 14% 38%;
+  --accent: 252 80% 55%;
   --accent-foreground: 0 0% 100%;
   --destructive: 0 72% 45%;
   --destructive-foreground: 0 0% 100%;
-  --input: 210 20% 88%;
-  --ring: 185 85% 35%;
-  --shadow-sm: 0px 1px 2px 0px hsl(210 30% 12% / 0.06);
-  --shadow: 0px 2px 6px 0px hsl(210 30% 12% / 0.06);
-  --shadow-md: 0px 4px 12px 0px hsl(210 30% 12% / 0.08);
+  --input: 218 30% 90%;
+  --ring: 187 100% 38%;
+  --shadow-sm: 0px 1px 2px 0px hsl(222 47% 11% / 0.06);
+  --shadow: 0px 2px 6px 0px hsl(222 47% 11% / 0.06);
+  --shadow-md: 0px 4px 12px 0px hsl(222 47% 11% / 0.08);
+}
+
+/* ============================================================
+   PhysioPS × HumanOS v2.0.0 — Deep Space tokens (RGB hex)
+   These are the canonical PhysioPS variables used across the system,
+   sitting alongside the HSL shadcn aliases above.
+   ============================================================ */
+:root {
+  /* Backgrounds */
+  --color-bg-void: #03060a;
+  --color-bg-deep: #060a10;
+  --color-bg-base: #080d14;
+  --color-bg-orbit: #0a111d;
+
+  /* Surfaces */
+  --color-surface-0: #0c1220;
+  --color-surface-1: #0f172a;
+  --color-surface-2: #131c32;
+  --color-surface-3: #1a2540;
+  --color-surface-ink: #02040a;
+  --color-surface-glass: rgba(15, 23, 42, 0.72);
+
+  /* Text */
+  --color-text-primary: #f0f4ff;
+  --color-text-secondary: #a7b4c8;
+  --color-text-muted: #69758a;
+  --color-text-faint: #3d4658;
+  --color-text-inverse: #03060a;
+
+  /* Brand */
+  --color-brand-cyan: #00e5ff;
+  --color-brand-teal: #00bcd4;
+  --color-brand-blue: #2f7cff;
+  --color-brand-violet: #a78bfa;
+  --color-brand-white: #f7fbff;
+  --color-brand-platinum: #dbe7f8;
+
+  /* Clinical signals */
+  --color-parasym: #00e5ff;
+  --color-parasym-soft: #6eeeff;
+  --color-parasym-fill: rgba(0, 229, 255, 0.14);
+  --color-parasym-glow: rgba(0, 229, 255, 0.28);
+  --color-sympathetic: #ff6b35;
+  --color-sympathetic-soft: #ff9a72;
+  --color-sympathetic-fill: rgba(255, 107, 53, 0.14);
+  --color-sympathetic-glow: rgba(255, 107, 53, 0.24);
+  --color-hrv: #a78bfa;
+  --color-baseline: #64748b;
+
+  /* Status */
+  --color-status-optimal: #22c55e;
+  --color-status-watch: #f59e0b;
+  --color-status-risk: #ff6b35;
+  --color-status-critical: #ef4444;
+  --color-status-processing: #00e5ff;
+  --color-status-cleared: #10b981;
+
+  /* Borders */
+  --color-border-subtle: rgba(210, 235, 255, 0.08);
+  --color-border-default: rgba(0, 229, 255, 0.20);
+  --color-border-active: rgba(0, 229, 255, 0.60);
+  --color-border-danger: rgba(239, 68, 68, 0.65);
+  --border-glass: 1px solid rgba(210, 235, 255, 0.12);
+
+  /* Gradients */
+  --gradient-cta: linear-gradient(135deg, #00e5ff 0%, #00bcd4 100%);
+  --gradient-ans-dual: linear-gradient(90deg, #00e5ff 0%, #a78bfa 50%, #ff6b35 100%);
+  --gradient-clinical-glass: linear-gradient(135deg, rgba(255,255,255,0.075), rgba(0,229,255,0.035) 42%, rgba(255,255,255,0.025));
+  --gradient-hero-orbit:
+    radial-gradient(circle at 75% 18%, rgba(0, 229, 255, 0.18), transparent 30%),
+    radial-gradient(circle at 18% 82%, rgba(255, 107, 53, 0.10), transparent 28%),
+    linear-gradient(135deg, #03060a 0%, #07111f 48%, #03060a 100%);
+
+  /* Shadows / glows */
+  --shadow-card-ps: 0 1px 0 rgba(255,255,255,0.06) inset, 0 24px 80px rgba(0,0,0,0.42);
+  --shadow-elevated-ps: 0 1px 0 rgba(255,255,255,0.08) inset, 0 40px 120px rgba(0,0,0,0.56), 0 0 48px rgba(0,229,255,0.08);
+  --glow-cyan-soft: 0 0 28px rgba(0,229,255,0.18);
+  --glow-cyan-strong: 0 0 56px rgba(0,229,255,0.34);
+  --glow-sympathetic: 0 0 42px rgba(255,107,53,0.26);
+
+  /* Motion */
+  --motion-instant: 80ms;
+  --motion-fast: 160ms;
+  --motion-base: 280ms;
+  --motion-slow: 520ms;
+  --motion-diagnostic: 900ms;
+  --motion-cinematic: 1400ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-signal: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-humanos: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* PhysioPS utility classes — same set as mobile */
+.ps-glass {
+  background: linear-gradient(180deg, rgba(15,23,42,0.72), rgba(8,13,20,0.55));
+  border: var(--border-glass);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+.ps-glass-strong {
+  background:
+    var(--gradient-clinical-glass),
+    linear-gradient(180deg, rgba(8,13,20,0.85), rgba(6,10,16,0.65));
+  border: var(--border-glass);
+  box-shadow: var(--shadow-elevated-ps);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+.ps-overline {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-brand-cyan);
+}
+.ps-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-brand-cyan);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.ps-eyebrow::before {
+  content: "";
+  display: inline-block;
+  width: 18px; height: 1px;
+  background: var(--color-brand-cyan);
+  box-shadow: 0 0 8px var(--color-parasym-glow);
+}
+.ps-text-display { font-family: "Cabinet Grotesk", "Satoshi", Inter, sans-serif; font-weight: 600; letter-spacing: -0.02em; }
+.ps-text-mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-feature-settings: "tnum"; }
+.ps-mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-feature-settings: "tnum"; }
+.ps-cyan-glow { text-shadow: 0 0 18px var(--color-parasym-glow); }
+
+.ps-pill { display: inline-flex; align-items: center; gap: 8px; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; }
+.ps-pill .dot { width: 6px; height: 6px; border-radius: 50%; }
+.ps-pill-optimal { background: rgba(34,197,94,0.1); color: var(--color-status-optimal); border: 1px solid rgba(34,197,94,0.3); }
+.ps-pill-optimal .dot { background: var(--color-status-optimal); box-shadow: 0 0 10px var(--color-status-optimal); }
+.ps-pill-watch { background: rgba(245,158,11,0.1); color: var(--color-status-watch); border: 1px solid rgba(245,158,11,0.32); }
+.ps-pill-watch .dot { background: var(--color-status-watch); box-shadow: 0 0 10px var(--color-status-watch); }
+.ps-pill-risk { background: rgba(255,107,53,0.1); color: var(--color-sympathetic); border: 1px solid rgba(255,107,53,0.32); }
+.ps-pill-risk .dot { background: var(--color-sympathetic); box-shadow: var(--glow-sympathetic); }
+.ps-pill-critical { background: rgba(239,68,68,0.1); color: var(--color-status-critical); border: 1px solid var(--color-border-danger); }
+.ps-pill-critical .dot { background: var(--color-status-critical); box-shadow: 0 0 10px var(--color-status-critical); }
+
+.ps-insight { position: relative; background: linear-gradient(180deg, rgba(15,23,42,0.7), rgba(8,13,20,0.6)); border: var(--border-glass); border-radius: 24px; padding: 1.25rem; overflow: hidden; }
+.ps-insight::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.ps-insight.ps-sev-optimal::before { background: var(--color-status-optimal); box-shadow: 0 0 16px var(--color-status-optimal); }
+.ps-insight.ps-sev-watch::before { background: var(--color-status-watch); box-shadow: 0 0 16px var(--color-status-watch); }
+.ps-insight.ps-sev-risk::before { background: var(--color-status-risk); box-shadow: var(--glow-sympathetic); }
+.ps-insight.ps-sev-critical::before { background: var(--color-status-critical); box-shadow: 0 0 16px rgba(239,68,68,0.5); }
+
+body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(0,229,255,0.06), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 100%, rgba(255,107,53,0.05), transparent 60%);
+  background-attachment: fixed;
+}
+.light body {
+  background-image: none;
 }
 
 @layer base {

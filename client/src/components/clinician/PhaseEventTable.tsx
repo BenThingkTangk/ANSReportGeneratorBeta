@@ -23,7 +23,7 @@ const NORMS = {
 };
 
 function cellColor(val: number, norm: { lo: number; hi: number }): string {
-  if (val < norm.lo) return "hsl(35 90% 60%)";
+  if (val < norm.lo) return "hsl(17 100% 60%)";
   if (val > norm.hi) return "hsl(0 72% 60%)";
   return "inherit";
 }
@@ -97,7 +97,7 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
           LFa = Sympathetic Activity (bpm²) · RFa = Parasympathetic Activity (bpm²) · FRF = Fundamental Respiratory Frequency (Hz) · SB = Sympathovagal Balance (LFa/RFa)
         </p>
         <p className="text-[10px] mt-1">
-          <span style={{ color: "hsl(35 90% 60%)" }}>■ Below norm</span>
+          <span style={{ color: "hsl(17 100% 60%)" }}>■ Below norm</span>
           <span className="mx-2 text-muted-foreground">·</span>
           <span style={{ color: "hsl(0 72% 60%)" }}>■ Above norm</span>
         </p>

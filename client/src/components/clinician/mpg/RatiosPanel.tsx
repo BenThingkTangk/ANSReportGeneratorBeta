@@ -122,7 +122,7 @@ function RatioTile({
     ? "hsl(140 60% 55%)"
     : value < band.lo
     ? "hsl(0 72% 62%)"
-    : "hsl(35 90% 60%)";
+    : "hsl(17 100% 60%)";
 
   return (
     <div className="rounded-xl bg-background/40 border border-border/20 p-4" data-testid={testId}>

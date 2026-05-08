@@ -43,7 +43,7 @@ const BRANCH_INFO: Record<BranchKey, BranchInfo> = {
       "Norepinephrine is the primary messenger",
       "Excess over time → tension, poor sleep, anxiety",
     ],
-    accent: "hsl(28 95% 60%)",
+    accent: "#ff6b35",
   },
   parasympathetic: {
     title: "Parasympathetic Branch",
@@ -54,7 +54,7 @@ const BRANCH_INFO: Record<BranchKey, BranchInfo> = {
       "Acetylcholine is the primary messenger",
       "Healthy tone → fast recovery, calm baseline",
     ],
-    accent: "hsl(175 75% 55%)",
+    accent: "#00e5ff",
   },
   core: {
     title: "Autonomic Core",
@@ -65,7 +65,7 @@ const BRANCH_INFO: Record<BranchKey, BranchInfo> = {
       "HRV reflects how nimbly the core switches branches",
       "Trainable through breath, movement, and recovery",
     ],
-    accent: "hsl(195 95% 65%)",
+    accent: "#a78bfa",
   },
 };
 
@@ -278,7 +278,7 @@ function Core({
     }
   });
 
-  const coreColor = new THREE.Color("hsl(195, 95%, 65%)");
+  const coreColor = new THREE.Color("#a78bfa");
 
   return (
     <group
@@ -365,7 +365,7 @@ function StarField() {
     <points ref={ref} geometry={geom}>
       <pointsMaterial
         size={0.02}
-        color={new THREE.Color("hsl(195, 70%, 80%)")}
+        color={new THREE.Color("#6eeeff")}
         transparent
         opacity={0.45}
         blending={THREE.AdditiveBlending}
@@ -410,8 +410,8 @@ function Scene({
     }
   });
 
-  const sympColor = new THREE.Color("hsl(28, 95%, 60%)");
-  const paraColor = new THREE.Color("hsl(175, 75%, 55%)");
+  const sympColor = new THREE.Color("#ff6b35");
+  const paraColor = new THREE.Color("#00e5ff");
 
   return (
     <group ref={groupRef}>
@@ -499,13 +499,13 @@ export function NervousSystemBody({ sympathetic, parasympathetic }: Props) {
 
       {/* Legend */}
       <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-3 text-[10px] font-medium pointer-events-none">
-        <div className="flex items-center gap-1.5" style={{ color: "hsl(28 95% 70%)" }}>
-          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "hsl(28 95% 60%)", boxShadow: "0 0 8px hsl(28 95% 60%)" }} />
+        <div className="flex items-center gap-1.5" style={{ color: "#ff8c5e" }}>
+          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#ff6b35", boxShadow: "0 0 8px #ff6b35" }} />
           Sympathetic {Math.round(symp)}
         </div>
         <span className="text-white/30">·</span>
-        <div className="flex items-center gap-1.5" style={{ color: "hsl(175 75% 65%)" }}>
-          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "hsl(175 75% 55%)", boxShadow: "0 0 8px hsl(175 75% 55%)" }} />
+        <div className="flex items-center gap-1.5" style={{ color: "#5ef0ff" }}>
+          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#00e5ff", boxShadow: "0 0 8px #00e5ff" }} />
           Parasympathetic {Math.round(para)}
         </div>
       </div>

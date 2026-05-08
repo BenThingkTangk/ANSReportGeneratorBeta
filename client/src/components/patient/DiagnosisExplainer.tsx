@@ -97,7 +97,7 @@ const FALLBACK = (code: string, severity: string): typeof EXPLAINERS[string] => 
 
 const SEVERITY_STYLES: Record<string, { color: string; bg: string; ring: string; label: string }> = {
   low:      { color: "hsl(140 60% 60%)",  bg: "hsl(140 60% 50% / 0.1)", ring: "hsl(140 60% 50% / 0.3)", label: "Mild" },
-  moderate: { color: "hsl(35 90% 60%)",   bg: "hsl(35 90% 55% / 0.1)",  ring: "hsl(35 90% 55% / 0.3)",  label: "Moderate" },
+  moderate: { color: "hsl(17 100% 60%)",   bg: "hsl(35 90% 55% / 0.1)",  ring: "hsl(35 90% 55% / 0.3)",  label: "Moderate" },
   high:     { color: "hsl(0 75% 62%)",    bg: "hsl(0 75% 55% / 0.1)",   ring: "hsl(0 75% 55% / 0.3)",   label: "Severe" },
 };
 

@@ -26,7 +26,7 @@ const NORMS = {
 
 function cellColor(val: number | undefined, norm: { lo: number; hi: number }): string {
   if (val === undefined || val === null || !Number.isFinite(val)) return "inherit";
-  if (val < norm.lo) return "hsl(35 90% 60%)";
+  if (val < norm.lo) return "hsl(17 100% 60%)";
   if (val > norm.hi) return "hsl(0 72% 62%)";
   return "hsl(140 60% 55%)";
 }
@@ -128,7 +128,7 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
         <span className="font-medium text-foreground/60">Legend:</span>{" "}
         <span style={{ color: "hsl(140 60% 55%)" }}>■ In band</span>
         <span className="mx-2">·</span>
-        <span style={{ color: "hsl(35 90% 60%)" }}>■ Below norm</span>
+        <span style={{ color: "hsl(17 100% 60%)" }}>■ Below norm</span>
         <span className="mx-2">·</span>
         <span style={{ color: "hsl(0 72% 62%)" }}>■ Above norm</span>
       </div>

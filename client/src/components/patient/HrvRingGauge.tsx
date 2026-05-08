@@ -139,7 +139,7 @@ export function HrvRingGauge({ value, status, caption }: HrvRingGaugeProps) {
             initial={{ pathLength: 0, opacity: 0 }}
             animate={reduce ? { pathLength: 1, opacity: 0.9 } : { pathLength: [0, 1, 1], opacity: [0, 1, 0.7] }}
             transition={reduce ? { duration: 1 } : { duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
-            style={{ filter: "drop-shadow(0 0 4px hsl(185 95% 60%))" }}
+            style={{ filter: "drop-shadow(0 0 4px hsl(187 100% 60%))" }}
           />
         </svg>
         <div className="text-[12px] font-semibold mt-1" style={{ color: "hsl(185 85% 70%)" }} data-testid="hrv-status">

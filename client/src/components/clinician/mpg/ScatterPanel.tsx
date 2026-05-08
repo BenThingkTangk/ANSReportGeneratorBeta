@@ -121,8 +121,8 @@ function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
             cursor={{ strokeDasharray: "3 3" }}
             contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
           />
-          <Scatter data={[{ x, y, label: "Resting" }]} fill="hsl(35 90% 60%)">
-            <Cell fill={ratio >= 0.4 && ratio <= 1.0 ? "hsl(140 60% 55%)" : ratio < 0.4 ? "hsl(0 72% 62%)" : "hsl(35 90% 60%)"} />
+          <Scatter data={[{ x, y, label: "Resting" }]} fill="hsl(17 100% 60%)">
+            <Cell fill={ratio >= 0.4 && ratio <= 1.0 ? "hsl(140 60% 55%)" : ratio < 0.4 ? "hsl(0 72% 62%)" : "hsl(17 100% 60%)"} />
           </Scatter>
         </ScatterChart>
       </ResponsiveContainer>
@@ -197,7 +197,7 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
           />
           <Scatter
             data={[{ age, rfa: val }]}
-            fill={inBand ? "hsl(140 60% 55%)" : val < band.lo ? "hsl(0 72% 62%)" : "hsl(35 90% 60%)"}
+            fill={inBand ? "hsl(140 60% 55%)" : val < band.lo ? "hsl(0 72% 62%)" : "hsl(17 100% 60%)"}
           />
         </ScatterChart>
       </ResponsiveContainer>
@@ -272,7 +272,7 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
           />
           <Scatter
             data={[{ age, lfa: val }]}
-            fill={inBand ? "hsl(140 60% 55%)" : val > band.hi ? "hsl(0 72% 62%)" : "hsl(35 90% 60%)"}
+            fill={inBand ? "hsl(140 60% 55%)" : val > band.hi ? "hsl(0 72% 62%)" : "hsl(17 100% 60%)"}
           />
         </ScatterChart>
       </ResponsiveContainer>
@@ -402,7 +402,7 @@ function RfaExcess({ mpg }: { mpg: MultiParameterGraphical }) {
             {data.map((d, i) => (
               <Cell
                 key={i}
-                fill={d.value > 0 ? "hsl(0 72% 62%)" : d.value <= -20 ? "hsl(140 60% 55%)" : "hsl(35 90% 60%)"}
+                fill={d.value > 0 ? "hsl(0 72% 62%)" : d.value <= -20 ? "hsl(140 60% 55%)" : "hsl(17 100% 60%)"}
               />
             ))}
           </Scatter>

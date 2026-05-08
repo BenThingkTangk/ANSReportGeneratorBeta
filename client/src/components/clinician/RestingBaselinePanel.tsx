@@ -21,7 +21,7 @@ function classify(v: number, n: { lo: number; hi: number }): Cls {
 }
 
 function classColor(c: Cls): string {
-  if (c === "low") return "hsl(35 90% 60%)";
+  if (c === "low") return "hsl(17 100% 60%)";
   if (c === "high") return "hsl(0 72% 60%)";
   return "hsl(140 60% 55%)";
 }

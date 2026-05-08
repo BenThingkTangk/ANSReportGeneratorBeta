@@ -8,7 +8,7 @@ interface TherapyOptionsProps {
 const priorityOrder: TherapyRecommendation["priority"][] = ["primary", "secondary", "optional"];
 const priorityStyles = {
   primary:   { color: "hsl(185 85% 55%)", bg: "hsl(185 85% 42% / 0.1)", border: "hsl(185 85% 42% / 0.3)", label: "Primary" },
-  secondary: { color: "hsl(35 90% 60%)",  bg: "hsl(35 90% 55% / 0.08)", border: "hsl(35 90% 55% / 0.25)", label: "Secondary" },
+  secondary: { color: "hsl(17 100% 60%)",  bg: "hsl(35 90% 55% / 0.08)", border: "hsl(35 90% 55% / 0.25)", label: "Secondary" },
   optional:  { color: "hsl(210 10% 55%)", bg: "hsl(210 12% 15%)",       border: "hsl(210 15% 20%)",        label: "Optional" },
 };
 

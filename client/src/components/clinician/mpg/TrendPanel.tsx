@@ -158,10 +158,10 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00" }: TrendPanelProps
             {/* Clinical reference lines: 100 bpm = tachycardia threshold, 120 bpm = POTS-suggestive */}
             <ReferenceLine
               y={100}
-              stroke="hsl(35 90% 60%)"
+              stroke="hsl(17 100% 60%)"
               strokeDasharray="4 4"
               strokeWidth={1}
-              label={{ value: "Tachy 100", position: "insideTopRight", fill: "hsl(35 90% 60%)", fontSize: 9 }}
+              label={{ value: "Tachy 100", position: "insideTopRight", fill: "hsl(17 100% 60%)", fontSize: 9 }}
             />
             <ReferenceLine
               y={120}

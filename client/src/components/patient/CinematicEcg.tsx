@@ -37,14 +37,14 @@ export function CinematicEcg({ parasympathetic, sympathetic }: CinematicEcgProps
       <svg viewBox="0 0 528 120" width="100%" height="100%" preserveAspectRatio="none">
         <defs>
           <linearGradient id="ecg-cyan" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%"   stopColor="hsl(185 95% 60%)" stopOpacity="0" />
-            <stop offset="20%"  stopColor="hsl(185 95% 60%)" stopOpacity="0.9" />
+            <stop offset="0%"   stopColor="hsl(187 100% 60%)" stopOpacity="0" />
+            <stop offset="20%"  stopColor="hsl(187 100% 60%)" stopOpacity="0.9" />
             <stop offset="100%" stopColor="hsl(195 95% 50%)" stopOpacity="0" />
           </linearGradient>
           <linearGradient id="ecg-magenta" x1="100%" y1="0%" x2="0%" y2="0%">
             <stop offset="0%"   stopColor="hsl(18 95% 65%)"  stopOpacity="0" />
             <stop offset="20%"  stopColor="hsl(18 95% 60%)"  stopOpacity="0.9" />
-            <stop offset="100%" stopColor="hsl(15 90% 50%)"  stopOpacity="0" />
+            <stop offset="100%" stopColor="hsl(15 100% 50%)"  stopOpacity="0" />
           </linearGradient>
           <filter id="ecg-glow">
             <feGaussianBlur stdDeviation="2" result="b" />
@@ -99,7 +99,7 @@ export function CinematicEcg({ parasympathetic, sympathetic }: CinematicEcgProps
         {!reduce && [...Array(18)].map((_, i) => {
           const cx = (i * 30) % 528;
           const cy = 60 + (i % 5 - 2) * 6;
-          const c = i % 2 === 0 ? "hsl(185 95% 60%)" : "hsl(18 95% 60%)";
+          const c = i % 2 === 0 ? "hsl(187 100% 60%)" : "hsl(18 95% 60%)";
           return (
             <motion.circle
               key={i}
@@ -114,7 +114,7 @@ export function CinematicEcg({ parasympathetic, sympathetic }: CinematicEcgProps
       </svg>
 
       {/* Labels */}
-      <div className="absolute top-2 left-3 ps-overline text-[9px]" style={{ color: "hsl(185 90% 70%)" }}>
+      <div className="absolute top-2 left-3 ps-overline text-[9px]" style={{ color: "hsl(187 100% 70%)" }}>
         Parasympathetic
       </div>
       <div className="absolute bottom-2 right-3 ps-overline text-[9px]" style={{ color: "hsl(18 90% 70%)" }}>

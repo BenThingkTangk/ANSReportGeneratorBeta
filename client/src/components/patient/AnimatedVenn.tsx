@@ -53,10 +53,10 @@ export function AnimatedVenn({ sympathetic, parasympathetic, balanceLabel }: Ani
           {/* Stroke gradients */}
           <linearGradient id="sympStroke" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%"  stopColor="hsl(18 95% 65%)" />
-            <stop offset="100%" stopColor="hsl(15 90% 50%)" />
+            <stop offset="100%" stopColor="hsl(15 100% 50%)" />
           </linearGradient>
           <linearGradient id="parasymStroke" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%"  stopColor="hsl(185 95% 70%)" />
+            <stop offset="0%"  stopColor="hsl(187 100% 70%)" />
             <stop offset="100%" stopColor="hsl(190 90% 45%)" />
           </linearGradient>
           <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
@@ -168,7 +168,7 @@ export function AnimatedVenn({ sympathetic, parasympathetic, balanceLabel }: Ani
           </div>
           <div
             className="ps-text-mono font-bold"
-            style={{ fontSize: 30, color: "hsl(185 90% 70%)", textShadow: "0 0 14px hsl(185 85% 60% / 0.6)" }}
+            style={{ fontSize: 30, color: "hsl(187 100% 70%)", textShadow: "0 0 14px hsl(185 85% 60% / 0.6)" }}
             data-testid="venn-parasym"
           >
             {pPct}%
