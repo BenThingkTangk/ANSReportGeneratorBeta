@@ -1,0 +1,60 @@
+:root {
+  --physiops-bg-primary: #030B14;
+  --physiops-bg-card: #0D1B2A;
+  --physiops-text-primary: #F0F4F8;
+  --physiops-text-secondary: #8B9BB4;
+  --physiops-parasym: #00E5A0;
+  --physiops-parasym-soft: #7CFFD8;
+  --physiops-sympathetic: #4A9EFF;
+  --physiops-sympathetic-soft: #8EC5FF;
+  --physiops-ai-violet: #A855F7;
+  --physiops-pulse-gradient: linear-gradient(135deg, #00E5A0 0%, #4A9EFF 58%, #A855F7 100%);
+  --physiops-pulse-glow: 0 0 28px rgba(0, 229, 160, 0.34);
+  --physiops-pulse-breathe: 2600ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --physiops-pulse-draw: 1200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.physiops-pulse-node {
+  color: var(--physiops-parasym);
+  filter: drop-shadow(var(--physiops-pulse-glow));
+}
+
+.physiops-pulse-node [data-node-core] {
+  transform-origin: center;
+  animation: physiops-node-breathe var(--physiops-pulse-breathe) infinite;
+}
+
+.physiops-pulse-node [data-ring] {
+  transform-origin: center;
+  animation: physiops-ring-scan 8s linear infinite;
+}
+
+.physiops-pulse-node [data-ecg] {
+  stroke-dasharray: 360;
+  stroke-dashoffset: 360;
+  animation: physiops-ecg-draw 2400ms cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+@keyframes physiops-node-breathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.86; }
+}
+
+@keyframes physiops-ring-scan {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes physiops-ecg-draw {
+  0% { stroke-dashoffset: 360; opacity: 0.2; }
+  28%, 72% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: -360; opacity: 0.2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .physiops-pulse-node * {
+    animation: none !important;
+  }
+  .physiops-pulse-node [data-ecg] {
+    stroke-dashoffset: 0;
+  }
+}

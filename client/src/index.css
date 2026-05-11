@@ -1,3 +1,5 @@
+@import "./styles/pulse-node-logo.tokens.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -602,4 +604,165 @@ body {
 /* === Reduced motion === */
 @media (prefers-reduced-motion: reduce) {
   .ps-fade-up, .ps-pulse { animation: none !important; }
+}
+
+/* ============================================================================ */
+/* PhysioPS × HumanOS Website Application Kit v2.3 — canonical overrides        */
+/* Core palette: bg #030B14, surface #0D1B2A, parasym #00E5A0, sympathetic       */
+/* #4A9EFF, HumanOS-AI/HRV #A855F7. Replaces the older cyan/ember tuning while   */
+/* leaving structural tokens intact.                                            */
+/* ============================================================================ */
+:root {
+  /* Core v2.3 backgrounds */
+  --color-bg-void: #030B14;
+  --color-bg-deep: #05101D;
+  --color-bg-base: #07121F;
+  --color-bg-orbit: #0A1626;
+  --color-surface-0: #0D1B2A;
+  --color-surface-1: #11233A;
+  --color-surface-2: #162B47;
+  --color-surface-3: #1D3559;
+  --color-surface-ink: #020812;
+  --color-surface-glass: rgba(13, 27, 42, 0.72);
+
+  /* Text v2.3 */
+  --color-text-primary: #F0F4FF;
+  --color-text-secondary: #A7B4C8;
+  --color-text-muted: #69758A;
+
+  /* Brand v2.3 — Pulse Node */
+  --color-brand-cyan: #00E5A0;       /* was true cyan; now parasym mint-teal */
+  --color-brand-teal: #00BCD4;
+  --color-brand-blue: #4A9EFF;
+  --color-brand-violet: #A855F7;
+
+  --accent: #00E5A0;
+  --accent-blue: #4A9EFF;
+  --accent-purple: #A855F7;
+
+  /* Clinical signals v2.3 */
+  --color-parasym: #00E5A0;
+  --color-parasym-soft: #7CFFD8;
+  --color-parasym-fill: rgba(0, 229, 160, 0.14);
+  --color-parasym-glow: rgba(0, 229, 160, 0.32);
+  --color-sympathetic: #4A9EFF;
+  --color-sympathetic-soft: #8EC5FF;
+  --color-sympathetic-fill: rgba(74, 158, 255, 0.14);
+  --color-sympathetic-glow: rgba(74, 158, 255, 0.28);
+  --color-hrv: #A855F7;
+  --color-hrv-glow: rgba(168, 85, 247, 0.30);
+  --color-baseline: #64748B;
+
+  /* Borders v2.3 */
+  --color-border-subtle: rgba(210, 235, 255, 0.08);
+  --color-border-default: rgba(0, 229, 160, 0.22);
+  --color-border-active: rgba(0, 229, 160, 0.60);
+  --border-glass: 1px solid rgba(210, 235, 255, 0.12);
+
+  /* Gradients v2.3 */
+  --gradient-cta: linear-gradient(135deg, #00E5A0 0%, #4A9EFF 100%);
+  --gradient-ans-dual: linear-gradient(90deg, #00E5A0 0%, #A855F7 50%, #4A9EFF 100%);
+  --gradient-clinical-glass: linear-gradient(135deg, rgba(255,255,255,0.075), rgba(0,229,160,0.035) 42%, rgba(74,158,255,0.03));
+  --gradient-hero-orbit:
+    radial-gradient(circle at 75% 18%, rgba(0, 229, 160, 0.16), transparent 32%),
+    radial-gradient(circle at 18% 82%, rgba(74, 158, 255, 0.12), transparent 30%),
+    radial-gradient(circle at 50% 50%, rgba(168, 85, 247, 0.05), transparent 60%),
+    linear-gradient(135deg, #030B14 0%, #07121F 48%, #030B14 100%);
+
+  /* Glows v2.3 */
+  --glow-cyan-soft: 0 0 28px rgba(0, 229, 160, 0.20);
+  --glow-cyan-strong: 0 0 56px rgba(0, 229, 160, 0.34);
+  --glow-sympathetic: 0 0 42px rgba(74, 158, 255, 0.28);
+  --glow-violet: 0 0 42px rgba(168, 85, 247, 0.32);
+
+  /* shadcn HSL aliases — retuned to v2.3 */
+  --background: 211 75% 5%;         /* #030B14 */
+  --foreground: 222 100% 97%;       /* #F0F4FF */
+  --card: 212 53% 11%;              /* #0D1B2A */
+  --card-foreground: 222 100% 97%;
+  --card-border: 212 40% 18%;
+  --border: 212 40% 16%;
+  --sidebar: 211 70% 6%;
+  --sidebar-foreground: 222 100% 97%;
+  --sidebar-border: 212 40% 14%;
+  --sidebar-primary: 158 100% 45%;   /* parasym mint */
+  --sidebar-primary-foreground: 211 75% 5%;
+  --sidebar-accent: 212 40% 18%;
+  --sidebar-accent-foreground: 222 100% 97%;
+  --sidebar-ring: 158 100% 45%;
+  --popover: 212 53% 11%;
+  --popover-foreground: 222 100% 97%;
+  --popover-border: 212 40% 18%;
+  --primary: 158 100% 45%;           /* #00E5A0 parasym */
+  --primary-foreground: 211 75% 5%;
+  --secondary: 212 40% 18%;
+  --secondary-foreground: 222 100% 97%;
+  --muted: 212 40% 14%;
+  --muted-foreground: 218 22% 60%;
+  --accent: 270 92% 65%;             /* #A855F7 humanOS AI */
+  --accent-foreground: 211 75% 5%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 98%;
+  --input: 212 40% 18%;
+  --ring: 158 100% 45%;
+  --chart-1: 158 100% 45%;           /* parasym */
+  --chart-2: 213 100% 64%;           /* sympathetic */
+  --chart-3: 270 92% 65%;            /* HRV / AI */
+  --chart-4: 142 71% 45%;            /* optimal */
+  --chart-5: 38 92% 50%;             /* watch */
+
+  /* PS / brand layer v2.3 */
+  --ps-brand-cyan: #00E5A0;
+  --ps-brand-cyan-dim: #00BC83;
+  --ps-brand-teal: #00BCD4;
+  --ps-brand-blue: #4A9EFF;
+  --ps-brand-violet: #A855F7;
+  --ps-bg-deep: #030B14;
+  --ps-bg-1: #05101D;
+  --ps-bg-2: #0D1B2A;
+  --ps-parasym: #00E5A0;
+  --ps-sympathet: #4A9EFF;
+}
+
+/* Override the dotted-grid body background with deep-space radial atmosphere */
+body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -8%, rgba(0, 229, 160, 0.10), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 92% 102%, rgba(74, 158, 255, 0.09), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 8% 92%, rgba(168, 85, 247, 0.06), transparent 65%);
+  background-attachment: fixed;
+  background-color: var(--color-bg-void);
+}
+.light body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(0, 229, 160, 0.06), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 100%, rgba(74, 158, 255, 0.05), transparent 60%);
+}
+
+/* Deep-space brand background helper retuned to v2.3 */
+.ps-bg-deep {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 0%, rgba(0, 229, 160, 0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 100%, rgba(74, 158, 255, 0.10) 0%, transparent 65%),
+    radial-gradient(ellipse 50% 40% at 10% 100%, rgba(168, 85, 247, 0.05) 0%, transparent 70%),
+    var(--ps-bg-deep);
+}
+
+/* Signal-glow + clinical-glass replacement for the old dotted grid overlay */
+.ps-signal-atmosphere {
+  background:
+    radial-gradient(ellipse 65% 45% at 22% 18%, rgba(0, 229, 160, 0.12), transparent 55%),
+    radial-gradient(ellipse 60% 45% at 82% 78%, rgba(74, 158, 255, 0.10), transparent 55%),
+    radial-gradient(circle at 50% 50%, rgba(168, 85, 247, 0.04), transparent 60%);
+}
+
+/* Retune existing pill / insight accents to v2.3 sympathetic blue (was orange) */
+.ps-pill-risk { background: rgba(74, 158, 255, 0.10); color: var(--color-sympathetic); border: 1px solid rgba(74, 158, 255, 0.32); }
+.ps-pill-risk .dot { background: var(--color-sympathetic); box-shadow: var(--glow-sympathetic); }
+.ps-insight.ps-sev-risk::before { background: var(--color-sympathetic); box-shadow: var(--glow-sympathetic); }
+
+/* Reduced-motion guard for new atmosphere helpers (no animation by default, but
+   future signal-flow utilities should be silenced too) */
+@media (prefers-reduced-motion: reduce) {
+  .ps-signal-atmosphere { background-attachment: scroll; }
 }

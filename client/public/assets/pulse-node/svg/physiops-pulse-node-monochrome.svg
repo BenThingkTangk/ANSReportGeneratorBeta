@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">PhysioPS Pulse Node Monochrome Mark</title>
+  <desc id="desc">Single-color Pulse Node mark using currentColor for monochrome applications.</desc>
+  <style>
+    svg { color: #F0F4F8; }
+  </style>
+  <rect width="512" height="512" rx="112" fill="#030B14"/>
+  <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="180" cy="256" r="106" stroke-opacity=".25" stroke-width="3" stroke-dasharray="10 18"/>
+    <circle cx="180" cy="256" r="72" stroke-opacity=".75" stroke-width="4"/>
+    <circle cx="180" cy="256" r="39" fill="currentColor" stroke="none"/>
+    <path d="M180 256 H232 L246 224 L268 304 L292 194 L318 256 H426" stroke-width="18"/>
+  </g>
+</svg>

@@ -7,6 +7,7 @@ import { AskAtom } from "./AskAtom";
 import { ThemeToggle } from "./ThemeToggle";
 import { ViewToggle } from "./ViewToggle";
 import { ArrowLeft } from "lucide-react";
+import { PhysioPSPulseNodeLogo } from "./brand/PhysioPSPulseNodeLogo";
 
 interface ReportDashboardProps {
   report: ANSReport;
@@ -43,19 +44,16 @@ export function ReportDashboard({ report, onReset }: ReportDashboardProps) {
             <ArrowLeft className="w-4 h-4 text-muted-foreground" />
           </button>
           <div className="flex items-center gap-2.5 min-w-0">
-            <svg width="28" height="28" viewBox="0 0 56 56" fill="none" aria-hidden="true">
-              <circle cx="28" cy="28" r="20" stroke="hsl(185 85% 42%)" strokeWidth="2" />
-              <path
-                d="M16 28 L22 28 L25 18 L28 38 L31 22 L34 28 L40 28"
-                stroke="hsl(185 85% 42%)"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <PhysioPSPulseNodeLogo
+              variant="primary"
+              title="PhysioPS Pulse Node"
+              width={32}
+              height={32}
+              aria-label="PhysioPS Pulse Node mark"
+            />
             <div className="min-w-0">
-              <h1 className="text-sm font-bold truncate" style={{ color: "hsl(185 85% 55%)" }}>
-                HumanOS ANS Report
+              <h1 className="text-sm font-bold truncate" style={{ color: "var(--color-parasym)" }}>
+                PhysioPS × HumanOS ANS Report
               </h1>
               <p className="text-[10px] text-muted-foreground hidden sm:block">
                 Generated {new Date(report.generatedAt).toLocaleString()}

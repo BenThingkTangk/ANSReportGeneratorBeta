@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">PhysioPS Pulse Node App Icon 512</title>
+  <desc id="desc">512 by 512 app icon for the official PhysioPS Pulse Node mark.</desc>
+  <defs>
+    <radialGradient id="bg" cx="48%" cy="48%" r="64%"><stop offset="0%" stop-color="#0D1B2A"/><stop offset="62%" stop-color="#030B14"/><stop offset="100%" stop-color="#020812"/></radialGradient>
+    <radialGradient id="node" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#F0F4F8"/><stop offset="24%" stop-color="#7CFFD8"/><stop offset="62%" stop-color="#00E5A0"/><stop offset="100%" stop-color="#4A9EFF"/></radialGradient>
+    <linearGradient id="trace" x1="172" y1="256" x2="426" y2="256" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#00E5A0"/><stop offset="55%" stop-color="#A855F7"/><stop offset="100%" stop-color="#4A9EFF"/></linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="180" cy="256" r="106" fill="none" stroke="#4A9EFF" stroke-opacity=".22" stroke-width="3" stroke-dasharray="10 18"/>
+  <circle cx="180" cy="256" r="72" fill="none" stroke="#00E5A0" stroke-opacity=".55" stroke-width="4"/>
+  <circle cx="180" cy="256" r="39" fill="url(#node)"/>
+  <path d="M180 256 H232 L246 224 L268 304 L292 194 L318 256 H426" fill="none" stroke="url(#trace)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M180 256 H232 L246 224 L268 304 L292 194 L318 256 H426" fill="none" stroke="#F0F4F8" stroke-opacity=".35" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { Upload, FileText, Activity, Brain, Zap } from "lucide-react";
+import { PhysioPSPulseNodeLogo } from "./brand/PhysioPSPulseNodeLogo";
 
 interface UploadScreenProps {
   onUpload: (file: File) => void;
@@ -29,15 +30,17 @@ export function UploadScreen({ onUpload }: UploadScreenProps) {
       <div className="text-center mb-12 ps-fade-up">
         <div className="inline-flex items-center gap-3 mb-6">
           <div className="relative">
-            <svg width="64" height="64" viewBox="0 0 56 56" fill="none" className="ps-pulse">
-              <circle cx="28" cy="28" r="26" stroke="var(--ps-brand-cyan)" strokeWidth="1.5" opacity="0.3" />
-              <circle cx="28" cy="28" r="20" stroke="var(--ps-brand-cyan)" strokeWidth="2" />
-              <path d="M16 28 L22 28 L25 18 L28 38 L31 22 L34 28 L40 28" stroke="var(--ps-brand-cyan)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <PhysioPSPulseNodeLogo
+              variant="primary"
+              title="PhysioPS Pulse Node"
+              width={72}
+              height={72}
+              aria-label="PhysioPS Pulse Node mark"
+            />
           </div>
           <div className="text-left">
             <h1 className="ps-text-display text-3xl tracking-tight ps-text-cyan">
-              HumanOS
+              PhysioPS × HumanOS
             </h1>
             <p className="ps-overline mt-1">
               ANS Diagnostic Engine

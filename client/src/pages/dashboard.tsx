@@ -77,10 +77,16 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
-      {/* Ambient background */}
-      <div className="fixed inset-0 bg-gradient-radial pointer-events-none" />
-      <div className="fixed inset-0 pointer-events-none opacity-[0.03]"
-        style={{ backgroundImage: "radial-gradient(circle at 1px 1px, hsl(185 85% 42%) 1px, transparent 0)", backgroundSize: "32px 32px" }}
+      {/* PhysioPS Deep Space radial atmosphere (replaces visible dotted grid) */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        aria-hidden="true"
+        style={{
+          background:
+            "radial-gradient(ellipse 80% 55% at 50% -8%, rgba(0,229,160,0.10), transparent 60%)," +
+            "radial-gradient(ellipse 60% 45% at 92% 102%, rgba(74,158,255,0.09), transparent 60%)," +
+            "radial-gradient(ellipse 60% 45% at 6% 100%, rgba(168,85,247,0.06), transparent 65%)",
+        }}
       />
 
       <div className="relative z-10">

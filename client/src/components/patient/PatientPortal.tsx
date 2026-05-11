@@ -83,16 +83,25 @@ export function PatientPortal({ report }: PatientPortalProps) {
         transition={{ duration: 0.6 }}
         className="relative rounded-3xl overflow-hidden"
         style={{
-          background: "radial-gradient(ellipse at 30% 30%, hsl(185 80% 25% / 0.35), transparent 60%), radial-gradient(ellipse at 80% 70%, hsl(295 80% 30% / 0.28), transparent 60%), hsl(220 30% 5%)",
-          border: "1px solid hsl(185 85% 42% / 0.15)",
-          boxShadow: "0 20px 60px hsl(185 85% 30% / 0.15), inset 0 0 40px hsl(220 30% 4% / 0.6)",
+          background:
+            "radial-gradient(ellipse at 30% 30%, rgba(0,229,160,0.18), transparent 60%)," +
+            "radial-gradient(ellipse at 80% 70%, rgba(168,85,247,0.16), transparent 60%)," +
+            "radial-gradient(ellipse at 50% 100%, rgba(74,158,255,0.10), transparent 60%)," +
+            "#0D1B2A",
+          border: "1px solid rgba(0, 229, 160, 0.18)",
+          boxShadow: "0 20px 60px rgba(0, 229, 160, 0.10), inset 0 0 40px rgba(3, 11, 20, 0.6)",
         }}
         data-testid="patient-hero"
       >
-        {/* Decorative gridlines */}
+        {/* Signal-glow atmosphere (replaces dotted grid overlay) */}
         <div
-          className="absolute inset-0 pointer-events-none opacity-[0.04]"
-          style={{ backgroundImage: "radial-gradient(circle at 1px 1px, white 1px, transparent 0)", backgroundSize: "32px 32px" }}
+          className="absolute inset-0 pointer-events-none"
+          aria-hidden="true"
+          style={{
+            background:
+              "radial-gradient(ellipse 50% 40% at 50% 50%, rgba(0,229,160,0.05), transparent 70%)",
+            mixBlendMode: "screen",
+          }}
         />
 
         <div className="relative p-6 lg:p-8">
