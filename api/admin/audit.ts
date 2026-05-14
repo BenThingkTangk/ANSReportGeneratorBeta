@@ -18,7 +18,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const supabase = createSupabaseFromRequest(req);
 
   try {
-    await requireRole(supabase, ["super_admin"]);
+    await requireRole(req, ["super_admin"]);
 
     const {
       entity_type,

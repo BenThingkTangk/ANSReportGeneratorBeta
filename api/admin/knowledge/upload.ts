@@ -55,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const adminSupabase = createSupabaseAdmin();
 
   try {
-    const user = await requireRole(supabase, ["super_admin", "clinical_admin"]);
+    const user = await requireRole(req, ["super_admin", "clinical_admin"]);
 
     // Parse multipart form data
     const chunks: Buffer[] = [];

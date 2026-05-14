@@ -19,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === "GET") {
-      await requireRole(supabase, ["super_admin", "clinical_admin", "reviewer"]);
+      await requireRole(req, ["super_admin", "clinical_admin", "reviewer"]);
 
       const {
         status,
@@ -65,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "POST") {
-      const user = await requireRole(supabase, ["super_admin", "clinical_admin"]);
+      const user = await requireRole(req, ["super_admin", "clinical_admin"]);
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
       if (!body?.title) {

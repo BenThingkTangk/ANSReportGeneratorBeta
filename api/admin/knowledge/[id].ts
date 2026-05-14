@@ -23,7 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === "GET") {
-      await requireRole(supabase, ["super_admin", "clinical_admin", "reviewer"]);
+      await requireRole(req, ["super_admin", "clinical_admin", "reviewer"]);
 
       const { data, error } = await supabase
         .from("ans_knowledge_sources")
@@ -48,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "PUT") {
-      const user = await requireRole(supabase, [
+      const user = await requireRole(req, [
         "super_admin",
         "clinical_admin",
         "reviewer",
@@ -128,7 +128,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "DELETE") {
-      const user = await requireRole(supabase, ["super_admin"]);
+      const user = await requireRole(req, ["super_admin"]);
 
       const { data: existing } = await supabase
         .from("ans_knowledge_sources")
