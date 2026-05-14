@@ -1,4 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import {
+  getActiveKnowledgeSources,
+  buildKnowledgePromptSection,
+  toCitations,
+} from "./_knowledgeCache.js";
 
 /**
  * /api/synopsis
@@ -91,14 +96,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const digest = summarizeReportForPrompt(report);
 
+    // Fetch active knowledge sources for grounding (60-second cache)
+    const knowledgeSources = await getActiveKnowledgeSources();
+    const knowledgeSection = buildKnowledgePromptSection(knowledgeSources);
+    const citations = toCitations(knowledgeSources);
+
+    const patientSystem = knowledgeSection
+      ? `${SYSTEM_PATIENT}\n\n${knowledgeSection}`
+      : SYSTEM_PATIENT;
+    const clinicianSystem = knowledgeSection
+      ? `${SYSTEM_CLINICIAN}\n\n${knowledgeSection}`
+      : SYSTEM_CLINICIAN;
+
     // Run in parallel
     const [patientSynopsis, clinicianSynopsis] = await Promise.all([
       sonar(
-        SYSTEM_PATIENT,
+        patientSystem,
         `Please write a warm, plain-English summary of this autonomic report for the patient. Explain what it means for their day-to-day life (energy, sleep, dizziness, stress) and what they should talk to their doctor about.\n\nReport:\n${digest}`,
       ),
       sonar(
-        SYSTEM_CLINICIAN,
+        clinicianSystem,
         `Write the clinician synopsis for this report using Colombo methodology terminology. Be specific about phase metrics, patterns, and therapy gating.\n\nReport:\n${digest}`,
       ),
     ]);
@@ -107,6 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       success: true,
       patientSynopsis,
       clinicianSynopsis,
+      citations,
     });
   } catch (err: any) {
     console.error("Synopsis error:", err);

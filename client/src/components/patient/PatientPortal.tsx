@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import { apiRequest } from "@/lib/queryClient";
 import { NervousSystemBody } from "./NervousSystemBody";
-import { AnimatedVenn } from "./AnimatedVenn";
+import { AutonomicBalanceGauge } from "./AutonomicBalanceGauge";
 import { CinematicEcg } from "./CinematicEcg";
 import { DiagnosisExplainer } from "./DiagnosisExplainer";
 import { PlainEnglishSynopsis } from "./PlainEnglishSynopsis";
@@ -24,6 +24,20 @@ export function PatientPortal({ report }: PatientPortalProps) {
   const p = report.patientData;
   const ab = report.autonomicBalance;
   const tier = report.wellnessTier;
+
+  // Per-patient gauge metrics — pulled from Baseline-A (resting reference)
+  // with safe fallbacks across other available phases.
+  const phases = Array.isArray(report.phaseEvents) ? report.phaseEvents : [];
+  const baselinePhase =
+    phases.find((e) => e.phase === "Baseline-A") ??
+    phases.find((e) => e.phase === "Baseline-C") ??
+    phases[0];
+  const rmssd = baselinePhase?.HRV_RMSSD ?? 0;
+  const sdnn = baselinePhase?.HRV_SDNN ?? 0;
+  // LF/HF uses Colombo's LFa/RFa ratio (SB) — physiologically equivalent here.
+  const lfHf =
+    baselinePhase?.SB ??
+    (baselinePhase && baselinePhase.RFa > 0 ? baselinePhase.LFa / baselinePhase.RFa : 0);
 
   const fetchSynopsis = async () => {
     setSynopsisLoading(true);
@@ -115,9 +129,12 @@ export function PatientPortal({ report }: PatientPortalProps) {
             />
           </div>
           <div className="mt-4 max-w-2xl mx-auto">
-            <AnimatedVenn
+            <AutonomicBalanceGauge
               sympathetic={ab.sympathetic}
               parasympathetic={ab.parasympathetic}
+              hrvRmssdMs={rmssd}
+              hrvSdnnMs={sdnn}
+              lfHfRatio={lfHf}
               balanceLabel={tier}
             />
             {ab.interpretation && (

@@ -1,4 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import {
+  getActiveKnowledgeSources,
+  buildKnowledgePromptSection,
+  toCitations,
+} from "./_knowledgeCache.js";
 
 /**
  * /api/ask-atom — Colombo P&S grounded chat (Path B)
@@ -185,7 +190,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    const systemContent = `${SYSTEM_PROMPT}\n\n${buildPatientContext(report, viewerRole)}`;
+    // Inject active knowledge sources into system prompt
+    const knowledgeSources = await getActiveKnowledgeSources();
+    const knowledgeSection = buildKnowledgePromptSection(knowledgeSources);
+    const knowledgeCitations = toCitations(knowledgeSources);
+
+    const systemContent = [
+      SYSTEM_PROMPT,
+      knowledgeSection,
+      buildPatientContext(report, viewerRole),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const conversation = [{ role: "system", content: systemContent }, ...messages];
 
     const r = await fetch(SONAR_URL, {
@@ -208,9 +224,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     const j = (await r.json()) as any;
     const message = j?.choices?.[0]?.message?.content?.trim() || "";
-    const citations = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean) || [];
+    // Perplexity web citations renamed to webCitations to disambiguate from internal knowledge citations
+    const webCitations = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean) || [];
 
-    return res.status(200).json({ success: true, message, citations });
+    return res.status(200).json({
+      success: true,
+      message,
+      webCitations,
+      citations: knowledgeCitations,
+    });
   } catch (err: any) {
     console.error("Ask Atom error:", err);
     return res.status(500).json({ success: false, error: err?.message || "Failed to query Atom" });
