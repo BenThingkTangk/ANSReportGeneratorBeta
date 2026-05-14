@@ -35,38 +35,57 @@ export function createSupabaseAdmin(): SupabaseClient {
 
 // ── Per-request client (from Bearer token) ───────────────────────────────────
 
-export function createSupabaseFromRequest(req: VercelRequest): SupabaseClient {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) {
-    throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
-  }
-
+/**
+ * Returns the user's Bearer token from the request, or null.
+ */
+export function getBearerToken(req: VercelRequest): string | null {
   const authHeader = req.headers["authorization"] as string | undefined;
-  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  return authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+}
 
-  const client = createClient(url, key, {
-    auth: { autoRefreshToken: false, persistSession: false },
-    global: token ? { headers: { Authorization: `Bearer ${token}` } } : {},
-  });
-  return client;
+export function createSupabaseFromRequest(req: VercelRequest): SupabaseClient {
+  // Returns the admin (service-role) client. Token-based identity is resolved
+  // separately via getAuthUser() — the SUPABASE_SERVICE_ROLE_KEY apikey makes
+  // attaching a Bearer header on this client unreliable for auth.getUser().
+  return createSupabaseAdmin();
+}
+
+/**
+ * Authoritative way to resolve the user identity from the request's Bearer token.
+ * Uses the service-role admin client's `auth.getUser(token)` overload which
+ * verifies the JWT against Supabase Auth directly — no header-mixing required.
+ */
+export async function getAuthUser(req: VercelRequest) {
+  const token = getBearerToken(req);
+  if (!token) return null;
+  const admin = createSupabaseAdmin();
+  const { data, error } = await admin.auth.getUser(token);
+  if (error || !data?.user) return null;
+  return data.user;
 }
 
 // ── Role helpers ─────────────────────────────────────────────────────────────
 
 export async function getUserRole(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  userIdOverride?: string
 ): Promise<UserRole | null> {
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
-  if (authErr || !user) return null;
+  let userId = userIdOverride;
+  if (!userId) {
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser();
+    if (authErr || !user) return null;
+    userId = user.id;
+  }
 
-  const { data, error } = await supabase
+  // Always read user_roles via admin client to bypass RLS reliably
+  const admin = createSupabaseAdmin();
+  const { data, error } = await admin
     .from("user_roles")
     .select("role")
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .single();
 
   if (error || !data) return null;
@@ -74,19 +93,25 @@ export async function getUserRole(
 }
 
 export async function requireRole(
-  supabase: SupabaseClient,
+  reqOrSupabase: VercelRequest | SupabaseClient,
   allowedRoles: UserRole[]
 ): Promise<AdminUser> {
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
+  // Support both call patterns: (req, roles) and legacy (supabase, roles)
+  let user: { id: string; email?: string } | null = null;
 
-  if (authErr || !user) {
+  if ("headers" in reqOrSupabase) {
+    user = (await getAuthUser(reqOrSupabase as VercelRequest)) as any;
+  } else {
+    const { data } = await (reqOrSupabase as SupabaseClient).auth.getUser();
+    user = data.user as any;
+  }
+
+  if (!user) {
     throw Object.assign(new Error("Unauthorized"), { statusCode: 401 });
   }
 
-  const { data, error } = await supabase
+  const admin = createSupabaseAdmin();
+  const { data, error } = await admin
     .from("user_roles")
     .select("role")
     .eq("user_id", user.id)
