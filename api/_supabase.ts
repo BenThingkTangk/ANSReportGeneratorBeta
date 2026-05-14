@@ -116,7 +116,7 @@ export async function logAudit(
     } = await supabase.auth.getUser();
 
     const adminSupabase = createSupabaseAdmin();
-    await adminSupabase.from("audit_log").insert({
+    await adminSupabase.from("admin_audit_log").insert({
       actor_id: user?.id ?? null,
       actor_email: user?.email ?? null,
       action,
@@ -131,7 +131,7 @@ export async function logAudit(
       user_agent: req.headers["user-agent"] ?? null,
     });
   } catch (e) {
-    console.error("audit_log write failed:", e);
+    console.error("admin_audit_log write failed:", e);
   }
 }
 

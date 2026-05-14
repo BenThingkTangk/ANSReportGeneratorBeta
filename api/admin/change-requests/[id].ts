@@ -35,7 +35,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // Fetch audit history for this entity
       const { data: auditHistory } = await supabase
-        .from("audit_log")
+        .from("admin_audit_log")
         .select("actor_email, action, before, after, created_at")
         .eq("entity_type", "app_change_requests")
         .eq("entity_id", id)

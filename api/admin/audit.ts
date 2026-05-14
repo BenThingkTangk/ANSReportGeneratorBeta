@@ -29,7 +29,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } = req.query as Record<string, string>;
 
     let query = supabase
-      .from("audit_log")
+      .from("admin_audit_log")
       .select(
         "id, actor_id, actor_email, action, entity_type, entity_id, before, after, ip, user_agent, created_at",
         { count: "exact" }

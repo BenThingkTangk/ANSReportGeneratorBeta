@@ -12,3 +12,4 @@ dist/
 .vercel_output/
 .vercel/
 build_output/
+.vercel

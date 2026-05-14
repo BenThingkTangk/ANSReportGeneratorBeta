@@ -91,9 +91,9 @@ CREATE INDEX IF NOT EXISTS idx_app_change_requests_priority ON public.app_change
 CREATE INDEX IF NOT EXISTS idx_app_change_requests_submitted_by ON public.app_change_requests(submitted_by);
 
 -- ============================================================
--- 5. audit_log
+-- 5. admin_audit_log
 -- ============================================================
-CREATE TABLE IF NOT EXISTS public.audit_log (
+CREATE TABLE IF NOT EXISTS public.admin_audit_log (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   actor_id     uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   actor_email  text,
@@ -107,9 +107,9 @@ CREATE TABLE IF NOT EXISTS public.audit_log (
   created_at   timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON public.audit_log(actor_id);
-CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON public.audit_log(entity_type, entity_id);
-CREATE INDEX IF NOT EXISTS idx_audit_log_created ON public.audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_log_actor ON public.admin_audit_log(actor_id);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_log_entity ON public.admin_audit_log(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created ON public.admin_audit_log(created_at DESC);
 
 -- ============================================================
 -- 6. updated_at trigger function
@@ -327,13 +327,13 @@ CREATE POLICY "cr_delete" ON public.app_change_requests
   );
 
 -- audit_log
-ALTER TABLE public.audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.admin_audit_log ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "audit_insert_authenticated" ON public.audit_log
+CREATE POLICY "audit_insert_authenticated" ON public.admin_audit_log
   FOR INSERT TO authenticated
   WITH CHECK (true);
 
-CREATE POLICY "audit_select_super_admin" ON public.audit_log
+CREATE POLICY "audit_select_super_admin" ON public.admin_audit_log
   FOR SELECT TO authenticated
   USING (
     EXISTS (
