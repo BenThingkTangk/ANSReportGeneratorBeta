@@ -38,10 +38,19 @@ async function handleAuthCallback(): Promise<void> {
       if (code) {
         await supabase.auth.exchangeCodeForSession(code);
       }
-    } else {
-      // Implicit: detectSessionInUrl will have already parsed it on getSupabase()
-      // Calling getSession() forces hydration before we strip the hash.
-      await supabase.auth.getSession();
+    } else if (hasImplicitToken) {
+      // Implicit flow: manually parse hash tokens and set the session.
+      // (flowType=pkce client won't auto-parse implicit hash on init.)
+      const hashStr = hash.startsWith("#") ? hash.slice(1) : hash;
+      const hashParams = new URLSearchParams(hashStr);
+      const access_token = hashParams.get("access_token");
+      const refresh_token = hashParams.get("refresh_token");
+      if (access_token && refresh_token) {
+        await supabase.auth.setSession({ access_token, refresh_token });
+      } else {
+        // Fallback in case detectSessionInUrl parsed it already
+        await supabase.auth.getSession();
+      }
     }
   } catch (e) {
     console.error("auth callback error:", e);
