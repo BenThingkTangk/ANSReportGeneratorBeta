@@ -20,7 +20,15 @@ export function getSupabase(): SupabaseClient {
   }
   _client = createClient(
     supabaseUrl || "https://placeholder.supabase.co",
-    supabaseAnonKey || "placeholder"
+    supabaseAnonKey || "placeholder",
+    {
+      auth: {
+        flowType: "pkce",
+        detectSessionInUrl: true,
+        persistSession: true,
+        autoRefreshToken: true,
+      },
+    }
   );
   return _client;
 }
