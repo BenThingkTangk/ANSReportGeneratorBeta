@@ -1,0 +1,50 @@
+{
+  "id": "abnormal-003-can-risk",
+  "description": "Multi-domain abnormality: mild cardiovagal + severe adrenergic + OH — CAN risk threshold not met",
+  "scenario": "abnormal",
+  "source": "synthetic",
+  "clinicianNotes": "Cardiovagal ratios mild (1.04/1.18/0.99), ΔSBP=30 mmHg severe. Tests that possible_can_risk stays OFF when only one domain is moderate+.",
+  "provenance": "synthetic",
+  "ansBase64": "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",
+  "fileName": "abnormal-003-can-risk.ans",
+  "expectedFields": {
+    "eiRatio": {
+      "value": 1.04,
+      "tolerance": 0.02
+    }
+  },
+  "expectedScores": {
+    "cardiovagal": {
+      "assessable": true,
+      "severity": "mild"
+    },
+    "adrenergic": {
+      "assessable": true,
+      "severity": "severe"
+    },
+    "sudomotor": {
+      "assessable": false
+    }
+  },
+  "expectedFlags": {
+    "phenotypes": [
+      {
+        "id": "cardiovagal_impairment",
+        "present": true
+      },
+      {
+        "id": "adrenergic_impairment",
+        "present": true
+      },
+      {
+        "id": "orthostatic_hypotension",
+        "present": true
+      },
+      {
+        "id": "possible_can_risk",
+        "present": false
+      }
+    ]
+  },
+  "createdAt": "2026-06-02T17:59:47.770Z"
+}

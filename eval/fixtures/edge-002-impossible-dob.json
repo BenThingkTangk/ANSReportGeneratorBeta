@@ -1,0 +1,31 @@
+{
+  "id": "edge-002-impossible-dob",
+  "description": "DOB encodes implausible date — extractor must not fabricate ageAtStudy",
+  "scenario": "edge_case",
+  "source": "synthetic",
+  "provenance": "synthetic",
+  "ansBase64": "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",
+  "fileName": "edge-002-impossible-dob.ans",
+  "expectedFields": {
+    "expectedMissing": [
+      "patient.dob",
+      "patient.ageAtStudy"
+    ],
+    "eiRatio": {
+      "value": 1.28,
+      "tolerance": 0.02
+    }
+  },
+  "expectedScores": {
+    "cardiovagal": {
+      "assessable": true
+    },
+    "adrenergic": {
+      "assessable": true
+    }
+  },
+  "expectedFlags": {
+    "phenotypes": []
+  },
+  "createdAt": "2026-06-02T17:59:47.774Z"
+}

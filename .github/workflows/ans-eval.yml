@@ -1,0 +1,57 @@
+name: ans-accuracy-lab
+
+# Runs the ANS Accuracy Lab eval suite on every PR and push to main.
+# The runner exits non-zero when any regression-gate threshold is violated
+# (see eval/regression-gate.json), which fails this workflow.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ans-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    name: Parser + scoring regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Unit tests
+        run: npm run test:ans
+
+      - name: ANS Accuracy Lab eval
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: npm run eval:ci
+
+      - name: Upload run artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ans-eval-run-${{ github.run_id }}
+          path: |
+            eval/runs/*.json
+            eval/runs/history.jsonl
+          if-no-files-found: warn
+          retention-days: 30

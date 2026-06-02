@@ -1,0 +1,59 @@
+{
+  "id": "abnormal-001-cardiovagal-severe",
+  "description": "Severe cardiovagal impairment, BP stable on stand",
+  "scenario": "abnormal",
+  "source": "synthetic",
+  "clinicianNotes": "All three ratios below age-banded severe threshold. CAN risk likely false here because adrenergic is normal.",
+  "provenance": "synthetic",
+  "ansBase64": "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",
+  "fileName": "abnormal-001-cardiovagal-severe.ans",
+  "expectedFields": {
+    "ageAtStudy": {
+      "value": 60,
+      "tolerance": 1
+    },
+    "eiRatio": {
+      "value": 1.03,
+      "tolerance": 0.02
+    },
+    "valsalvaRatio": {
+      "value": 1.1,
+      "tolerance": 0.02
+    }
+  },
+  "expectedScores": {
+    "cardiovagal": {
+      "assessable": true,
+      "severity": "severe",
+      "expectedValue": 3
+    },
+    "adrenergic": {
+      "assessable": true,
+      "severity": "normal"
+    },
+    "sudomotor": {
+      "assessable": false
+    }
+  },
+  "expectedFlags": {
+    "phenotypes": [
+      {
+        "id": "cardiovagal_impairment",
+        "present": true
+      },
+      {
+        "id": "orthostatic_hypotension",
+        "present": false
+      },
+      {
+        "id": "possible_can_risk",
+        "present": false
+      }
+    ],
+    "expectedFindingCodes": [
+      "E_I_RATIO_SEVERE",
+      "VALSALVA_RATIO_SEVERE"
+    ]
+  },
+  "createdAt": "2026-06-02T17:59:47.769Z"
+}

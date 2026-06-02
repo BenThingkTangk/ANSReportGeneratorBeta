@@ -75,6 +75,16 @@ const NAV_ITEMS: NavItem[] = [
       </svg>
     ),
   },
+  {
+    label: "Accuracy Lab",
+    href: "/admin/accuracy-lab",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M4 19H20" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        <path d="M7 16L10 10L13 14L17 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    ),
+  },
 ];
 
 const ROLE_COLORS: Record<string, string> = {

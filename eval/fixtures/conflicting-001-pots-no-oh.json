@@ -1,0 +1,43 @@
+{
+  "id": "conflicting-001-pots-no-oh",
+  "description": "POTS-like HR rise without orthostatic hypotension",
+  "scenario": "conflicting",
+  "source": "synthetic",
+  "clinicianNotes": "HR +45 bpm on stand but BP holds. Engine must raise pots_like and NOT orthostatic_hypotension.",
+  "provenance": "synthetic",
+  "ansBase64": "AAAAC1Rlc3RQYXRpZW50AAAABUVpZ2h0AAAAALUO4QAAAAAGRmVtYWxlAAAACFJldmlld2VyAAAAAAAAAADkFNGAAAAAAEJhc2VsaW5lDQpIZWFydCBSYXRlID0gNzAgYnBtDQpCUCA9IDExOC83NiBtbUhnDQoNClN0YW5kaW5nDQpIZWFydCBSYXRlID0gMTE1IGJwbQ0KQlAgPSAxMTYvNzggbW1IZw0KDQpBdXRvbm9taWMgUmF0aW9zDQpFL0kgUmF0aW8gPSAxLjMwDQpWYWxzYWx2YSBSYXRpbyA9IDEuNjANCjMwOjE1IFJhdGlvID0gMS4xMA0KAAAAAAAAAAA/cGJN0vGp/AAAA+gAAAA/AHwAuADxASYBVgGBAaYBxAHcAesB8wHzAesB3AHEAaYBgQFWASYA8QC4AHwAPwAA/8H/hP9I/w/+2v6q/n/+Wv48/iT+Ff4N/g3+Ff4k/jz+Wv5//qr+2v8P/0j/hP/BAAAAPwB8ALgA8QEmAVYBgQGmAcQB3AHrAfMB8wHrAdwBxAGmAYEBVgEmAPEAuAB8AD8AAP/B/4T/SP8P/tr+qv5//lr+PP4k/hX+Df4N/hX+JP48/lr+f/6q/tr/D/9I/4T/wQAAAD8AfAC4APEBJgFWAYEBpgHEAdwB6wHzAfMB6wHcAcQBpgGBAVYBJgDxALgAfAA/AAD/wf+E/0j/D/7a/qr+f/5a/jz+JP4V/g3+Df4V/iT+PP5a/n/+qv7a/w//SP+E/8EAAAA/AHwAuADxASYBVgGBAaYBxAHcAesB8wHzAesB3AHEAaYBgQFWASYA8QC4AHwAPwAA/8H/hP9I/w/+2v6q/n/+Wv48/iT+Ff4N/g3+Ff4k/jz+Wv5//qr+2v8P/0j/hP/BAAAAPwB8ALgA8QEmAVYBgQGmAcQB3AHrAfMB8wHrAdwBxAGmAYEBVgEmAPEAuAB8AD8AAP/B/4T/SP8P/tr+qv5//lr+PP4k/hX+Df4N/hX+JP48/lr+f/6q/tr/D/9I/4T/wQAAAD8AfAC4APEBJgFWAYEBpgHEAdwB6wHzAfMB6wHcAcQBpgGBAVYBJgDxALgAfAA/AAD/wf+E/0j/D/7a/qr+f/5a/jz+JP4V/g3+Df4V/iT+PP5a/n/+qv7a/w//SP+E/8EAAAA/AHwAuADxASYBVgGBAaYBxAHcAesB8wHzAesB3AHEAaYBgQFWASYA8QC4AHwAPwAA/8H/hP9I/w/+2v6q/n/+Wv48/iT+Ff4N/g3+Ff4k/jz+Wv5//qr+2v8P/0j/hP/BAAAAPwB8ALgA8QEmAVYBgQGmAcQB3AHrAfMB8wHrAdwBxAGmAYEBVgEmAPEAuAB8AD8AAP/B/4T/SP8P/tr+qv5//lr+PP4k/hX+Df4N/hX+JP48/lr+f/6q/tr/D/9I/4T/wQAAAD8AfAC4APEBJgFWAYEBpgHEAdwB6wHzAfMB6wHcAcQBpgGBAVYBJgDxALgAfAA/AAD/wf+E/0j/D/7a/qr+f/5a/jz+JP4V/g3+Df4V/iT+PP5a/n/+qv7a/w//SP+E/8EAAAA/AHwAuADxASYBVgGBAaYBxAHcAesB8wHzAesB3AHEAaYBgQFWASYA8QC4AHwAPwAA/8H/hP9I/w/+2v6q/n/+Wv48/iT+Ff4N/g3+Ff4k/jz+Wv5//qr+2v8P/0j/hP/BAAAAPwB8ALgA8QEmAVYBgQGmAcQB3AHrAfMB8wHrAdwBxAGmAYEBVgEmAPEAuAB8AD8AAP/B/4T/SP8P/tr+qv5//lr+PP4k/hX+Df4N/hX+JP48/lr+f/6q/tr/D/9I/4T/wQAAAD8AfAC4APEBJgFWAYEBpgHEAdwB6wHzAfMB6wHcAcQBpgGBAVYBJgDxALgAfAA/AAD/wf+E/0j/D/7a/qr+f/5a/jz+JP4V/g3+Df4V/iT+PP5a/n/+qv7a/w//SP+E/8EAAAA/AHwAuADxASYBVgGBAaYBxAHcAesB8wHzAesB3AHEAaYBgQFWASYA8QC4AHwAPwAA/8H/hP9I/w/+2v6q/n/+Wv48/iT+Ff4N/g3+Ff4k/jz+Wv5//qr+2v8P/0j/hP/BAAAAPwB8ALgA8QEmAVYBgQGmAcQB3AHrAfMB8wHrAdwBxAGmAYEBVgEmAPEAuAB8AD8AAP/B/4T/SP8P/tr+qv5//lr+PP4k/hX+Df4N/hX+JP48/lr+f/6q/tr/D/9I/4T/wQAAAD8AfAC4APEBJgFWAYEBpgHEAdwB6wHzAfMB6wHcAcQBpgGBAVYBJgDxALgAfAA/AAD/wf+E/0j/D/7a/qr+f/5a/jz+JP4V/g3+Df4V/iT+PP5a/n/+qv7a/w//SP+E/8EAAAA/AHwAuADxASYBVgGBAaYBxAHcAesB8wHzAesB3AHEAaYBgQFWASYA8QC4AHwAPwAA/8H/hP9I/w/+2v6q/n/+Wv48/iT+Ff4N/g3+Ff4k/jz+Wv5//qr+2v8P/0j/hP/BAAAAPwB8ALgA8QEmAVYBgQGmAcQB3AHrAfMB8wHrAdwBxAGmAYEBVgEmAPEAuAB8AD8AAP/B/4T/SP8P/tr+qv5//lr+PP4k/hX+Df4N/hX+JP48/lr+f/6q/tr/D/9I/4T/wQAAAD8AfAC4APEBJgFWAYEBpgHEAdwB6wHzAfMB6wHcAcQBpgGBAVYBJgDxALgAfAA/AAD/wf+E/0j/D/7a/qr+f/5a/jz+JP4V/g3+Df4V/iT+PP5a/n/+qv7a/w//SP+E/8EAAAA/AHwAuADxASYBVgGBAaYBxAHcAesB8wHzAesB3AHEAaYBgQFWASYA8QC4AHwAPwAA/8H/hP9I/w/+2v6q/n/+Wv48/iT+Ff4N/g3+Ff4k/jz+Wv5//qr+2v8P/0j/hP/BAAAAPwB8ALgA8QEmAVYBgQGmAcQB3AHrAfMB8wHrAdwBxAGmAYEBVgEmAPEAuAB8AD8AAP/B/4T/SP8P/tr+qv5//lr+PP4k/hX+Df4N/hX+JP48/lr+f/6q/tr/D/9I/4T/wQ==",
+  "fileName": "conflicting-001-pots-no-oh.ans",
+  "expectedFields": {
+    "baselineHr": {
+      "value": 70,
+      "tolerance": 1
+    },
+    "standHr": {
+      "value": 115,
+      "tolerance": 1
+    }
+  },
+  "expectedScores": {
+    "cardiovagal": {
+      "assessable": true,
+      "severity": "normal"
+    },
+    "adrenergic": {
+      "assessable": true,
+      "severity": "normal"
+    }
+  },
+  "expectedFlags": {
+    "phenotypes": [
+      {
+        "id": "pots_like",
+        "present": true
+      },
+      {
+        "id": "orthostatic_hypotension",
+        "present": false
+      }
+    ]
+  },
+  "createdAt": "2026-06-02T17:59:47.772Z"
+}

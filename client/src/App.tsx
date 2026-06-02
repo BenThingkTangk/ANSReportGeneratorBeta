@@ -18,6 +18,7 @@ import ChangeRequestsPage from "@/pages/admin/change-requests";
 import ChangeRequestDetailPage from "@/pages/admin/change-requests/[id]";
 import NewChangeRequestPage from "@/pages/admin/change-requests/new";
 import AuditPage from "@/pages/admin/audit";
+import AccuracyLabPage from "@/pages/admin/accuracy-lab";
 
 function AppRouter() {
   return (
@@ -35,6 +36,7 @@ function AppRouter() {
       <Route path="/admin/change-requests/:id" component={ChangeRequestDetailPage} />
       <Route path="/admin/change-requests" component={ChangeRequestsPage} />
       <Route path="/admin/audit" component={AuditPage} />
+      <Route path="/admin/accuracy-lab" component={AccuracyLabPage} />
       {/* /admin redirect */}
       <Route path="/admin">
         {() => { window.location.hash = "#/admin/knowledge"; return null; }}

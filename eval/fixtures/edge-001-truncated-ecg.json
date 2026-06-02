@@ -1,0 +1,39 @@
+{
+  "id": "edge-001-truncated-ecg",
+  "description": "Truncated .ans file (ECG region cut short)",
+  "scenario": "edge_case",
+  "source": "synthetic",
+  "clinicianNotes": "Parser must still extract demographics + ratios from ASCII; ECG truncation must be flagged.",
+  "provenance": "synthetic",
+  "ansBase64": "AAAAC1Rlc3RQYXRpZW50AAAABkVsZXZlbgAAAACh7n4AAAAABE1hbGUAAAAIUmV2aWV3ZXIAAAAAAAAAAOPEZgAAAAAAQmFzZWxpbmUNCkhlYXJ0IFJhdGUgPSA2OCBicG0NCkJQID0gMTE4Lzc0IG1tSGcNCg0KU3RhbmRpbmcNCkhlYXJ0IFJhdGUgPSA3OCBicG0NCkJQID0gMTE2Lzc0IG1tSGcNCg0KQXV0b25vbWljIFJhdGlvcw0KRS9JIFJhdGlvID0gMS4zNg0KVmFsc2FsdmEgUmF0aW8gPSAxLjcwDQozMDoxNSBSYXRpbyA9IDEuMTgNCgAAAAAAAAAAP3BiTdLxqfwAAAPoAAAAPwB8ALgA8QEmAVYBgQGmAcQB3AHrAfMB8wHrAdwBxAGmAYEBVgEmAPEAuAB8AD8AAP/B/4T/SP8P/tr+qv5//lr+PP4k/hX+Df4N/hX+JP48/lr+f/6q/tr/D/9I/4T/wQAAAD8AfAC4APEBJgFWAYEBpgHEAdwB6wHzAfMB6wHcAcQBpgGBAVYBJgDxALgAfAA/AAD/wf+E/0j/D/7a/qr+f/5a/jz+JP4V/g3+Df4V/iT+PP5a/n/+qv7a/w//SP+E/8EAAAA/AHwAuADxASYBVgGBAaYBxAHcAesB8wHzAesB3AHEAaYBgQFWASYA8QC4AHwAPwAA/8H/hP9I/w/+2v6q/n/+Wv48/iT+Ff4N/g3+Ff4k/jz+Wv5//qr+2v8P/0j/hP/BAAAAPwB8ALgA8QEmAVYBgQGmAcQB3AHrAfMB8wHr",
+  "fileName": "edge-001-truncated-ecg.ans",
+  "expectedFields": {
+    "eiRatio": {
+      "value": 1.36,
+      "tolerance": 0.02
+    },
+    "valsalvaRatio": {
+      "value": 1.7,
+      "tolerance": 0.02
+    }
+  },
+  "expectedScores": {
+    "cardiovagal": {
+      "assessable": true,
+      "severity": "normal"
+    },
+    "adrenergic": {
+      "assessable": true,
+      "severity": "normal"
+    }
+  },
+  "expectedFlags": {
+    "phenotypes": [
+      {
+        "id": "orthostatic_hypotension",
+        "present": false
+      }
+    ]
+  },
+  "createdAt": "2026-06-02T17:59:47.773Z"
+}

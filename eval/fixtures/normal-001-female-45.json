@@ -1,0 +1,83 @@
+{
+  "id": "normal-001-female-45",
+  "description": "Normal female, age 45 — all ratios and BP within age-banded normal range",
+  "scenario": "normal",
+  "source": "synthetic",
+  "clinicianNotes": "Baseline healthy reference. No flags expected.",
+  "provenance": "synthetic",
+  "ansBase64": "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",
+  "fileName": "normal-001-female-45.ans",
+  "expectedFields": {
+    "lastName": {
+      "value": "TestPatient"
+    },
+    "firstName": {
+      "value": "One"
+    },
+    "sex": {
+      "value": "Female"
+    },
+    "ageAtStudy": {
+      "value": 45,
+      "tolerance": 1
+    },
+    "physician": {
+      "value": "Reviewer"
+    },
+    "eiRatio": {
+      "value": 1.32,
+      "tolerance": 0.02
+    },
+    "valsalvaRatio": {
+      "value": 1.6,
+      "tolerance": 0.02
+    },
+    "thirtyFifteenRatio": {
+      "value": 1.15,
+      "tolerance": 0.02
+    }
+  },
+  "expectedScores": {
+    "cardiovagal": {
+      "assessable": true,
+      "severity": "normal",
+      "minConfidence": "Medium"
+    },
+    "adrenergic": {
+      "assessable": true,
+      "severity": "normal",
+      "minConfidence": "Medium"
+    },
+    "sudomotor": {
+      "assessable": false
+    },
+    "expectedTotalSeverity": 0,
+    "totalSeverityTolerance": 0
+  },
+  "expectedFlags": {
+    "phenotypes": [
+      {
+        "id": "orthostatic_hypotension",
+        "present": false
+      },
+      {
+        "id": "pots_like",
+        "present": false
+      },
+      {
+        "id": "cardiovagal_impairment",
+        "present": false
+      },
+      {
+        "id": "adrenergic_impairment",
+        "present": false
+      }
+    ],
+    "forbiddenFindingCodes": [
+      "E_I_RATIO_LOW",
+      "E_I_RATIO_SEVERE",
+      "ORTHO_SBP_DROP_SEVERE"
+    ]
+  },
+  "createdAt": "2026-06-02T17:59:47.765Z"
+}
