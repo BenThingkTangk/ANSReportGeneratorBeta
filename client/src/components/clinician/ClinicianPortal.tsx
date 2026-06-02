@@ -18,6 +18,7 @@ import { RestingBaselinePanel } from "./RestingBaselinePanel";
 import { EcgRhythmStrip } from "./EcgRhythmStrip";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { IndicationsPanel } from "./IndicationsPanel";
+import { WhyConclusionsPanel } from "./WhyConclusionsPanel";
 
 interface ClinicianPortalProps {
   report: ANSReport;
@@ -67,6 +68,14 @@ export function ClinicianPortal({ report, ansStudy }: ClinicianPortalProps) {
       {/* PR2 — Data Quality & Confidence panel slots in above clinical content. */}
       {report.diagnosticSummary && (
         <DataQualityPanel
+          summary={report.diagnosticSummary}
+          ansStudy={ansStudy}
+        />
+      )}
+
+      {/* PR5 — "Why this conclusion?" expanders under each finding / phenotype. */}
+      {report.diagnosticSummary && (
+        <WhyConclusionsPanel
           summary={report.diagnosticSummary}
           ansStudy={ansStudy}
         />
