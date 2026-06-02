@@ -1,4 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { parseStudy } from "./_ans/parseStudy.js";
+import { ansStudyToLegacy } from "./_ans/legacyAdapter.js";
 
 export const config = {
   api: {
@@ -2162,7 +2164,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!fileBuffer || fileBuffer.length === 0) {
       return res.status(400).json({ success: false, error: "No file uploaded" });
     }
-    const patientData = parseANSFile(fileBuffer, fileName);
+
+    // PR1: deterministic parser is the primary path. We translate the
+    // normalized AnsStudy back into the legacy ParsedANSData shape so the
+    // existing Colombo scoring algorithm is untouched.
+    //
+    // Fallback: if the new parser throws for ANY reason we fall back to the
+    // legacy parseANSFile so production uploads never start failing because
+    // of a parser regression. The fallback path is logged so we can audit
+    // it from Vercel logs.
+    let patientData;
+    let ansStudy: ReturnType<typeof parseStudy> | undefined;
+    try {
+      ansStudy = parseStudy({ buffer: fileBuffer, fileName: fileName ?? "upload.ans" });
+      patientData = ansStudyToLegacy(ansStudy, fileBuffer);
+      // Belt-and-braces: if the new path produced a useless ParsedANSData
+      // (no names AND no ECG), bail out to the legacy parser instead of
+      // returning empty data to the client.
+      const useless =
+        !patientData.lastName && !patientData.firstName && patientData.ecgData.length === 0;
+      if (useless) {
+        console.warn("[ans-parser] new parser produced empty patient data; falling back to legacy");
+        patientData = parseANSFile(fileBuffer, fileName);
+        ansStudy = undefined;
+      }
+    } catch (err: any) {
+      console.warn("[ans-parser] new parser threw, falling back to legacy:", err?.message ?? err);
+      patientData = parseANSFile(fileBuffer, fileName);
+      ansStudy = undefined;
+    }
     const report = generateColomboReport(patientData);
     // Send only a preview of the raw ECG to the client — the full waveform
     // stays server-side (we'd blow past the Vercel payload limit otherwise).
@@ -2173,7 +2203,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...patientData,
       ecgData: patientData.ecgData.slice(0, ECG_PREVIEW_SAMPLES),
     };
-    return res.status(200).json({ success: true, patientData: wirePatient, report });
+    // Attach the normalized AnsStudy (minus the heavy ECG preview) so the
+    // frontend can show extraction provenance/warnings. The full ECG stays
+    // in `patientData.ecgData` (preview-trimmed above).
+    const ansStudyForWire = ansStudy
+      ? {
+          ...ansStudy,
+          ecg: { ...ansStudy.ecg, preview: ansStudy.ecg.preview.slice(0, 1000) },
+        }
+      : undefined;
+    return res.status(200).json({
+      success: true,
+      patientData: wirePatient,
+      report,
+      ansStudy: ansStudyForWire,
+    });
   } catch (error: any) {
     console.error("Error processing file:", error);
     return res.status(500).json({
