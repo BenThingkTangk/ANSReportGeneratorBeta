@@ -13,3 +13,8 @@ dist/
 .vercel/
 build_output/
 .vercel
+
+# .ans fixtures contain PHI — never commit
+fixtures/*.ans
+api/_ans/__tests__/smoke.mjs
+api/_ans/__tests__/adapter_smoke.mjs
