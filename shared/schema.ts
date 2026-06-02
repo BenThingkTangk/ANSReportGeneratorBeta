@@ -237,6 +237,8 @@ export interface ANSReport {
   multiParameter?: MultiParameterGraphical;
   /** Path B — Colombo indication detection (CAN, POTS, OD, VVS, etc.) */
   indications?: Indication[];
+  /** PR2 — Deterministic scoring + confidence summary (back-compat optional). */
+  diagnosticSummary?: import("./diagnosticSummary").DiagnosticSummary;
 }
 
 export interface UploadResponse {
@@ -244,6 +246,10 @@ export interface UploadResponse {
   patientData?: ANSPatientData;
   report?: ANSReport;
   error?: string;
+  /** PR1 — normalized AnsStudy with per-field provenance. */
+  ansStudy?: import("./ansStudy").AnsStudy;
+  /** PR2 — deterministic DiagnosticSummary. */
+  diagnosticSummary?: import("./diagnosticSummary").DiagnosticSummary;
 }
 
 // Colombo P&S indication detection (Path B)

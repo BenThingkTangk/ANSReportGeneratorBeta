@@ -1,8 +1,12 @@
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
+import type { DomainScore } from "@shared/diagnosticSummary";
+import { ConfidenceBadge } from "@/components/ConfidenceBadge";
 
 interface EwingRatiosTableProps {
   ratios: ANSReport["ratios"];
+  /** PR2 — cardiovagal domain score, rendered as inline confidence chip. */
+  cardiovagalScore?: DomainScore;
 }
 
 const severityColor = {
@@ -11,7 +15,7 @@ const severityColor = {
   Abnormal: "hsl(0 72% 60%)",
 };
 
-export function EwingRatiosTable({ ratios }: EwingRatiosTableProps) {
+export function EwingRatiosTable({ ratios, cardiovagalScore }: EwingRatiosTableProps) {
   const rows = [
     { label: "E/I Ratio",       ...ratios.eiRatio },
     { label: "Valsalva Ratio",  ...ratios.valsalvaRatio },
@@ -26,9 +30,17 @@ export function EwingRatiosTable({ ratios }: EwingRatiosTableProps) {
       className="rounded-2xl bg-card/50 border border-border/30 p-5 overflow-x-auto"
       data-testid="ewing-ratios-table"
     >
-      <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium mb-4">
-        Ewing Autonomic Ratios
-      </h3>
+      <div className="flex items-center justify-between mb-4 gap-3">
+        <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium">
+          Ewing Autonomic Ratios
+        </h3>
+        {cardiovagalScore?.assessable && (
+          <ConfidenceBadge
+            confidence={cardiovagalScore.confidence}
+            title={cardiovagalScore.rationale}
+          />
+        )}
+      </div>
       <table className="w-full text-xs border-collapse min-w-[420px]">
         <thead>
           <tr className="border-b border-border/30">

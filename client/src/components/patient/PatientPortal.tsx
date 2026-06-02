@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
+import type { AnsStudy } from "@shared/ansStudy";
 import { apiRequest } from "@/lib/queryClient";
 import { NervousSystemBody } from "./NervousSystemBody";
 import { AutonomicBalanceGauge } from "./AutonomicBalanceGauge";
@@ -14,6 +15,8 @@ import { NextTestCard } from "./NextTestCard";
 
 interface PatientPortalProps {
   report: ANSReport;
+  /** Optional — surfaces a subtle data-quality line when available. */
+  ansStudy?: AnsStudy;
 }
 
 export function PatientPortal({ report }: PatientPortalProps) {
@@ -88,6 +91,26 @@ export function PatientPortal({ report }: PatientPortalProps) {
         {p.gender && <span className="text-xs text-muted-foreground">{p.gender}</span>}
         <span className="text-xs text-muted-foreground">Test: {testDateStr}</span>
         <span className="text-xs text-muted-foreground">Physician: Dr. {p.physician}</span>
+        {report.diagnosticSummary && (
+          <span
+            className="text-xs text-muted-foreground"
+            data-testid="patient-data-quality"
+            title={`Report confidence: ${Math.round((report.diagnosticSummary.reportConfidenceScore ?? 0) * 100)}%`}
+          >
+            Data quality:{" "}
+            <span
+              className={
+                report.diagnosticSummary.reportConfidence === "High"
+                  ? "text-emerald-400"
+                  : report.diagnosticSummary.reportConfidence === "Medium"
+                    ? "text-amber-400"
+                    : "text-red-400"
+              }
+            >
+              {report.diagnosticSummary.reportConfidence.toLowerCase()}
+            </span>
+          </span>
+        )}
       </motion.div>
 
       {/* HERO — Cinematic Neural Profile + HRV Ring */}

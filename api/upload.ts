@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { parseStudy } from "./_ans/parseStudy.js";
 import { ansStudyToLegacy } from "./_ans/legacyAdapter.js";
+import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
 
 export const config = {
   api: {
@@ -2212,11 +2213,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ecg: { ...ansStudy.ecg, preview: ansStudy.ecg.preview.slice(0, 1000) },
         }
       : undefined;
+    // PR2 — Deterministic scoring layer. Runs only when we have a normalized
+    // AnsStudy; legacy-fallback uploads skip it (the legacy ParsedANSData does
+    // not carry the provenance/confidence the scoring layer needs).
+    let diagnosticSummary: ReturnType<typeof computeDiagnosticSummary> | undefined;
+    if (ansStudy) {
+      try {
+        diagnosticSummary = computeDiagnosticSummary(ansStudy);
+      } catch (err: any) {
+        console.warn(
+          "[ans-scoring] computeDiagnosticSummary failed:",
+          err?.message ?? err,
+        );
+        diagnosticSummary = undefined;
+      }
+    }
+    // Embed on the report for back-compat consumers that only look at
+    // `result.report`, AND surface at the top level for new consumers.
+    const reportWithSummary = diagnosticSummary
+      ? { ...report, diagnosticSummary }
+      : report;
     return res.status(200).json({
       success: true,
       patientData: wirePatient,
-      report,
+      report: reportWithSummary,
       ansStudy: ansStudyForWire,
+      diagnosticSummary,
     });
   } catch (error: any) {
     console.error("Error processing file:", error);
