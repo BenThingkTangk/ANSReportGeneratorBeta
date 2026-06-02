@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import type { ANSReport } from "@shared/schema";
+import type { AnsStudy } from "@shared/ansStudy";
 import { apiRequest } from "@/lib/queryClient";
 import { ClinicianHeader } from "./ClinicianHeader";
 import { ClinicianSynopsis } from "./ClinicianSynopsis";
+import { DataQualityPanel } from "./DataQualityPanel";
 import { PhaseEventTable } from "./PhaseEventTable";
 import { EwingRatiosTable } from "./EwingRatiosTable";
 import { PhaseFindings } from "./PhaseFindings";
@@ -19,9 +21,10 @@ import { IndicationsPanel } from "./IndicationsPanel";
 
 interface ClinicianPortalProps {
   report: ANSReport;
+  ansStudy?: AnsStudy;
 }
 
-export function ClinicianPortal({ report }: ClinicianPortalProps) {
+export function ClinicianPortal({ report, ansStudy }: ClinicianPortalProps) {
   const [synopsis, setSynopsis] = useState<string | null>(report.clinicianSynopsis ?? null);
   const [synopsisLoading, setSynopsisLoading] = useState(!report.clinicianSynopsis);
   const [synopsisError, setSynopsisError] = useState<string | null>(null);
@@ -61,6 +64,14 @@ export function ClinicianPortal({ report }: ClinicianPortalProps) {
         onRetry={fetchSynopsis}
       />
 
+      {/* PR2 — Data Quality & Confidence panel slots in above clinical content. */}
+      {report.diagnosticSummary && (
+        <DataQualityPanel
+          summary={report.diagnosticSummary}
+          ansStudy={ansStudy}
+        />
+      )}
+
       <RestingBaselinePanel report={report} />
 
       <IndicationsPanel report={report} />
@@ -76,7 +87,10 @@ export function ClinicianPortal({ report }: ClinicianPortalProps) {
         subtitle="Classical E/I, Valsalva, 30:15 ratios with normal ranges"
         testId="toggle-ewing"
       >
-        <EwingRatiosTable ratios={report.ratios} />
+        <EwingRatiosTable
+          ratios={report.ratios}
+          cardiovagalScore={report.diagnosticSummary?.cardiovagalScore}
+        />
       </CollapsibleSection>
 
       <PhaseFindings phaseFindings={report.phaseFindings} />

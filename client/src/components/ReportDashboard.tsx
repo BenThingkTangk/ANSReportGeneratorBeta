@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
+import type { AnsStudy } from "@shared/ansStudy";
 import { ClinicianPortal } from "./clinician/ClinicianPortal";
 import { PatientPortal } from "./patient/PatientPortal";
 import { AskAtom } from "./AskAtom";
@@ -11,6 +12,8 @@ import { PhysioPSPulseNodeLogo } from "./brand/PhysioPSPulseNodeLogo";
 
 interface ReportDashboardProps {
   report: ANSReport;
+  /** Optional normalized study so portals can show extraction warnings. */
+  ansStudy?: AnsStudy;
   onReset: () => void;
 }
 
@@ -20,7 +23,7 @@ type ViewerRole = "patient" | "clinician";
  * Dashboard with Patient ⇄ Clinician toggle. Atom chat (blue logo) follows
  * the active role and is always available.
  */
-export function ReportDashboard({ report, onReset }: ReportDashboardProps) {
+export function ReportDashboard({ report, ansStudy, onReset }: ReportDashboardProps) {
   const [role, setRole] = useState<ViewerRole>("patient");
 
   return (
@@ -79,8 +82,8 @@ export function ReportDashboard({ report, onReset }: ReportDashboardProps) {
             transition={{ duration: 0.3 }}
           >
             {role === "patient"
-              ? <PatientPortal report={report} />
-              : <ClinicianPortal report={report} />}
+              ? <PatientPortal report={report} ansStudy={ansStudy} />
+              : <ClinicianPortal report={report} ansStudy={ansStudy} />}
           </motion.div>
         </AnimatePresence>
       </div>

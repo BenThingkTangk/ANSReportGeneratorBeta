@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import type { ANSReport } from "@shared/schema";
+import type { AnsStudy } from "@shared/ansStudy";
 import { UploadScreen } from "@/components/UploadScreen";
 import { AnalyzingScreen } from "@/components/AnalyzingScreen";
 import { ReportDashboard } from "@/components/ReportDashboard";
@@ -11,6 +12,7 @@ type AppState = "upload" | "analyzing" | "report";
 export default function Dashboard() {
   const [appState, setAppState] = useState<AppState>("upload");
   const [report, setReport] = useState<ANSReport | null>(null);
+  const [ansStudy, setAnsStudy] = useState<AnsStudy | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisStage, setAnalysisStage] = useState("");
 
@@ -56,7 +58,10 @@ export default function Dashboard() {
         setAnalysisProgress(100);
         setAnalysisStage("Report generation complete.");
         await new Promise(r => setTimeout(r, 600));
+        // PR1/PR2 — the report carries `diagnosticSummary` (back-compat) and the
+        // top-level `ansStudy` carries parser provenance/warnings.
         setReport(result.report);
+        setAnsStudy(result.ansStudy ?? null);
         setAppState("report");
       } else {
         throw new Error(result.error || "Failed to process file");
@@ -72,6 +77,7 @@ export default function Dashboard() {
   const handleReset = useCallback(() => {
     setAppState("upload");
     setReport(null);
+    setAnsStudy(null);
     setAnalysisProgress(0);
   }, []);
 
@@ -95,7 +101,11 @@ export default function Dashboard() {
           <AnalyzingScreen progress={analysisProgress} stage={analysisStage} />
         )}
         {appState === "report" && report && (
-          <ReportDashboard report={report} onReset={handleReset} />
+          <ReportDashboard
+            report={report}
+            ansStudy={ansStudy ?? undefined}
+            onReset={handleReset}
+          />
         )}
       </div>
       <AtomAttribution />
