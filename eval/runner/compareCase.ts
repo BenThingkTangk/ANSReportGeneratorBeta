@@ -206,7 +206,7 @@ export function compareCase(input: CompareInput): EvalCaseResult {
   const expectedFlagsById = new Map(evalCase.expectedFlags.phenotypes.map(p => [p.id, p]));
   const actualFlagsById = new Map(summary.phenotypeFlags.map(p => [p.id, p]));
 
-  for (const [id, exp] of expectedFlagsById) {
+  for (const [id, exp] of Array.from(expectedFlagsById)) {
     const act = actualFlagsById.get(id);
     if (exp.present === "absent") {
       if (act) {
@@ -235,7 +235,7 @@ export function compareCase(input: CompareInput): EvalCaseResult {
     }
   }
   // Also count false positives among present flags not listed in expectations.
-  for (const [id, act] of actualFlagsById) {
+  for (const [id, act] of Array.from(actualFlagsById)) {
     if (act.present && !expectedFlagsById.has(id) && id !== "insufficient_data") {
       fp += 1;
       failures.push({

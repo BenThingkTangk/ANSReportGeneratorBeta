@@ -208,6 +208,7 @@ interface ANSReport {
   patientSynopsis?: string;
   clinicianSynopsis?: string;
   multiParameter?: MultiParameterGraphical;
+  indications?: Indication[];
 }
 
 // ---- Multipart Parser -------------------------------------------------------

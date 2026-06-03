@@ -163,8 +163,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (isPdf) {
       try {
-        // Dynamic import to avoid module loading issues in Vercel
-        const pdfParse = await import("pdf-parse").then((m) => m.default ?? m);
+        // Dynamic import to avoid module loading issues in Vercel.
+        // pdf-parse's TS types expose only a namespace; runtime gives us
+        // either a CJS default or the namespace itself depending on the
+        // resolver, so we coerce via `unknown`.
+        const mod = (await import("pdf-parse")) as unknown as
+          | { default: (b: Buffer) => Promise<{ text?: string }> }
+          | ((b: Buffer) => Promise<{ text?: string }>);
+        const pdfParse =
+          typeof mod === "function"
+            ? mod
+            : (mod as { default: (b: Buffer) => Promise<{ text?: string }> }).default;
         const result = await pdfParse(fileBuffer);
         extractedText = result.text ?? "";
       } catch (pdfErr) {

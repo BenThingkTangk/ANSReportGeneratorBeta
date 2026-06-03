@@ -152,3 +152,60 @@ fixtures used in CI are synthetic, labeled `TestPatient`.
   not affected.
 - Backend: no database schema changes in this release.
 - Operational: no new secrets or environment variables required.
+
+---
+
+## Post-release hotfix + hardening (2026-06-03)
+
+A production cold-start crash was observed on `/api/parse` returning
+HTTP 500 with `x-vercel-error: FUNCTION_INVOCATION_FAILED` and no
+userland log surface. Root cause: under `"type":"module"` ESM on
+Vercel's Node 24 runtime, relative *runtime* imports must include an
+explicit `.js` extension. Several files in the scoring chain
+(`api/_ans/scoring/index.ts`, `api/_ans/scoring/cardiovagal.ts`) were
+missing those extensions on runtime imports. Local tests passed because
+`tsx`/`vitest` perform their own resolution; only Vercel's bundler/runtime
+was strict.
+
+### Fix
+
+- Added explicit `.js` extensions on all runtime imports in the parser
+  and scoring chain.
+- Inlined `setCorsHeaders` in `/api/parse` and added per-stage error
+  reporting so future handler-time failures surface as JSON with the
+  failing stage tag (`parseMultipart` → `parseStudy` → `computeDiagnosticSummary`)
+  instead of an opaque 500.
+
+### Hardening (prevents this entire class of bug)
+
+- **ESM import auditor** — `scripts/audit-esm-imports.mjs` walks
+  `api/`, `shared/`, `server/` and flags every relative runtime import
+  that is missing an explicit `.js` extension. Type-only imports are
+  excluded. Supports `--fix` for in-place rewrite.
+- **`prebuild:vercel` hook** — runs `npm run audit:esm && tsc --noEmit`
+  on every Vercel build. A missing `.js` will now fail the deploy
+  before reaching production.
+- **`api/**` is now part of the main `tsconfig.json`** — previously
+  excluded, which masked 3 pre-existing TS errors. All resolved:
+  `api/_evidenceRetrieval.ts` (MapIterator), `api/admin/knowledge/upload.ts`
+  (pdf-parse default export), `api/upload.ts` (Indication[] vs string[]).
+- **TypeScript `target` raised to `ES2022`** (was defaulting to ES3),
+  matching the Vercel Node 20+/24 runtime.
+- **Cold-start smoke script** — `scripts/coldstart-smoke.mjs <baseUrl>`
+  probes every `/api/*` endpoint with `OPTIONS` and fails on any 5xx.
+  Available as `npm run smoke:coldstart <baseUrl>`. Current production
+  passes 19/19.
+- **Aggregate `ci` script** — `npm run ci` runs the audit, typecheck,
+  57/57 unit tests, and 12/12 eval gate in sequence.
+
+### Verification
+
+- `npm run audit:esm` — clean across api/, shared/, server/
+- `npm run check` (full `tsc --noEmit` including `api/**`) — 0 errors
+- `npm run test:ans` — 57/57 pass
+- `npm run eval:ci` — 12/12 fixtures, F1 1.000
+- `npx tsx eval/runner/pr6Smoke.ts` — 183/183 acceptance checks pass
+- `npm run smoke:coldstart https://humanos-ans-diagnostic.vercel.app` —
+  19/19 endpoints load without 5xx
+- Live end-to-end .ans upload (~633 KB) on production — HTTP 200, full
+  `ansStudy` + `diagnosticSummary` payload returned

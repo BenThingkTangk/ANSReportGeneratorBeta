@@ -14,7 +14,12 @@
     "test:ans:watch": "vitest",
     "eval": "tsx eval/runner/runEval.ts",
     "eval:ci": "tsx eval/runner/runEval.ts --ci",
-    "eval:build-fixtures": "tsx eval/buildFixtures.ts"
+    "eval:build-fixtures": "tsx eval/buildFixtures.ts",
+    "audit:esm": "node scripts/audit-esm-imports.mjs",
+    "audit:esm:fix": "node scripts/audit-esm-imports.mjs --fix",
+    "prebuild:vercel": "npm run audit:esm && tsc --noEmit",
+    "ci": "npm run audit:esm && tsc --noEmit && npm run test:ans && npm run eval:ci",
+    "smoke:coldstart": "node scripts/coldstart-smoke.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
