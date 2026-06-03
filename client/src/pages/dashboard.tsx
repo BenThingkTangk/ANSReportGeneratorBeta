@@ -1,22 +1,80 @@
 import { useState, useCallback } from "react";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
+import type { DiagnosticSummary } from "@shared/diagnosticSummary";
 import { UploadScreen } from "@/components/UploadScreen";
 import { AnalyzingScreen } from "@/components/AnalyzingScreen";
 import { ReportDashboard } from "@/components/ReportDashboard";
 import { AtomAttribution } from "@/components/AtomAttribution";
+import { ParsedDataReview } from "@/components/parsed/ParsedDataReview";
 import { apiRequest } from "@/lib/queryClient";
 
-type AppState = "upload" | "analyzing" | "report";
+type AppState = "upload" | "parsing" | "review" | "analyzing" | "report";
 
 export default function Dashboard() {
   const [appState, setAppState] = useState<AppState>("upload");
   const [report, setReport] = useState<ANSReport | null>(null);
   const [ansStudy, setAnsStudy] = useState<AnsStudy | null>(null);
+  const [diagnosticSummary, setDiagnosticSummary] =
+    useState<DiagnosticSummary | null>(null);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisStage, setAnalysisStage] = useState("");
 
-  const handleFileUpload = useCallback(async (file: File) => {
+  /** Step 1: parse-only — give the user a chance to review extraction. */
+  const parseFile = useCallback(async (file: File) => {
+    setPendingFile(file);
+    setAppState("parsing");
+    setAnalysisProgress(0);
+    setAnalysisStage("Parsing .ans file...");
+
+    // Lightweight progress animation while /api/parse runs.
+    const lightStages = [
+      { progress: 20, label: "Reading .ans binary file..." },
+      { progress: 45, label: "Parsing patient demographics..." },
+      { progress: 70, label: "Extracting phase blocks..." },
+      { progress: 90, label: "Building normalized AnsStudy..." },
+    ];
+    let cancelled = false;
+    (async () => {
+      for (const s of lightStages) {
+        if (cancelled) return;
+        setAnalysisProgress(s.progress);
+        setAnalysisStage(s.label);
+        await new Promise(r => setTimeout(r, 220 + Math.random() * 140));
+      }
+    })();
+
+    try {
+      const formData = new FormData();
+      formData.append("ansFile", file);
+      const response = await apiRequest("POST", "/api/parse", undefined, formData);
+      const result = await response.json();
+      cancelled = true;
+
+      if (result.success && result.ansStudy) {
+        setAnsStudy(result.ansStudy);
+        setDiagnosticSummary(result.diagnosticSummary ?? null);
+        setAnalysisProgress(100);
+        setAnalysisStage("Parse complete.");
+        await new Promise(r => setTimeout(r, 250));
+        setAppState("review");
+      } else {
+        throw new Error(result.error || "Failed to parse file");
+      }
+    } catch (error: any) {
+      cancelled = true;
+      console.error("Parse error:", error);
+      setAnalysisStage("Error: " + (error.message || "Parse failed"));
+      await new Promise(r => setTimeout(r, 1800));
+      setAppState("upload");
+      setPendingFile(null);
+    }
+  }, []);
+
+  /** Step 2: full report generation (existing /api/upload pipeline). */
+  const generateReport = useCallback(async () => {
+    if (!pendingFile) return;
     setAppState("analyzing");
     setAnalysisProgress(0);
 
@@ -39,45 +97,64 @@ export default function Dashboard() {
       { progress: 97, label: "Assembling diagnostic report..." },
     ];
 
-    // Animate through stages
-    for (const stage of stages) {
-      setAnalysisProgress(stage.progress);
-      setAnalysisStage(stage.label);
-      await new Promise(r => setTimeout(r, 280 + Math.random() * 200));
-    }
+    let cancelled = false;
+    (async () => {
+      for (const stage of stages) {
+        if (cancelled) return;
+        setAnalysisProgress(stage.progress);
+        setAnalysisStage(stage.label);
+        await new Promise(r => setTimeout(r, 280 + Math.random() * 200));
+      }
+    })();
 
-    // Actually upload and process
     const formData = new FormData();
-    formData.append("ansFile", file);
+    formData.append("ansFile", pendingFile);
 
     try {
       const response = await apiRequest("POST", "/api/upload", undefined, formData);
       const result = await response.json();
+      cancelled = true;
 
       if (result.success && result.report) {
         setAnalysisProgress(100);
         setAnalysisStage("Report generation complete.");
         await new Promise(r => setTimeout(r, 600));
-        // PR1/PR2 — the report carries `diagnosticSummary` (back-compat) and the
-        // top-level `ansStudy` carries parser provenance/warnings.
         setReport(result.report);
-        setAnsStudy(result.ansStudy ?? null);
+        // /api/upload also returns ansStudy — refresh in case of re-extraction.
+        if (result.ansStudy) setAnsStudy(result.ansStudy);
         setAppState("report");
       } else {
         throw new Error(result.error || "Failed to process file");
       }
     } catch (error: any) {
+      cancelled = true;
       console.error("Upload error:", error);
       setAnalysisStage("Error: " + (error.message || "Upload failed"));
       await new Promise(r => setTimeout(r, 2000));
-      setAppState("upload");
+      setAppState("review");
     }
+  }, [pendingFile]);
+
+  const handleReparse = useCallback(() => {
+    if (pendingFile) {
+      void parseFile(pendingFile);
+    }
+  }, [pendingFile, parseFile]);
+
+  const handleBackToUpload = useCallback(() => {
+    setAppState("upload");
+    setPendingFile(null);
+    setAnsStudy(null);
+    setDiagnosticSummary(null);
+    setAnalysisProgress(0);
   }, []);
 
   const handleReset = useCallback(() => {
     setAppState("upload");
     setReport(null);
     setAnsStudy(null);
+    setDiagnosticSummary(null);
+    setPendingFile(null);
     setAnalysisProgress(0);
   }, []);
 
@@ -96,9 +173,20 @@ export default function Dashboard() {
       />
 
       <div className="relative z-10">
-        {appState === "upload" && <UploadScreen onUpload={handleFileUpload} />}
-        {appState === "analyzing" && (
+        {appState === "upload" && <UploadScreen onUpload={parseFile} />}
+        {(appState === "parsing" || appState === "analyzing") && (
           <AnalyzingScreen progress={analysisProgress} stage={analysisStage} />
+        )}
+        {appState === "review" && (
+          <ParsedDataReview
+            ansStudy={ansStudy}
+            diagnosticSummary={diagnosticSummary}
+            fileName={pendingFile?.name ?? "ans-study"}
+            file={pendingFile}
+            onBack={handleBackToUpload}
+            onReparse={handleReparse}
+            onGenerate={generateReport}
+          />
         )}
         {appState === "report" && report && (
           <ReportDashboard

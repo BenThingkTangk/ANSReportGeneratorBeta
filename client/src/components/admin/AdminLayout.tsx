@@ -75,6 +75,26 @@ const NAV_ITEMS: NavItem[] = [
       </svg>
     ),
   },
+  {
+    label: "Accuracy Lab",
+    href: "/admin/accuracy-lab",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M4 19H20" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        <path d="M7 16L10 10L13 14L17 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    ),
+  },
+  {
+    label: "Evidence Links",
+    href: "/admin/rule-evidence",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M10 13a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66L11 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        <path d="M14 11a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66L13 18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    ),
+  },
 ];
 
 const ROLE_COLORS: Record<string, string> = {

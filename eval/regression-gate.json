@@ -1,0 +1,8 @@
+{
+  "minPassRate": 1.0,
+  "minDemographicsAccuracy": 0.95,
+  "minNumericAccuracy": 0.90,
+  "minMissingDetection": 1.0,
+  "minFlagF1": 0.85,
+  "maxUnsafeOverclaims": 0
+}
