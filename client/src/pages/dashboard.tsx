@@ -48,11 +48,19 @@ export default function Dashboard() {
     try {
       const formData = new FormData();
       formData.append("ansFile", file);
-      const response = await apiRequest("POST", "/api/parse", undefined, formData);
-      const result = await response.json();
+      // Bypass apiRequest's throwIfResNotOk so we can surface server-side
+      // error JSON (which now includes a `stage` field on failure).
+      const response = await fetch("/api/parse", {
+        method: "POST",
+        body: formData,
+      });
+      const result = await response.json().catch(() => ({
+        success: false,
+        error: `HTTP ${response.status}: ${response.statusText}`,
+      }));
       cancelled = true;
 
-      if (result.success && result.ansStudy) {
+      if (response.ok && result.success && result.ansStudy) {
         setAnsStudy(result.ansStudy);
         setDiagnosticSummary(result.diagnosticSummary ?? null);
         setAnalysisProgress(100);
@@ -60,13 +68,16 @@ export default function Dashboard() {
         await new Promise(r => setTimeout(r, 250));
         setAppState("review");
       } else {
-        throw new Error(result.error || "Failed to parse file");
+        const msg = result.stage
+          ? `${result.error || "parse failed"} (stage: ${result.stage})`
+          : result.error || `HTTP ${response.status}`;
+        throw new Error(msg);
       }
     } catch (error: any) {
       cancelled = true;
       console.error("Parse error:", error);
       setAnalysisStage("Error: " + (error.message || "Parse failed"));
-      await new Promise(r => setTimeout(r, 1800));
+      await new Promise(r => setTimeout(r, 2500));
       setAppState("upload");
       setPendingFile(null);
     }
