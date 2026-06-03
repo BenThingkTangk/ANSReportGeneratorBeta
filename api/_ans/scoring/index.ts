@@ -21,12 +21,12 @@ import type {
 import {
   SCORING_VERSION,
   DIAGNOSTIC_DISCLAIMER,
-} from "../../../shared/diagnosticSummary";
-import { DEFAULT_THRESHOLDS, type Thresholds } from "../thresholds";
-import { scoreCardiovagal } from "./cardiovagal";
-import { scoreAdrenergic } from "./adrenergic";
-import { scoreSudomotor } from "./sudomotor";
-import { detectPhenotypes } from "./phenotypes";
+} from "../../../shared/diagnosticSummary.js";
+import { DEFAULT_THRESHOLDS, type Thresholds } from "../thresholds.js";
+import { scoreCardiovagal } from "./cardiovagal.js";
+import { scoreAdrenergic } from "./adrenergic.js";
+import { scoreSudomotor } from "./sudomotor.js";
+import { detectPhenotypes } from "./phenotypes.js";
 
 function confidenceRank(c: Confidence): number {
   return c === "High" ? 2 : c === "Medium" ? 1 : 0;
@@ -188,5 +188,5 @@ export function computeDiagnosticSummary(
 }
 
 // Re-export for convenience
-export { DEFAULT_THRESHOLDS } from "../thresholds";
-export type { Thresholds } from "../thresholds";
+export { DEFAULT_THRESHOLDS } from "../thresholds.js";
+export type { Thresholds } from "../thresholds.js";
