@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Dashboard from "@/pages/dashboard";
 import NotFound from "@/pages/not-found";
+import { BuildInfo } from "@/components/BuildInfo";
 
 // Admin pages
 import AdminLoginPage from "@/pages/admin/login";
@@ -64,6 +65,7 @@ function App() {
           <Router hook={useHashLocation}>
             <AppRouter />
           </Router>
+          <BuildInfo />
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

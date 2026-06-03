@@ -570,6 +570,130 @@ const FIXTURES: FixtureSpec[] = [
       phenotypes: [],
     },
   },
+
+  // 13. PEDIATRIC — adolescent (age <18), normal autonomic profile for age band.
+  {
+    id: "pediatric-001-age-14",
+    description: "Pediatric subject, age 14 — youth-band ratios with brisk HR response on stand",
+    scenario: "normal",
+    clinicianNotes: "Adolescent baseline: HR rise of 20 bpm and elevated E:I are physiologic. No phenotype flags expected.",
+    fileName: "pediatric-001-age-14.ans",
+    provenance: "synthetic",
+    ans: {
+      lastName: "TestPatient",
+      firstName: "Thirteen",
+      dobIso: "2011-04-12",
+      sex: "Female",
+      physician: "Reviewer",
+      studyDateIso: "2025-04-12",
+      asciiBlock: buildAsciiBlock(
+        { hr: 74, sbp: 108, dbp: 66 },
+        { hr: 94, sbp: 106, dbp: 70 },
+        { eiRatio: 1.55, valsalvaRatio: 1.95, thirtyFifteenRatio: 1.28 },
+      ),
+    },
+    expectedFields: {
+      sex: { value: "Female" },
+      ageAtStudy: { value: 14, tolerance: 1 },
+      eiRatio: { value: 1.55, tolerance: 0.02 },
+      valsalvaRatio: { value: 1.95, tolerance: 0.02 },
+    },
+    expectedScores: {
+      cardiovagal: { assessable: true, severity: "normal" },
+      adrenergic: { assessable: true, severity: "normal" },
+      sudomotor: { assessable: false },
+    },
+    expectedFlags: {
+      phenotypes: [
+        { id: "orthostatic_hypotension", present: false },
+        { id: "cardiovagal_impairment", present: false },
+      ],
+      forbiddenFindingCodes: ["E_I_RATIO_LOW", "E_I_RATIO_SEVERE", "ORTHO_SBP_DROP_SEVERE"],
+    },
+  },
+
+  // 14. ATHLETE-BRADYCARDIA — endurance athlete with resting HR <50, normal ratios.
+  {
+    id: "athlete-001-bradycardia",
+    description: "Endurance athlete, age 32 — resting bradycardia (HR 44) with preserved vagal tone",
+    scenario: "edge_case",
+    clinicianNotes: "Low resting HR is a training adaptation. Cardiovagal ratios should be high-normal. No CAN or POTS flags.",
+    fileName: "athlete-001-bradycardia.ans",
+    provenance: "synthetic",
+    ans: {
+      lastName: "TestPatient",
+      firstName: "Fourteen",
+      dobIso: "1993-07-22",
+      sex: "Male",
+      physician: "Reviewer",
+      studyDateIso: "2025-07-22",
+      asciiBlock: buildAsciiBlock(
+        { hr: 44, sbp: 110, dbp: 68 },
+        { hr: 60, sbp: 108, dbp: 70 },
+        { eiRatio: 1.65, valsalvaRatio: 2.05, thirtyFifteenRatio: 1.35 },
+      ),
+    },
+    expectedFields: {
+      sex: { value: "Male" },
+      ageAtStudy: { value: 32, tolerance: 1 },
+      eiRatio: { value: 1.65, tolerance: 0.02 },
+      valsalvaRatio: { value: 2.05, tolerance: 0.02 },
+    },
+    expectedScores: {
+      cardiovagal: { assessable: true, severity: "normal" },
+      adrenergic: { assessable: true, severity: "normal" },
+      sudomotor: { assessable: false },
+    },
+    expectedFlags: {
+      phenotypes: [
+        { id: "pots_like", present: false },
+        { id: "cardiovagal_impairment", present: false },
+        { id: "possible_can_risk", present: false },
+      ],
+      forbiddenFindingCodes: ["E_I_RATIO_LOW", "E_I_RATIO_SEVERE"],
+    },
+  },
+
+  // 15. MIXED-PHENOTYPE — POTS-like HR rise PLUS cardiovagal impairment (rare combo).
+  {
+    id: "mixed-001-pots-and-cardiovagal",
+    description: "Mixed phenotype: POTS-like HR rise without OH AND severe cardiovagal impairment",
+    scenario: "abnormal",
+    clinicianNotes: "Tests detector composition: pots_like and cardiovagal_impairment should both flag present=true; possible_can_risk should remain false (adrenergic still normal).",
+    fileName: "mixed-001-pots-and-cardiovagal.ans",
+    provenance: "synthetic",
+    ans: {
+      lastName: "TestPatient",
+      firstName: "Fifteen",
+      dobIso: "1998-11-30",
+      sex: "Female",
+      physician: "Reviewer",
+      studyDateIso: "2025-11-30",
+      asciiBlock: buildAsciiBlock(
+        { hr: 78, sbp: 118, dbp: 74 },
+        { hr: 116, sbp: 116, dbp: 78 },
+        { eiRatio: 1.08, valsalvaRatio: 1.18, thirtyFifteenRatio: 1.02 },
+      ),
+    },
+    expectedFields: {
+      ageAtStudy: { value: 27, tolerance: 1 },
+      eiRatio: { value: 1.08, tolerance: 0.02 },
+      valsalvaRatio: { value: 1.18, tolerance: 0.02 },
+    },
+    expectedScores: {
+      cardiovagal: { assessable: true, severity: "severe" },
+      adrenergic: { assessable: true, severity: "normal" },
+      sudomotor: { assessable: false },
+    },
+    expectedFlags: {
+      phenotypes: [
+        { id: "pots_like", present: true },
+        { id: "cardiovagal_impairment", present: true },
+        { id: "orthostatic_hypotension", present: false },
+        { id: "possible_can_risk", present: false },
+      ],
+    },
+  },
 ];
 
 // ----------------------------------------------------------------------------
