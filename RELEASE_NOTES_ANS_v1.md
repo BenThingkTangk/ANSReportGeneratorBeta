@@ -209,3 +209,91 @@ was strict.
   19/19 endpoints load without 5xx
 - Live end-to-end .ans upload (~633 KB) on production — HTTP 200, full
   `ansStudy` + `diagnosticSummary` payload returned
+
+---
+
+## v2 Hardening — cache-bust, observability, AI accuracy uplift
+
+Deployed: 2026-06-03 · Commit: `3f8319e` · Production: https://humanos-ans-diagnostic.vercel.app
+
+### Browser-side cache-bust + observability
+
+- **`vercel.json` headers** — `index.html` and `/` served with
+  `cache-control: public, max-age=0, must-revalidate`; all hashed assets in
+  `/assets/*` served with `max-age=31536000, immutable`. Eliminates the
+  "old shell loads new chunks" stale-bundle class of bug.
+- **`/api/health` enriched** with `deploy.{commitSha, commitShortSha,
+  commitMessage, branch, env, region, buildTime, deploymentUrl}`,
+  `runtime.{node, platform, arch, now}`, plus permissive CORS so the UI
+  can probe it from any origin.
+- **Build-info badge** — vite injects `__BUILD_COMMIT__`,
+  `__BUILD_COMMIT_SHORT__`, `__BUILD_TIME__` globals (declared in
+  `client/src/vite-env.d.ts`). New `<BuildInfo />` component renders a
+  bottom-right badge; click expands and fetches `/api/health` to compare
+  client vs server commit, showing a red warning if they disagree.
+
+### Resilient upload client
+
+- New `client/src/lib/resilientUpload.ts` exporting `resilientUpload<T>()`.
+  AbortController with 60 s default timeout (90 s for `/api/upload`'s
+  longer pipeline), retry-once on 5xx or network failures, captures
+  `x-vercel-id` from every response, emits structured telemetry via
+  `console.info("[upload]", ...)`.
+- Dashboard wires both `parseFile` (`/api/parse`) and `generateReport`
+  (`/api/upload`) through `resilientUpload`. User-visible error toasts now
+  carry the exact diagnostic context:
+  `"<error> (stage: <stage>) (after <N> attempts) [req:<vercelId>]"`
+  so any failure can be traced to a single Vercel request.
+
+### AI accuracy uplift
+
+- **`api/_ans/synonyms.ts` — +25 clinical aliases**:
+  - HR: Mean / Resting Heart Rate, Pulse Rate, "beats/min" unit, "HR avg"
+  - BP: Systolic/Diastolic Blood Pressure (long form), Systolic/Diastolic
+    Pressure, SYS / DIA short codes
+  - New `RR_INTERVAL` field — R-R, RR, Mean RR, Mean R-R, Mean NN, NN
+    Interval, RRI (ms / msec)
+  - Tilt section now also matches "Tilt-Up", "Upright Tilt", "VRT", "PRT",
+    "Vertical Recovery Test"
+  - New `SUDOMOTOR` field — QSART, Quantitative Sudomotor Axon Reflex
+    Test, Sweat / Sudomotor Response, Sudomotor Function, ESC,
+    Electrochemical Skin Conductance
+  - New `ORTHOSTATIC_INTOLERANCE` field — Postural Tachycardia,
+    Orthostatic Intolerance, OI / OI Score
+  - Ectopic beats: + PACs, Premature Ventricular / Atrial Contractions
+  - Symptoms: + gastroparesis / PEM / loss of consciousness / panic
+    attack / lethargy / pounding heart / mental cloudiness / GI
+    dysmotility / thermoregulatory / bladder dysfunction
+  - Patterns: + neurocardiogenic, neurally mediated syncope, nOH,
+    cardiovagal impairment, sudomotor dysfunction / SFN, adrenergic
+    failure
+- **`api/_ans/scoring/phenotypes.ts` — strict confidence gate**: new
+  `strictConfidence(base, fields)` helper applied across all six phenotype
+  detectors. **Hard-cap at Low** when any required input is `null`;
+  **soft downgrade one notch** when any provenance is weak
+  (`source ∈ {missing, filename, computed}` or `confidence < 0.5`).
+  Eliminates the "High confidence claim with zero evidence" class of bug
+  reported in v1.
+- **3 new eval fixtures** (12 → 15 total):
+  - `pediatric-001-age-14` — adolescent baseline (HR rise of 20 bpm and
+    elevated E:I are physiologic, no phenotype flags)
+  - `athlete-001-bradycardia` — endurance athlete with resting HR 44
+    bpm, preserved vagal tone, no false-positive POTS or CAN
+  - `mixed-001-pots-and-cardiovagal` — POTS-like HR rise + severe
+    cardiovagal impairment without OH; locks `possible_can_risk` OFF
+    when only one domain is impaired
+
+### Verification
+
+- `npm run audit:esm` — clean across `api/`, `shared/`, `server/`
+- `npx tsc --noEmit` — 0 errors
+- `npm run test:ans` — 57/57 pass
+- `npm run eval:ci` — 15/15 fixtures, F1 1.000, 0 unsafe overclaims
+- `npx tsx eval/runner/pr6Smoke.ts` — **232/232** acceptance checks
+  (was 183 in v1)
+- `node scripts/coldstart-smoke.mjs https://humanos-ans-diagnostic.vercel.app`
+  — 19/19 endpoints load without 5xx
+- Live `.ans` upload on production — HTTP 200, full payload in 171 ms,
+  `x-vercel-id: pdx1::iad1::gwh55-…`
+- `/api/health` confirms deployed `commitShortSha = 3f8319e`, region
+  `iad1`, node `v24.14.1`

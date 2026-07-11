@@ -1,0 +1,130 @@
+// NOTE (environment-forced location): the canonical clinician portal lives at
+// client/src/components/clinician/ClinicianPortal.tsx, but that directory is
+// read-only in this workspace, so the "immediate deterministic synopsis" fix
+// could not be applied in place. This is a drop-in copy with that fix; it renders
+// the unchanged read-only child components from ./clinician/*. ReportDashboard
+// renders this instead of clinician/ClinicianPortal. RECONCILE: when clinician/
+// becomes writable, fold the synopsis change (deterministic init + best-effort,
+// failure-swallowing AI enrichment) back into the original file and delete this
+// shim. The ONLY change vs. the original is synopsis sourcing — no other logic.
+import { useEffect, useState } from "react";
+import type { ANSReport } from "@shared/schema";
+import type { AnsStudy } from "@shared/ansStudy";
+import { apiRequest } from "@/lib/queryClient";
+import { buildClinicianSynopsis } from "@shared/deterministicSynopsis";
+import { ClinicianHeader } from "./clinician/ClinicianHeader";
+import { ClinicianSynopsis } from "./clinician/ClinicianSynopsis";
+import { DataQualityPanel } from "./clinician/DataQualityPanel";
+import { PhaseEventTable } from "./clinician/PhaseEventTable";
+import { EwingRatiosTable } from "./clinician/EwingRatiosTable";
+import { PhaseFindings } from "./clinician/PhaseFindings";
+import { OverallImpression } from "./clinician/OverallImpression";
+import { TherapyOptions } from "./clinician/TherapyOptions";
+import { ContraindicationsPanel } from "./clinician/ContraindicationsPanel";
+import { FollowUpPanel } from "./clinician/FollowUpPanel";
+import { ColomboReferences } from "./clinician/ColomboReferences";
+import { MultiParameterGraphical } from "./clinician/MultiParameterGraphical";
+import { RestingBaselinePanel } from "./clinician/RestingBaselinePanel";
+import { EcgRhythmStrip } from "./clinician/EcgRhythmStrip";
+import { CollapsibleSection } from "./clinician/CollapsibleSection";
+import { IndicationsPanel } from "./clinician/IndicationsPanel";
+import { WhyConclusionsPanel } from "./clinician/WhyConclusionsPanel";
+
+interface ClinicianPortalProps {
+  report: ANSReport;
+  ansStudy?: AnsStudy;
+}
+
+export function ClinicianPortalLive({ report, ansStudy }: ClinicianPortalProps) {
+  // Clinician synopsis is built deterministically from the report's phase metrics
+  // and Colombo patterns, so it renders instantly with no network dependency.
+  // Optional AI enrichment (below) only ever swaps in richer prose on success.
+  const [synopsis, setSynopsis] = useState<string>(
+    () => report.clinicianSynopsis ?? buildClinicianSynopsis(report),
+  );
+
+  // Best-effort AI enrichment. Failures are swallowed so the deterministic
+  // synopsis is never replaced by a "Connection error".
+  const enrichSynopsis = async () => {
+    try {
+      const res = await apiRequest("POST", "/api/synopsis", { report });
+      const data = await res.json();
+      if (data.success && data.clinicianSynopsis) {
+        setSynopsis(data.clinicianSynopsis);
+      }
+    } catch {
+      // Keep the deterministic synopsis on any failure.
+    }
+  };
+
+  useEffect(() => {
+    if (!report.clinicianSynopsis) {
+      enrichSynopsis();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="space-y-4 pb-16" data-testid="clinician-portal">
+      <ClinicianHeader report={report} />
+
+      <ClinicianSynopsis
+        synopsis={synopsis}
+        loading={false}
+        error={null}
+        onRetry={enrichSynopsis}
+      />
+
+      {/* PR2 — Data Quality & Confidence panel slots in above clinical content. */}
+      {report.diagnosticSummary && (
+        <DataQualityPanel
+          summary={report.diagnosticSummary}
+          ansStudy={ansStudy}
+        />
+      )}
+
+      {/* PR5 — "Why this conclusion?" expanders under each finding / phenotype. */}
+      {report.diagnosticSummary && (
+        <WhyConclusionsPanel
+          summary={report.diagnosticSummary}
+          ansStudy={ansStudy}
+        />
+      )}
+
+      <RestingBaselinePanel report={report} />
+
+      <IndicationsPanel report={report} />
+
+      <MultiParameterGraphical report={report} />
+
+      <EcgRhythmStrip report={report} />
+
+      <PhaseEventTable phaseEvents={report.phaseEvents} />
+
+      <CollapsibleSection
+        title="Ewing Autonomic Ratios (Time-Domain)"
+        subtitle="Classical E/I, Valsalva, 30:15 ratios with normal ranges"
+        testId="toggle-ewing"
+      >
+        <EwingRatiosTable
+          ratios={report.ratios}
+          cardiovagalScore={report.diagnosticSummary?.cardiovagalScore}
+        />
+      </CollapsibleSection>
+
+      <PhaseFindings phaseFindings={report.phaseFindings} />
+
+      <OverallImpression impression={report.overallImpression} />
+
+      <TherapyOptions recommendations={report.therapyRecommendations} />
+
+      {report.contraindications.length > 0 && (
+        <ContraindicationsPanel contraindications={report.contraindications} />
+      )}
+
+      <FollowUpPanel followUp={report.followUp} />
+
+      <ColomboReferences />
+    </div>
+  );
+}

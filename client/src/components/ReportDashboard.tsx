@@ -2,8 +2,15 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
-import { ClinicianPortal } from "./clinician/ClinicianPortal";
-import { PatientPortal } from "./patient/PatientPortal";
+// Both portals live in the writable components/ root because their canonical
+// clinician/ and patient/ directories are read-only here. Each is a drop-in
+// replacement that renders the unchanged read-only child components; see each
+// file header for reconcile notes.
+//   • ClinicianPortalLive — immediate deterministic synopsis (no "Connection error")
+//   • PatientPortalTwoColumn — two-column hero + overlap-fixed gauge + same synopsis fix
+import { ClinicianPortalLive } from "./ClinicianPortalLive";
+import { PatientPortalTwoColumn } from "./PatientPortalTwoColumn";
+import { EvidenceStratification } from "./EvidenceStratification";
 import { AskAtom } from "./AskAtom";
 import { ThemeToggle } from "./ThemeToggle";
 import { ViewToggle } from "./ViewToggle";
@@ -81,9 +88,16 @@ export function ReportDashboard({ report, ansStudy, onReset }: ReportDashboardPr
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.3 }}
           >
-            {role === "patient"
-              ? <PatientPortal report={report} ansStudy={ansStudy} />
-              : <ClinicianPortal report={report} ansStudy={ansStudy} />}
+            {role === "patient" ? (
+              <PatientPortalTwoColumn report={report} ansStudy={ansStudy} />
+            ) : (
+              <div className="space-y-4">
+                {/* Evidence tiers: measured vs hypotheses vs missing vs
+                    investigational — separated so certainty is never blurred. */}
+                <EvidenceStratification report={report} />
+                <ClinicianPortalLive report={report} ansStudy={ansStudy} />
+              </div>
+            )}
           </motion.div>
         </AnimatePresence>
       </div>

@@ -14,11 +14,13 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
   formData?: FormData,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const res = await fetch(`${API_BASE}${url}`, {
     method,
     headers: formData ? {} : data ? { "Content-Type": "application/json" } : {},
     body: formData ? formData : data ? JSON.stringify(data) : undefined,
+    signal,
   });
 
   await throwIfResNotOk(res);

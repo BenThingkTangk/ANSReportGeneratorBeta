@@ -10,6 +10,7 @@
     }
   },
   "rewrites": [
+    { "source": "/api/admin/gateway", "destination": "/api/admin-gateway" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],

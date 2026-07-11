@@ -5,6 +5,7 @@
  */
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { VercelRequest } from "@vercel/node";
+import { requireGateway } from "./_adminGateway.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -100,6 +101,12 @@ export async function requireRole(
   let user: { id: string; email?: string } | null = null;
 
   if ("headers" in reqOrSupabase) {
+    // Perimeter check FIRST: when the env-configured admin gateway is enabled,
+    // every request must carry a valid gateway session cookie before we even
+    // look at the Supabase identity. No-op when the gateway is unconfigured, so
+    // magic-link-only deployments are unaffected. This sits IN FRONT of Supabase
+    // RLS — it never replaces it.
+    requireGateway(reqOrSupabase as VercelRequest);
     user = (await getAuthUser(reqOrSupabase as VercelRequest)) as any;
   } else {
     const { data } = await (reqOrSupabase as SupabaseClient).auth.getUser();
