@@ -70,14 +70,70 @@ function isAbortError(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError";
 }
 
+/**
+ * Strip internal provenance markers that can leak from the grounding prompt into
+ * a model answer. The server annotates findings with source-field traces like
+ * "; provenance: baseline.heartRate, standOrTilt.bp.sbp" (and inside brackets
+ * such as "[cardiovagal/severe, confidence High, provenance: …]"). Those dotted
+ * field paths are internal plumbing and must never surface to patients or
+ * clinicians. We remove the labelled marker plus its comma-separated dotted-path
+ * list, leaving the surrounding prose (and sentence punctuation) intact. We also
+ * strip the internal section headers "[DATA ASSESSABILITY & PROVENANCE]" and
+ * "[LEGACY FINDINGS]" (case-insensitively, and even when back-to-back), which are
+ * grounding-prompt scaffolding rather than clinical content.
+ */
+function stripProvenanceMarkers(text: string): string {
+  return text
+    .replace(
+      /[ \t]*[;,]?[ \t]*provenance:[ \t]*[\w-]+(?:\.[\w-]+)*(?:[ \t]*,[ \t]*[\w-]+(?:\.[\w-]+)*)*/gi,
+      "",
+    )
+    // Drop internal section labels; the leading [ \t]* lets adjacent labels
+    // collapse cleanly without leaving a doubled space behind.
+    .replace(
+      /[ \t]*\[(?:DATA ASSESSABILITY & PROVENANCE|LEGACY FINDINGS)\]/gi,
+      "",
+    )
+    .replace(/\[[ \t]*\]/g, "") // drop any bracket left empty by the removal
+    .replace(/[ \t]+$/gm, ""); // trim trailing horizontal whitespace per line
+}
+
+/**
+ * LFa/RFa are genuine readings only when finite and strictly positive — the
+ * deterministic pipeline zero-fills missing beat-to-beat data, so 0 / null / NaN
+ * mean "not assessed", never a real measurement (mirrors the server's assessedNum).
+ */
+function isAssessedValue(v: number | null | undefined): boolean {
+  return typeof v === "number" && Number.isFinite(v) && v > 0;
+}
+
+/** True only when at least one phase carries a real LFa AND a real RFa reading. */
+function lfaRfaAssessed(report: ANSReport): boolean {
+  const phases = report.phaseEvents ?? [];
+  return phases.some(p => isAssessedValue(p.LFa)) && phases.some(p => isAssessedValue(p.RFa));
+}
+
+/** CAN-family indication (codes CAN / CAN_HIGH_SB / CAN_LOW_SB, or a CAN name). */
+function isCanIndication(ind: { code?: string; name?: string } | undefined): boolean {
+  if (!ind) return false;
+  const code = (ind.code ?? "").toUpperCase();
+  const name = (ind.name ?? "").toUpperCase();
+  return code.startsWith("CAN") || name.includes("CARDIOVASCULAR AUTONOMIC NEUROPATHY") || /\bCAN\b/.test(name);
+}
+
 /** Suggest up to 3 follow-ups, role-aware and lightly grounded in the report. */
 function buildFollowUps(mode: ViewerRole, report: ANSReport, asked: string[]): string[] {
   const derived: string[] = [];
-  const top = report.indications?.[0]?.name;
-  if (top) {
+  // CAN and Critical rest on genuine LFa/RFa spectral data. When those metrics
+  // were never assessed (zero-filled), suppress follow-up chips that would steer
+  // the conversation toward a classification the data can't support.
+  const spectralAssessed = lfaRfaAssessed(report);
+  const topIndication = report.indications?.[0];
+  const top = topIndication?.name;
+  if (top && !(isCanIndication(topIndication) && !spectralAssessed)) {
     derived.push(mode === "clinician" ? `Management approach for ${top}?` : `Tell me more about ${top}.`);
   }
-  if (mode === "patient" && report.wellnessTier) {
+  if (mode === "patient" && report.wellnessTier && !(report.wellnessTier === "Critical" && !spectralAssessed)) {
     derived.push(`Why is my score "${report.wellnessTier}"?`);
   }
   const pool = mode === "clinician" ? CLINICIAN_FOLLOWUPS : PATIENT_FOLLOWUPS;
@@ -204,7 +260,7 @@ export function AskAtom({ report, viewerRole }: AskAtomProps) {
       if (!data?.success || !data?.message) throw new Error(data?.error || "No response");
       const citations = dedupeCitations([...(data.citations ?? []), ...(data.webCitations ?? [])]);
       setLoading(false);
-      startReveal(String(data.message), citations);
+      startReveal(stripProvenanceMarkers(String(data.message)), citations);
     } catch (e) {
       abortRef.current = null;
       setLoading(false);
