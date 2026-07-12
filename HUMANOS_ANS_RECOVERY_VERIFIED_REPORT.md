@@ -275,3 +275,70 @@ completed **success**. All required PR #4 checks green:
 | Vercel – humanos-ans-diagnostic | ✅ pass |
 
 PR #4 remains OPEN (not merged, not deployed).
+
+---
+
+## 10. Hotfix PR #5 — honest patient copy + Ewing cards + vendor override
+
+**Branch:** `hotfix/patient-copy-ewing-provenance` (from `main` merge commit
+`15bee41`) · **PR:** [#5](https://github.com/BenThingkTangk/ANSReportGeneratorBeta/pull/5)
+→ base `main` (OPEN; not merged, not deployed) · **commit `c4d0013`**.
+
+**Trigger (live production QA on the real Jill `.ans`).** Parsing was proven
+correct — HR baseline 56 / deep-breathing 55 / Valsalva 57 / stand 64; RMSSD
+51.8; SDNN 60.1; E/I 1.21, Valsalva 1.43, 30:15 1.40 — but patient mode was
+**materially misleading**: it read *"did not capture enough heart-rhythm
+signal"* and never surfaced the three normal Ewing ratios. The true limitation
+is only that the raw `.ans` export lacks the vendor's proprietary **LFa/RFa/SB
+spectral aggregates**.
+
+**Fixes.**
+- **Measured-vs-vendor-spectral copy** (`shared/deterministicSynopsis.ts`,
+  `PatientPortalTwoColumn`, `DiagnosisExplainer`): patient copy now states the
+  exact distinction — ECG/time-domain metrics + Ewing ratios were *measured*;
+  the vendor spectral branch-balance is *not in the raw `.ans`* and reads
+  "Not assessed" unless the paired vendor PDF is supplied — and quotes all three
+  ratios with reference ranges.
+- **Patient Ewing cards** (`MeasuredResultsCards`): E/I / Valsalva / 30:15 with
+  value, normal range, status, and plain-language meaning + one concise
+  provenance note.
+- **Disclaimer walls removed** from patient summaries ("not medical advice",
+  "not a diagnosis on their own", "insufficient data", trailing
+  clinical-correlation line); provenance/uncertainty kept; clinician depth
+  unchanged.
+- **Paired vendor-PDF override**: `generateColomboReport(data, vendorMetrics?)`
+  injects verbatim LFa/RFa/SB + BP with `vendor_reported` provenance before the
+  spectral gate → `spectralAvailable` flips true → full Colombo pathway. Wired
+  `VendorPdfCard` → dashboard → `x-vendor-metrics` header on `/api/upload`.
+- **Admin login diagnostic**: explicit "gateway not configured" (and
+  probe-failed) banners with exact `ADMIN_GATEWAY_*` / `ADMIN_SESSION_SECRET`
+  Vercel var names; magic link kept as optional secondary fallback. New
+  `docs/ADMIN_GATEWAY_SETUP.md`.
+
+**Regression tests (new).**
+- `api/_ans/__tests__/patientCopyProvenance.spec.ts` — asserts Jill patient copy
+  contains `1.21` / `1.43` / `1.40` and "spectral aggregates" + ".ans export";
+  does **not** contain "not enough heart-rhythm" / "not medical advice"; vendor
+  override unlocks the pathway; no fabrication when vendor values absent; extra
+  real-Jill check when present.
+- `client/src/__tests__/patientMeasuredResults.spec.tsx` — the three Ewing cards
+  render with values + the provenance note, and the misleading copy is absent.
+
+**Verification.** tsc 0 · **164 server** + **31 client** tests · eval **15/15**
+gate PASSED (0 unsafe overclaims) · build 3368 modules · Playwright **21/21** on
+the real Jill file, desktop 1280×900 + mobile 390×844, 0 uncaught page errors.
+Patient-view screenshots confirmed the corrected caption and the three Ewing
+cards. **No PHI screenshots committed** (`qa/jill-fidelity/*` untracked).
+
+**CI.** Run
+[29197892283](https://github.com/BenThingkTangk/ANSReportGeneratorBeta/actions/runs/29197892283)
+→ **success**. All required PR #5 checks green:
+
+| Check | Result |
+|-------|--------|
+| Parser + scoring regression | ✅ pass |
+| Vercel Preview Comments | ✅ pass |
+| Vercel – ans-report-generator-beta | ✅ pass |
+| Vercel – humanos-ans-diagnostic | ✅ pass |
+
+PR #5 remains OPEN (not merged, not deployed).
