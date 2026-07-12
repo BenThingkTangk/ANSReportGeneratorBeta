@@ -155,8 +155,15 @@ export function buildPatientSynopsis(report: Partial<ANSReport>): string {
   // reports a 0/0 split (and a score-derived tier such as "Balanced"/"Critical");
   // quoting either would be fabricated, so we say plainly that it was not assessed.
   if (balanceAssessed) {
-    const para = Math.round(ab!.parasympathetic);
-    const symp = Math.round(ab!.sympathetic);
+    // autonomicBalance.parasympathetic/.sympathetic carry RAW spectral power
+    // (RFa / LFa in bpm²), NOT percentages. Presenting the rounded raw values as
+    // "%" produced the garbled "about 5% vs 1%" copy (S2-4). Normalize to a
+    // share-of-total the same way the hero Venn does so both agree.
+    const rawPara = ab!.parasympathetic;
+    const rawSymp = ab!.sympathetic;
+    const total = rawPara + rawSymp || 1;
+    const para = Math.round((rawPara / total) * 100);
+    const symp = Math.max(0, Math.min(100, 100 - para));
     const lead =
       para > symp + 10
         ? "your calming, rest-and-digest system is currently the louder voice"

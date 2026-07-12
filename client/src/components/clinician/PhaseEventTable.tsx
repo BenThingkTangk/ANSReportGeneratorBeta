@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import type { PhaseMetrics } from "@shared/schema";
+import { COLOMBO_NORMS } from "@shared/colomboNorms";
 
 interface PhaseEventTableProps {
   phaseEvents: PhaseMetrics[];
@@ -14,12 +15,12 @@ const PHASE_LABELS = [
   { phase: "Stand-F",         short: "Stand F" },
 ];
 
-// Colombo norms for color-coding
+// Colombo norms for color-coding — single source of truth (shared/colomboNorms).
 const NORMS = {
-  FRF:  { lo: 0.15, hi: 0.40 },
-  LFa:  { lo: 0.0,  hi: 8.0  },
-  RFa:  { lo: 0.5,  hi: 6.0  },
-  SB:   { lo: 0.4,  hi: 3.0  },
+  FRF: { lo: COLOMBO_NORMS.FRF.lo, hi: COLOMBO_NORMS.FRF.hi },
+  LFa: { lo: COLOMBO_NORMS.LFa.lo, hi: COLOMBO_NORMS.LFa.hi },
+  RFa: { lo: COLOMBO_NORMS.RFa.lo, hi: COLOMBO_NORMS.RFa.hi },
+  SB: { lo: COLOMBO_NORMS.SB.lo, hi: COLOMBO_NORMS.SB.hi },
 };
 
 function cellColor(val: number, norm: { lo: number; hi: number }): string {

@@ -1,23 +1,24 @@
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
+import { COLOMBO_NORMS, classifySpectral, type SpectralClass } from "@shared/colomboNorms";
 
 interface RestingBaselinePanelProps {
   report: ANSReport;
 }
 
+// Norm bands come from the single source of truth (shared/colomboNorms). Do NOT
+// hardcode band edges here — they must match every other report surface.
 const NORMS = {
-  FRF: { lo: 0.15, hi: 0.40, label: "Hz" },
-  LFa: { lo: 0.0, hi: 8.0, label: "bpm²" },
-  RFa: { lo: 0.5, hi: 6.0, label: "bpm²" },
-  SB:  { lo: 0.4, hi: 3.0, label: "ratio" },
+  FRF: { ...COLOMBO_NORMS.FRF, label: "Hz" },
+  LFa: { ...COLOMBO_NORMS.LFa, label: "bpm²" },
+  RFa: { ...COLOMBO_NORMS.RFa, label: "bpm²" },
+  SB: { ...COLOMBO_NORMS.SB, label: "ratio" },
 };
 
-type Cls = "low" | "normal" | "high";
+type Cls = SpectralClass;
 
 function classify(v: number, n: { lo: number; hi: number }): Cls {
-  if (v < n.lo) return "low";
-  if (v > n.hi) return "high";
-  return "normal";
+  return classifySpectral(v, n);
 }
 
 function classColor(c: Cls): string {
@@ -37,7 +38,7 @@ function classLabel(c: Cls): string {
  * (LFa, RFa, sympathovagal balance LFa/RFa, FRF) with a clear in/out-of-norm
  * indicator. Sympathovagal balance is added per Colombo's request because it
  * is the single most diagnostic resting parameter. FRF is highlighted with
- * its numeric value whenever it falls outside the 0.15–0.40 Hz band.
+ * its numeric value whenever it falls outside the Colombo 0.09–0.15 Hz band.
  */
 export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
   const A = report.phaseEvents?.[0];

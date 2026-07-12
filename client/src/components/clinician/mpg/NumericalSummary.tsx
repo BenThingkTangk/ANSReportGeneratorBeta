@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import type { ANSReport, PhaseMetrics } from "@shared/schema";
 import { ColomboExplainer } from "../ColomboExplainer";
+import { COLOMBO_NORMS } from "@shared/colomboNorms";
 
 /**
  * Numerical Summary table — mirrors the bottom table on page 2 of the
@@ -17,11 +18,12 @@ const PHASES: { key: PhaseMetrics["phase"]; short: string; clock?: string }[] = 
   { key: "Stand-F",         short: "Stand F" },
 ];
 
+// Norm bands — single source of truth (shared/colomboNorms).
 const NORMS = {
-  FRF: { lo: 0.09, hi: 0.40 },
-  LFa: { lo: 0.0,  hi: 8.0  },
-  RFa: { lo: 0.5,  hi: 6.0  },
-  SB:  { lo: 0.4,  hi: 3.0  },
+  FRF: { lo: COLOMBO_NORMS.FRF.lo, hi: COLOMBO_NORMS.FRF.hi },
+  LFa: { lo: COLOMBO_NORMS.LFa.lo, hi: COLOMBO_NORMS.LFa.hi },
+  RFa: { lo: COLOMBO_NORMS.RFa.lo, hi: COLOMBO_NORMS.RFa.hi },
+  SB: { lo: COLOMBO_NORMS.SB.lo, hi: COLOMBO_NORMS.SB.hi },
 };
 
 function cellColor(val: number | undefined, norm: { lo: number; hi: number }): string {

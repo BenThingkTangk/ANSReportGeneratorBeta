@@ -12,6 +12,7 @@ import { BodyHeatmap } from "./BodyHeatmap";
 import { SupplementsPanel } from "./SupplementsPanel";
 import { TreatmentsPanel } from "./TreatmentsPanel";
 import { NextTestCard } from "./NextTestCard";
+import { sbZoneLabel } from "@shared/colomboNorms";
 
 interface PatientPortalProps {
   report: ANSReport;
@@ -41,6 +42,14 @@ export function PatientPortal({ report }: PatientPortalProps) {
   const lfHf =
     baselinePhase?.SB ??
     (baselinePhase && baselinePhase.RFa > 0 ? baselinePhase.LFa / baselinePhase.RFa : 0);
+  // Hero balance chip reflects the measured sympathovagal balance (SB) via the
+  // fixed Colombo cutoffs — NOT the score-derived wellness tier. This keeps the
+  // patient hero from saying "Balanced" when the clinician view flags an
+  // imbalance (S2-3). Falls back to the tier only when SB is unavailable.
+  const balanceChipLabel =
+    baselinePhase && Number.isFinite(baselinePhase.SB)
+      ? sbZoneLabel(baselinePhase.SB)
+      : tier;
 
   const fetchSynopsis = async () => {
     setSynopsisLoading(true);
@@ -158,7 +167,7 @@ export function PatientPortal({ report }: PatientPortalProps) {
               hrvRmssdMs={rmssd}
               hrvSdnnMs={sdnn}
               lfHfRatio={lfHf}
-              balanceLabel={tier}
+              balanceLabel={balanceChipLabel}
             />
             {ab.interpretation && (
               <p className="text-sm text-white/70 leading-relaxed mt-4 text-center max-w-xl mx-auto">
