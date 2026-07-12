@@ -44,19 +44,26 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
   const A = report.phaseEvents?.[0];
   if (!A) return null;
 
-  const sb = A.RFa > 0 ? A.LFa / A.RFa : 0;
+  // Spectral aggregates (LFa/RFa/SB/FRF) are null when not reproducible from a
+  // raw ECG-only recording. Never coerce null to a number or call toFixed on it
+  // — render "Not assessed" and never fabricate a 0 balance.
+  const spectralOk = report.spectralAvailable !== false;
+  const sb =
+    spectralOk && typeof A.LFa === "number" && typeof A.RFa === "number" && A.RFa > 0
+      ? A.LFa / A.RFa
+      : null;
 
   const cards: {
     label: string;
-    value: number;
+    value: number | null;
     unit: string;
     norm: { lo: number; hi: number };
     explainer?: string;
   }[] = [
-    { label: "LFa (Sympathetic)", value: A.LFa, unit: "bpm²", norm: NORMS.LFa, explainer: "Low-frequency wavelet power at rest" },
-    { label: "RFa (Parasympathetic)", value: A.RFa, unit: "bpm²", norm: NORMS.RFa, explainer: "Respiratory-frequency wavelet power at rest" },
+    { label: "LFa (Sympathetic)", value: spectralOk ? A.LFa : null, unit: "bpm²", norm: NORMS.LFa, explainer: "Low-frequency wavelet power at rest" },
+    { label: "RFa (Parasympathetic)", value: spectralOk ? A.RFa : null, unit: "bpm²", norm: NORMS.RFa, explainer: "Respiratory-frequency wavelet power at rest" },
     { label: "Sympathovagal Balance (LFa/RFa)", value: sb, unit: "", norm: NORMS.SB, explainer: "Resting LFa/RFa balance ratio" },
-    { label: "FRF (Fundamental Respiratory Freq.)", value: A.FRF, unit: "Hz", norm: NORMS.FRF, explainer: "Patient's natural respiratory frequency at rest" },
+    { label: "FRF (Fundamental Respiratory Freq.)", value: spectralOk ? A.FRF : null, unit: "Hz", norm: NORMS.FRF, explainer: "Patient's natural respiratory frequency at rest" },
   ];
 
   return (
@@ -78,9 +85,10 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {cards.map((c) => {
-          const cls = classify(c.value, c.norm);
-          const color = classColor(cls);
-          const isOut = cls !== "normal";
+          const hasValue = typeof c.value === "number" && Number.isFinite(c.value);
+          const cls: Cls | null = hasValue ? classify(c.value as number, c.norm) : null;
+          const color = cls ? classColor(cls) : "hsl(var(--muted-foreground))";
+          const isOut = cls !== null && cls !== "normal";
           return (
             <div
               key={c.label}
@@ -95,12 +103,12 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
               </div>
               <div className="mt-1 flex items-baseline gap-1.5">
                 <span className="text-xl font-semibold tabular-nums ps-text-mono" style={{ color }}>
-                  {c.value.toFixed(2)}
+                  {hasValue ? (c.value as number).toFixed(2) : "—"}
                 </span>
-                {c.unit && <span className="text-[10px] text-muted-foreground/70 ps-text-mono">{c.unit}</span>}
+                {hasValue && c.unit && <span className="text-[10px] text-muted-foreground/70 ps-text-mono">{c.unit}</span>}
               </div>
               <div className="mt-1 text-[10px]" style={{ color }}>
-                {classLabel(cls)} · norm {c.norm.lo}–{c.norm.hi}
+                {cls ? `${classLabel(cls)} · norm ${c.norm.lo}–${c.norm.hi}` : "Not assessed"}
               </div>
               {isOut && c.explainer && (
                 <div className="mt-1 text-[10px] text-muted-foreground/70 leading-snug">

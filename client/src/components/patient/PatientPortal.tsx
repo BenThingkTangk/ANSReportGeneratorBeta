@@ -172,6 +172,7 @@ export function PatientPortal({ report }: PatientPortalProps) {
             <NervousSystemBody
               parasympathetic={visPara}
               sympathetic={visSymp}
+              available={spectralAvailable}
             />
           </div>
           <div className="mt-4 max-w-2xl mx-auto">

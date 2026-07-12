@@ -18,8 +18,14 @@ import * as THREE from "three";
  */
 
 interface Props {
-  sympathetic: number;        // 0..100
-  parasympathetic: number;    // 0..100
+  sympathetic: number;        // 0..100 (decorative animation input)
+  parasympathetic: number;    // 0..100 (decorative animation input)
+  /**
+   * When false, the spectral sympathetic/parasympathetic split is NOT assessed
+   * for this recording. The 3D helix still animates (neutral), but the legend
+   * must show "Not assessed" instead of fabricated numeric percentages.
+   */
+  available?: boolean;
   hotspots?: string[];        // ignored — kept for API compatibility
 }
 
@@ -443,7 +449,7 @@ function Scene({
 
 // ---- Public component ----------------------------------------------------
 
-export function NervousSystemBody({ sympathetic, parasympathetic }: Props) {
+export function NervousSystemBody({ sympathetic, parasympathetic, available = true }: Props) {
   const [selected, setSelected] = useState<BranchKey | null>(null);
   const [hovered, setHovered] = useState<BranchKey | null>(null);
   const [autoRotate, setAutoRotate] = useState(true);
@@ -498,17 +504,27 @@ export function NervousSystemBody({ sympathetic, parasympathetic }: Props) {
       )}
 
       {/* Legend */}
-      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-3 text-[10px] font-medium pointer-events-none">
-        <div className="flex items-center gap-1.5" style={{ color: "#ff8c5e" }}>
-          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#ff6b35", boxShadow: "0 0 8px #ff6b35" }} />
-          Sympathetic {Math.round(symp)}
+      {available ? (
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-3 text-[10px] font-medium pointer-events-none">
+          <div className="flex items-center gap-1.5" style={{ color: "#ff8c5e" }}>
+            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#ff6b35", boxShadow: "0 0 8px #ff6b35" }} />
+            Sympathetic {Math.round(symp)}
+          </div>
+          <span className="text-white/30">·</span>
+          <div className="flex items-center gap-1.5" style={{ color: "#5ef0ff" }}>
+            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#00e5ff", boxShadow: "0 0 8px #00e5ff" }} />
+            Parasympathetic {Math.round(para)}
+          </div>
         </div>
-        <span className="text-white/30">·</span>
-        <div className="flex items-center gap-1.5" style={{ color: "#5ef0ff" }}>
-          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: "#00e5ff", boxShadow: "0 0 8px #00e5ff" }} />
-          Parasympathetic {Math.round(para)}
+      ) : (
+        <div
+          className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-2 text-[10px] font-medium text-white/60 pointer-events-none"
+          data-testid="nsb-not-assessed"
+        >
+          <span>Sympathetic / parasympathetic balance:</span>
+          <span className="text-white/80">Not assessed</span>
         </div>
-      </div>
+      )}
 
       {/* Hint */}
       <div className="absolute top-2 right-3 text-[10px] text-white/40 pointer-events-none">

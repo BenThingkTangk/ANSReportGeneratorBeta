@@ -14,6 +14,7 @@ import { EvidenceStratification } from "./EvidenceStratification";
 import { AskAtom } from "./AskAtom";
 import { ThemeToggle } from "./ThemeToggle";
 import { ViewToggle } from "./ViewToggle";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { ArrowLeft } from "lucide-react";
 import { PhysioPSPulseNodeLogo } from "./brand/PhysioPSPulseNodeLogo";
 
@@ -89,14 +90,18 @@ export function ReportDashboard({ report, ansStudy, onReset }: ReportDashboardPr
             transition={{ duration: 0.3 }}
           >
             {role === "patient" ? (
-              <PatientPortalTwoColumn report={report} ansStudy={ansStudy} />
+              <ErrorBoundary label="Patient view">
+                <PatientPortalTwoColumn report={report} ansStudy={ansStudy} />
+              </ErrorBoundary>
             ) : (
-              <div className="space-y-4">
-                {/* Evidence tiers: measured vs hypotheses vs missing vs
-                    investigational — separated so certainty is never blurred. */}
-                <EvidenceStratification report={report} />
-                <ClinicianPortalLive report={report} ansStudy={ansStudy} />
-              </div>
+              <ErrorBoundary label="Clinician view">
+                <div className="space-y-4">
+                  {/* Evidence tiers: measured vs hypotheses vs missing vs
+                      investigational — separated so certainty is never blurred. */}
+                  <EvidenceStratification report={report} />
+                  <ClinicianPortalLive report={report} ansStudy={ansStudy} />
+                </div>
+              </ErrorBoundary>
             )}
           </motion.div>
         </AnimatePresence>

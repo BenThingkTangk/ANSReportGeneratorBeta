@@ -196,9 +196,14 @@ export function DiagnosisExplainer({ report }: DiagnosisExplainerProps) {
         <div className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center" style={{ background: "hsl(140 60% 50% / 0.15)" }}>
           <ShieldCheck className="w-6 h-6" style={{ color: "hsl(140 60% 65%)" }} />
         </div>
-        <h3 className="text-base font-semibold mb-1">No major findings detected</h3>
+        <h3 className="text-base font-semibold mb-1">
+          No abnormalities detected among measured signals; other domains were not assessed
+        </h3>
         <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-          Your autonomic nervous system is performing within normal ranges across all measured patterns.
+          The signals this recording could measure were within normal ranges.
+          Some autonomic domains depend on measures not captured by this file and
+          were not assessed — this is not a statement of full normality. A
+          clinician can review the signed vendor report for a complete picture.
         </p>
       </motion.div>
     );

@@ -29,6 +29,7 @@ import { EcgRhythmStrip } from "./clinician/EcgRhythmStrip";
 import { CollapsibleSection } from "./clinician/CollapsibleSection";
 import { IndicationsPanel } from "./clinician/IndicationsPanel";
 import { WhyConclusionsPanel } from "./clinician/WhyConclusionsPanel";
+import { ErrorBoundary } from "./ErrorBoundary";
 
 interface ClinicianPortalProps {
   report: ANSReport;
@@ -91,15 +92,25 @@ export function ClinicianPortalLive({ report, ansStudy }: ClinicianPortalProps) 
         />
       )}
 
-      <RestingBaselinePanel report={report} />
+      <ErrorBoundary label="Resting baseline">
+        <RestingBaselinePanel report={report} />
+      </ErrorBoundary>
 
-      <IndicationsPanel report={report} />
+      <ErrorBoundary label="Indications">
+        <IndicationsPanel report={report} />
+      </ErrorBoundary>
 
-      <MultiParameterGraphical report={report} />
+      <ErrorBoundary label="Multi-parameter graphical">
+        <MultiParameterGraphical report={report} />
+      </ErrorBoundary>
 
-      <EcgRhythmStrip report={report} />
+      <ErrorBoundary label="ECG rhythm strip">
+        <EcgRhythmStrip report={report} />
+      </ErrorBoundary>
 
-      <PhaseEventTable phaseEvents={report.phaseEvents} />
+      <ErrorBoundary label="Phase event data">
+        <PhaseEventTable phaseEvents={report.phaseEvents} />
+      </ErrorBoundary>
 
       <CollapsibleSection
         title="Ewing Autonomic Ratios (Time-Domain)"

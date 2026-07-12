@@ -23,12 +23,17 @@ function impactGlow(impact: number): string {
   return "hsl(0 70% 52% / 0.5)";
 }
 
-function impactLabel(impact: number): string {
-  if (impact >= 40)  return "Excellent";
-  if (impact >= 15)  return "Good";
-  if (impact >= -14) return "Neutral";
-  if (impact >= -39) return "Mildly Affected";
-  return "Significantly Affected";
+/**
+ * Qualitative status shown to patients — NEVER a raw number. Body-system impact
+ * is a screening-level, indirect observation, so we surface a plain word rather
+ * than a pseudo-precise score. Domains that depend on measures we don't have are
+ * "Not assessed"; supported domains with no adverse signal read "No signal
+ * detected"; supported domains with an adverse signal read "Observed".
+ */
+function qualitativeStatus(d: BodySystemImpact): string {
+  if (d.assessed === false) return "Not assessed";
+  if (d.impact <= -10) return "Observed";
+  return "No signal detected";
 }
 
 // Declared BEFORE `REGIONS` because the `immune`/`musculoskeletal` `hits` JSX
@@ -189,7 +194,6 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
     }
   };
 
-  const sign = (n: number) => (n > 0 ? "+" : "");
 
   return (
     <motion.div
@@ -242,7 +246,7 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   role="button"
                   tabIndex={0}
                   aria-pressed={isSelected}
-                  aria-label={`${imp.label}: ${imp.assessed === false ? "not assessed" : `impact ${sign(imp.impact)}${imp.impact}, ${impactLabel(imp.impact)}`}. ${isSelected ? "Selected. Activate to hide details." : "Activate for details."}`}
+                  aria-label={`${imp.system}: ${qualitativeStatus(imp)}. ${isSelected ? "Selected. Activate to hide details." : "Activate for details."}`}
                   onClick={() => toggle(system)}
                   onKeyDown={(e) => onRegionKey(e, system)}
                   onFocus={() => setActive(system)}
@@ -253,7 +257,7 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   style={{ filter: `drop-shadow(0 0 6px ${impactGlow(imp.impact)})` }}
                   data-testid={`body-region-${system}`}
                 >
-                  <title>{imp.assessed === false ? `${imp.label} — Not assessed` : `${imp.label} — ${impactLabel(imp.impact)} (${sign(imp.impact)}${imp.impact})`}</title>
+                  <title>{`${imp.system} — ${qualitativeStatus(imp)}`}</title>
                   {def.organs(color)}
                   {/* Transparent hit area + focus/selection ring */}
                   <g
@@ -299,14 +303,18 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   {selectedImp.description}
                 </p>
                 <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-muted-foreground">Impact</span>
-                  {selectedImp.assessed === false ? (
-                    <span className="font-medium text-muted-foreground">Not assessed</span>
-                  ) : (
-                    <span className="font-medium tabular-nums" style={{ color: impactColor(selectedImp.impact) }}>
-                      {sign(selectedImp.impact)}{selectedImp.impact} — {impactLabel(selectedImp.impact)}
-                    </span>
-                  )}
+                  <span className="text-muted-foreground">Status</span>
+                  <span
+                    className="font-medium"
+                    style={{
+                      color:
+                        selectedImp.assessed === false
+                          ? "hsl(var(--muted-foreground))"
+                          : impactColor(selectedImp.impact),
+                    }}
+                  >
+                    {qualitativeStatus(selectedImp)}
+                  </span>
                 </div>
               </motion.div>
             )}
@@ -341,34 +349,29 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                 >
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground capitalize">{sys.system}</span>
-                    {sys.assessed === false ? (
-                      <span className="font-medium text-[11px] text-muted-foreground">Not assessed</span>
-                    ) : (
-                      <span className="font-medium tabular-nums text-[11px]" style={{ color: impactColor(sys.impact) }}>
-                        {sign(sys.impact)}{sys.impact}
-                      </span>
-                    )}
+                    <span
+                      className="font-medium text-[11px]"
+                      style={{
+                        color:
+                          sys.assessed === false
+                            ? "hsl(var(--muted-foreground))"
+                            : impactColor(sys.impact),
+                      }}
+                      data-testid={`body-status-${sys.system}`}
+                    >
+                      {qualitativeStatus(sys)}
+                    </span>
                   </div>
-                  {sys.assessed === false ? (
-                    <div className="w-full h-1.5 rounded-full bg-[hsl(210_12%_15%)] overflow-hidden opacity-40" />
-                  ) : (
-                    <div className="w-full h-1.5 rounded-full bg-[hsl(210_12%_15%)] overflow-hidden">
-                      <motion.div
-                        initial={prefersReducedMotion ? false : { width: 0 }}
-                        animate={{ width: `${Math.min(100, Math.abs(sys.impact))}%` }}
-                        transition={{ delay: prefersReducedMotion ? 0 : 0.2 + 0.05 * i, duration: prefersReducedMotion ? 0 : 0.8, ease: "easeOut" }}
-                        className="h-full rounded-full"
-                        style={{ background: impactColor(sys.impact) }}
-                      />
-                    </div>
-                  )}
                 </button>
               </motion.div>
             );
           })}
           {bodySystemImpact.length > 0 && (
             <p className="text-[10px] text-muted-foreground pt-1">
-              Select a region on the figure — or a row above — for details. Only measured systems are shown.
+              Select a region on the figure — or a row above — for details.
+              Findings are qualitative, screening-level observations; domains
+              that depend on measures not captured by this recording are shown
+              as “Not assessed.”
             </p>
           )}
         </div>
