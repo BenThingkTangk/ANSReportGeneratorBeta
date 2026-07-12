@@ -1,8 +1,8 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
-import { parseANSFile } from "./ansParser";
-import { generateANSReport } from "./ansAlgorithm";
+import { parseANSFile } from "./ansParser.js";
+import { generateANSReport } from "./ansAlgorithm.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 

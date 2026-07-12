@@ -18,3 +18,4 @@ build_output/
 fixtures/*.ans
 api/_ans/__tests__/smoke.mjs
 api/_ans/__tests__/adapter_smoke.mjs
+api/parse.ts.full

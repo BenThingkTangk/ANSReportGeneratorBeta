@@ -26,6 +26,7 @@ import { RatiosCard } from "./RatiosCard";
 import { SympParaCard } from "./SympParaCard";
 import { MissingDataCard } from "./MissingDataCard";
 import { ConflictingDataCard } from "./ConflictingDataCard";
+import { VendorPdfCard } from "./VendorPdfCard";
 
 interface Props {
   ansStudy: AnsStudy | null;
@@ -221,6 +222,18 @@ export function ParsedDataReview({
           summary={diagnosticSummary ?? undefined}
         />
         <ConflictingDataCard study={ansStudy} />
+      </div>
+
+      {/* Optional paired vendor-PDF ingestion (vendor_reported provenance) */}
+      <div className="mb-5 md:mb-6">
+        <VendorPdfCard
+          onIngested={(metrics) => {
+            // Vendor values are read verbatim and tagged vendor_reported by the
+            // server; expose them on the window for the report pipeline / QA to
+            // pick up. (Report generation reads these when present.)
+            (window as unknown as { __vendorReported?: unknown }).__vendorReported = metrics;
+          }}
+        />
       </div>
 
       {/* Footer hint */}

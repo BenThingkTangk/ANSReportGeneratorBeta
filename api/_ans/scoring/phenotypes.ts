@@ -12,7 +12,7 @@
  *     depend on phenotype matches and vice versa.
  */
 
-import type { AnsStudy } from "../../../shared/ansStudy";
+import type { AnsStudy, ProvField, FieldProvenance } from "../../../shared/ansStudy";
 import type {
   PhenotypeFlag,
   BlockedClaim,
@@ -31,6 +31,43 @@ function numericToConfidence(c: number): Confidence {
 function minConfidence(values: number[]): Confidence {
   if (values.length === 0) return "Low";
   return numericToConfidence(Math.min(...values));
+}
+
+/**
+ * Downgrade a phenotype's reported confidence one notch when source provenance
+ * is weak (filename/computed/missing) OR when any value used in the criterion
+ * is missing/null. Hard-cap at "Low" if any required input is null.
+ */
+function downgrade(c: Confidence): Confidence {
+  if (c === "High") return "Medium";
+  if (c === "Medium") return "Low";
+  return "Low";
+}
+
+function provenanceIsWeak(p: FieldProvenance | undefined): boolean {
+  if (!p) return true;
+  if (p.source === "missing" || p.source === "filename" || p.source === "computed") return true;
+  if ((p.confidence ?? 0) < 0.5) return true;
+  return false;
+}
+
+/**
+ * Strict confidence: caps at "Low" when ANY source field is null (missing),
+ * downgrades one notch when ANY provenance is weak.
+ */
+function strictConfidence(
+  base: Confidence,
+  fields: Array<ProvField<unknown> | undefined>,
+): Confidence {
+  // Hard cap: any missing required input → Low
+  for (const f of fields) {
+    if (!f || f.value === null || f.value === undefined) return "Low";
+  }
+  // Soft downgrade: any weak provenance → one notch lower
+  for (const f of fields) {
+    if (provenanceIsWeak(f!.provenance)) return downgrade(base);
+  }
+  return base;
 }
 
 export interface PhenotypeContext {
@@ -96,12 +133,20 @@ function detectOrthostaticHypotension(ctx: PhenotypeContext): PhenotypeFlag | Bl
       ? `Standing BP fell by ΔSBP=${sbpDelta?.toFixed(0)} / ΔDBP=${dbpDelta?.toFixed(0)} mmHg, meeting consensus criteria.`
       : `Standing BP changes (ΔSBP=${sbpDelta?.toFixed(0)} / ΔDBP=${dbpDelta?.toFixed(0)} mmHg) do not meet consensus thresholds.`,
     sourceFields: requiredFields,
-    confidence: minConfidence([
-      study.baseline.bp.sbp.provenance.confidence ?? 0,
-      study.standOrTilt.bp.sbp.provenance.confidence ?? 0,
-      study.baseline.bp.dbp.provenance.confidence ?? 0,
-      study.standOrTilt.bp.dbp.provenance.confidence ?? 0,
-    ]),
+    confidence: strictConfidence(
+      minConfidence([
+        study.baseline.bp.sbp.provenance.confidence ?? 0,
+        study.standOrTilt.bp.sbp.provenance.confidence ?? 0,
+        study.baseline.bp.dbp.provenance.confidence ?? 0,
+        study.standOrTilt.bp.dbp.provenance.confidence ?? 0,
+      ]),
+      [
+        study.baseline.bp.sbp,
+        study.standOrTilt.bp.sbp,
+        study.baseline.bp.dbp,
+        study.standOrTilt.bp.dbp,
+      ],
+    ),
   };
 }
 
@@ -150,10 +195,18 @@ function detectPotsLike(ctx: PhenotypeContext): PhenotypeFlag | BlockedClaim {
       "baseline.bp.sbp",
       "standOrTilt.bp.sbp",
     ],
-    confidence: minConfidence([
-      study.baseline.heartRate.provenance.confidence ?? 0,
-      study.standOrTilt.heartRate.provenance.confidence ?? 0,
-    ]),
+    confidence: strictConfidence(
+      minConfidence([
+        study.baseline.heartRate.provenance.confidence ?? 0,
+        study.standOrTilt.heartRate.provenance.confidence ?? 0,
+      ]),
+      [
+        study.baseline.heartRate,
+        study.standOrTilt.heartRate,
+        study.baseline.bp.sbp,
+        study.standOrTilt.bp.sbp,
+      ],
+    ),
   };
 }
 
@@ -183,7 +236,11 @@ function detectCardiovagalImpairment(ctx: PhenotypeContext): PhenotypeFlag | Blo
       ? `Cardiovagal domain graded ${sev}.`
       : "All assessed cardiovagal ratios within age-banded normal range.",
     sourceFields: ctx.cardiovagal.score.sourceFields,
-    confidence: ctx.cardiovagal.score.confidence,
+    confidence: strictConfidence(ctx.cardiovagal.score.confidence, ([
+      ctx.study.ratios?.eiRatio,
+      ctx.study.ratios?.valsalvaRatio,
+      ctx.study.ratios?.thirtyFifteenRatio,
+    ].filter(Boolean) as Array<ProvField<unknown>>)),
   };
 }
 
@@ -213,7 +270,12 @@ function detectAdrenergicImpairment(ctx: PhenotypeContext): PhenotypeFlag | Bloc
       ? `Adrenergic domain graded ${sev}.`
       : "Adrenergic domain not graded as impaired.",
     sourceFields: ctx.adrenergic.score.sourceFields,
-    confidence: ctx.adrenergic.score.confidence,
+    confidence: strictConfidence(ctx.adrenergic.score.confidence, [
+      ctx.study.baseline.bp.sbp,
+      ctx.study.standOrTilt.bp.sbp,
+      ctx.study.baseline.bp.dbp,
+      ctx.study.standOrTilt.bp.dbp,
+    ]),
   };
 }
 
@@ -253,10 +315,16 @@ function detectParasympatheticWithdrawal(ctx: PhenotypeContext): PhenotypeFlag |
       "sympatheticParasympathetic.restingRfa",
       "sympatheticParasympathetic.standingRfa",
     ],
-    confidence: minConfidence([
-      study.sympatheticParasympathetic.restingRfa.provenance.confidence ?? 0,
-      study.sympatheticParasympathetic.standingRfa.provenance.confidence ?? 0,
-    ]),
+    confidence: strictConfidence(
+      minConfidence([
+        study.sympatheticParasympathetic.restingRfa.provenance.confidence ?? 0,
+        study.sympatheticParasympathetic.standingRfa.provenance.confidence ?? 0,
+      ]),
+      [
+        study.sympatheticParasympathetic.restingRfa,
+        study.sympatheticParasympathetic.standingRfa,
+      ],
+    ),
   };
 }
 
@@ -298,8 +366,11 @@ function detectSympatheticExcess(ctx: PhenotypeContext): PhenotypeFlag | Blocked
       "sympatheticParasympathetic.restingLfa",
       "sympatheticParasympathetic.restingSb",
     ],
-    confidence: numericToConfidence(
-      study.sympatheticParasympathetic.restingSb.provenance.confidence ?? 0,
+    confidence: strictConfidence(
+      numericToConfidence(
+        study.sympatheticParasympathetic.restingSb.provenance.confidence ?? 0,
+      ),
+      [study.sympatheticParasympathetic.restingSb],
     ),
   };
 }

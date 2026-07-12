@@ -117,6 +117,17 @@ export function useAuth(): UseAuthReturn {
   );
 
   const signOut = useCallback(async () => {
+    // Clear the perimeter gateway session (HttpOnly cookie) first, then the
+    // Supabase magic-link session. Best-effort: never block sign-out on the
+    // gateway call failing.
+    try {
+      await fetch("/api/admin/gateway", {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+    } catch {
+      /* ignore network errors during logout */
+    }
     await supabase.auth.signOut();
   }, [supabase]);
 

@@ -5,6 +5,8 @@
 // frontend treats these as opaque transport types. Validation happens on the
 // server where the algorithm generates them.
 
+import type { MetricProvenance } from "./metricProvenance.js";
+
 export interface ANSPatientData {
   lastName: string;
   firstName: string;
@@ -48,6 +50,18 @@ export interface PhaseMetrics {
   MAP?: number;
   HRV_SDNN: number;
   HRV_RMSSD: number;
+  /**
+   * Per-metric provenance for the proprietary [P] spectral aggregates. Present
+   * for reports produced after the numericalSummaryOverride removal. `method`
+   * is "computed" (generic, tagged `estimated`) or "unavailable"; it is NEVER a
+   * memorized/identity-substituted vendor value.
+   */
+  provenance?: {
+    LFa: MetricProvenance;
+    RFa: MetricProvenance;
+    SB: MetricProvenance;
+    FRF: MetricProvenance;
+  };
 }
 
 export interface Classification {
@@ -123,9 +137,17 @@ export interface TherapyRecommendation {
 
 export interface BodySystemImpact {
   system: "cardiovascular" | "respiratory" | "digestive" | "nervous" | "endocrine" | "musculoskeletal" | "immune";
+  /**
+   * Numeric magnitude retained for the heatmap gradient. When `assessed` is
+   * false this is 0 (neutral) and MUST NOT be rendered as a score — the domain
+   * was not measured on this recording, so the UI shows a qualitative
+   * "Not assessed" state instead of a number.
+   */
   impact: number;
   label: string;
   description: string;
+  /** False when this domain depends on measures not available in the file. */
+  assessed?: boolean;
 }
 
 export type WellnessTier = "Optimal" | "Resilient" | "Balanced" | "Stressed" | "Depleted" | "Critical";
@@ -208,10 +230,21 @@ export interface ANSReport {
   wellnessBreakdown: WellnessBreakdown;
   riskLevel: string;
   energyLevel: "Low" | "Moderate" | "High";
+  /**
+   * True only when the proprietary spectral aggregates (LFa/RFa/SB) are
+   * available at a clinically-usable provenance tier. False for raw ECG-only
+   * .ans files — every spectral/adrenergic/neuropathy interpretation is then
+   * gated OFF, and the UI must render "Not assessed".
+   */
+  spectralAvailable?: boolean;
+  bpAvailable?: boolean;
   autonomicBalance: {
-    parasympathetic: number;
-    sympathetic: number;
-    balance: number;
+    // null when spectral aggregates are unavailable — the UI must render
+    // "Not assessed", never coerce to 0 or a 0/100 percentage split.
+    parasympathetic: number | null;
+    sympathetic: number | null;
+    balance: number | null;
+    available?: boolean;
     interpretation: string;
   };
   phaseEvents: PhaseMetrics[];
@@ -229,7 +262,7 @@ export interface ANSReport {
   clinicalFlags: string[];
   overallImpression: string;
   samplingRate: number;
-  respiratoryFrequency: number;
+  respiratoryFrequency: number | null;
   rPeakCount: number;
   generatedAt: string;
   patientSynopsis?: string;

@@ -8,6 +8,7 @@ import { ReportDashboard } from "@/components/ReportDashboard";
 import { AtomAttribution } from "@/components/AtomAttribution";
 import { ParsedDataReview } from "@/components/parsed/ParsedDataReview";
 import { apiRequest } from "@/lib/queryClient";
+import { resilientUpload } from "@/lib/resilientUpload";
 
 type AppState = "upload" | "parsing" | "review" | "analyzing" | "report";
 
@@ -46,27 +47,35 @@ export default function Dashboard() {
     })();
 
     try {
-      const formData = new FormData();
-      formData.append("ansFile", file);
-      const response = await apiRequest("POST", "/api/parse", undefined, formData);
-      const result = await response.json();
+      // Resilient upload: 60s timeout, retry-once on 5xx/network, captures
+      // x-vercel-id, and surfaces server {error, stage} JSON without throwing.
+      const result = await resilientUpload<{
+        success: boolean;
+        ansStudy?: AnsStudy;
+        diagnosticSummary?: DiagnosticSummary;
+        error?: string;
+        stage?: string;
+      }>("/api/parse", file);
       cancelled = true;
 
-      if (result.success && result.ansStudy) {
-        setAnsStudy(result.ansStudy);
-        setDiagnosticSummary(result.diagnosticSummary ?? null);
+      if (result.ok && result.data?.success && result.data.ansStudy) {
+        setAnsStudy(result.data.ansStudy);
+        setDiagnosticSummary(result.data.diagnosticSummary ?? null);
         setAnalysisProgress(100);
         setAnalysisStage("Parse complete.");
         await new Promise(r => setTimeout(r, 250));
         setAppState("review");
       } else {
-        throw new Error(result.error || "Failed to parse file");
+        const reqId = result.vercelId ? ` [req:${result.vercelId.slice(-12)}]` : "";
+        const stageTag = result.stage ? ` (stage: ${result.stage})` : "";
+        const tries = result.attempts.length > 1 ? ` (after ${result.attempts.length} attempts)` : "";
+        throw new Error(`${result.error || result.data?.error || `HTTP ${result.status}`}${stageTag}${tries}${reqId}`);
       }
     } catch (error: any) {
       cancelled = true;
       console.error("Parse error:", error);
       setAnalysisStage("Error: " + (error.message || "Parse failed"));
-      await new Promise(r => setTimeout(r, 1800));
+      await new Promise(r => setTimeout(r, 3500));
       setAppState("upload");
       setPendingFile(null);
     }
@@ -107,30 +116,34 @@ export default function Dashboard() {
       }
     })();
 
-    const formData = new FormData();
-    formData.append("ansFile", pendingFile);
-
     try {
-      const response = await apiRequest("POST", "/api/upload", undefined, formData);
-      const result = await response.json();
+      const result = await resilientUpload<{
+        success: boolean;
+        report?: ANSReport;
+        ansStudy?: AnsStudy;
+        error?: string;
+        stage?: string;
+      }>("/api/upload", pendingFile, { timeoutMs: 90_000 });
       cancelled = true;
 
-      if (result.success && result.report) {
+      if (result.ok && result.data?.success && result.data.report) {
         setAnalysisProgress(100);
         setAnalysisStage("Report generation complete.");
         await new Promise(r => setTimeout(r, 600));
-        setReport(result.report);
-        // /api/upload also returns ansStudy — refresh in case of re-extraction.
-        if (result.ansStudy) setAnsStudy(result.ansStudy);
+        setReport(result.data.report);
+        if (result.data.ansStudy) setAnsStudy(result.data.ansStudy);
         setAppState("report");
       } else {
-        throw new Error(result.error || "Failed to process file");
+        const reqId = result.vercelId ? ` [req:${result.vercelId.slice(-12)}]` : "";
+        const stageTag = result.stage ? ` (stage: ${result.stage})` : "";
+        const tries = result.attempts.length > 1 ? ` (after ${result.attempts.length} attempts)` : "";
+        throw new Error(`${result.error || result.data?.error || `HTTP ${result.status}`}${stageTag}${tries}${reqId}`);
       }
     } catch (error: any) {
       cancelled = true;
       console.error("Upload error:", error);
       setAnalysisStage("Error: " + (error.message || "Upload failed"));
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 3000));
       setAppState("review");
     }
   }, [pendingFile]);

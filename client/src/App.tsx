@@ -7,9 +7,13 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Dashboard from "@/pages/dashboard";
 import NotFound from "@/pages/not-found";
+import { BuildInfo } from "@/components/BuildInfo";
 
 // Admin pages
-import AdminLoginPage from "@/pages/admin/login";
+// NOTE: the two-step (perimeter gateway → magic-link) login lives in
+// components/AdminGatewayLoginPage.tsx because pages/admin/login.tsx is
+// read-only in this environment. Same route, superset behaviour.
+import AdminLoginPage from "@/components/AdminGatewayLoginPage";
 import KnowledgePage from "@/pages/admin/knowledge";
 import KnowledgeDetailPage from "@/pages/admin/knowledge/[id]";
 import NewKnowledgePage from "@/pages/admin/knowledge/new";
@@ -20,6 +24,8 @@ import NewChangeRequestPage from "@/pages/admin/change-requests/new";
 import AuditPage from "@/pages/admin/audit";
 import AccuracyLabPage from "@/pages/admin/accuracy-lab";
 import RuleEvidencePage from "@/pages/admin/rule-evidence";
+import RetrievalTestPage from "@/pages/admin/retrieval-test";
+import ParserHealthPage from "@/pages/admin/parser-health";
 
 function AppRouter() {
   return (
@@ -39,6 +45,8 @@ function AppRouter() {
       <Route path="/admin/audit" component={AuditPage} />
       <Route path="/admin/accuracy-lab" component={AccuracyLabPage} />
       <Route path="/admin/rule-evidence" component={RuleEvidencePage} />
+      <Route path="/admin/retrieval-test" component={RetrievalTestPage} />
+      <Route path="/admin/parser-health" component={ParserHealthPage} />
       {/* /admin redirect */}
       <Route path="/admin">
         {() => { window.location.hash = "#/admin/knowledge"; return null; }}
@@ -64,6 +72,7 @@ function App() {
           <Router hook={useHashLocation}>
             <AppRouter />
           </Router>
+          <BuildInfo />
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

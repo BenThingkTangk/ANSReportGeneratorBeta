@@ -1,7 +1,20 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { parseStudy } from "./_ans/parseStudy.js";
 import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
-import { setCorsHeaders } from "./_supabase.js";
+
+// Inlined to avoid pulling _supabase.ts (and its @supabase/supabase-js import)
+// into the parse-only function bundle. setCorsHeaders has no runtime deps.
+function setCorsHeaders(res: VercelResponse): void {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization"
+  );
+}
 
 export const config = {
   api: {
@@ -86,7 +99,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ success: false, error: "POST only" });
   }
 
+  let stage = "init";
   try {
+    stage = "multipart";
     const { buffer, fileName } = await parseMultipart(req);
     if (!buffer?.length) {
       return res
@@ -94,27 +109,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .json({ success: false, error: "No file uploaded (field: ansFile)" });
     }
 
+    stage = "parseStudy";
     const ansStudy = parseStudy({
       buffer,
       fileName: fileName || "upload.ans",
     });
+
+    stage = "diagnosticSummary";
     const diagnosticSummary = computeDiagnosticSummary(ansStudy);
 
+    stage = "trim-preview";
     // Trim ECG preview so the wire payload stays small.
+    const ecgPreview = Array.isArray(ansStudy.ecg?.preview)
+      ? ansStudy.ecg.preview.slice(0, 1000)
+      : [];
     const ansStudyForWire = {
       ...ansStudy,
-      ecg: { ...ansStudy.ecg, preview: ansStudy.ecg.preview.slice(0, 1000) },
+      ecg: { ...(ansStudy.ecg ?? {}), preview: ecgPreview },
     };
 
+    stage = "respond";
     return res.status(200).json({
       success: true,
       ansStudy: ansStudyForWire,
       diagnosticSummary,
     });
   } catch (err: any) {
-    console.error("[parse] error", err);
-    return res
-      .status(500)
-      .json({ success: false, error: err?.message ?? "parse failed" });
+    console.error(`[parse] error at stage=${stage}:`, err?.message, err?.stack);
+    return res.status(500).json({
+      success: false,
+      error: err?.message ?? "parse failed",
+      stage,
+    });
   }
 }

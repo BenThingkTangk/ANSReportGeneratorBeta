@@ -1,20 +1,25 @@
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
+import { sbZone, sbZoneLabel } from "@shared/colomboNorms";
 
 interface KeyMetricsStripProps {
   report: ANSReport;
 }
 
+// Balance language + color derive from the SB value via the single source of
+// truth (shared/colomboNorms), NOT from a score-derived wellness tier. This
+// prevents a "Balanced" chip when SB is out of the balanced band (S2-3).
 function sbInterpretation(sb: number): string {
-  if (sb < 0.4) return "Parasympathetic dominant";
-  if (sb <= 3.0) return "Balanced";
-  return "Sympathetic dominant";
+  return sbZoneLabel(sb);
 }
 
 function sbColor(sb: number): string {
-  if (sb < 0.4) return "hsl(210 80% 60%)";
-  if (sb <= 3.0) return "hsl(140 60% 55%)";
-  return "hsl(0 72% 60%)";
+  const zone = sbZone(sb);
+  if (zone === "parasympathetic-dominant") return "hsl(210 80% 60%)";
+  if (zone === "sympathetic-dominant") return "hsl(0 72% 60%)";
+  if (zone === "target") return "hsl(140 60% 55%)";
+  // low-normal / high-normal: within range but leaning — amber, not green.
+  return "hsl(35 90% 55%)";
 }
 
 export function KeyMetricsStrip({ report }: KeyMetricsStripProps) {

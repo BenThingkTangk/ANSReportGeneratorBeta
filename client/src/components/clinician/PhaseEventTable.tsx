@@ -1,25 +1,21 @@
 import { motion } from "framer-motion";
 import type { PhaseMetrics } from "@shared/schema";
+import { COLOMBO_NORMS } from "@shared/colomboNorms";
+import { CANONICAL_PHASES } from "@shared/phaseTable";
 
 interface PhaseEventTableProps {
   phaseEvents: PhaseMetrics[];
 }
 
-const PHASE_LABELS = [
-  { phase: "Baseline-A",      short: "Baseline A" },
-  { phase: "DeepBreathing-B", short: "DB B" },
-  { phase: "Baseline-C",      short: "Baseline C" },
-  { phase: "Valsalva-D",      short: "Valsalva D" },
-  { phase: "Baseline-E",      short: "Baseline E" },
-  { phase: "Stand-F",         short: "Stand F" },
-];
+// Single canonical phase table (shared/phaseTable) — no local re-declaration.
+const PHASE_LABELS = CANONICAL_PHASES;
 
-// Colombo norms for color-coding
+// Colombo norms for color-coding — single source of truth (shared/colomboNorms).
 const NORMS = {
-  FRF:  { lo: 0.15, hi: 0.40 },
-  LFa:  { lo: 0.0,  hi: 8.0  },
-  RFa:  { lo: 0.5,  hi: 6.0  },
-  SB:   { lo: 0.4,  hi: 3.0  },
+  FRF: { lo: COLOMBO_NORMS.FRF.lo, hi: COLOMBO_NORMS.FRF.hi },
+  LFa: { lo: COLOMBO_NORMS.LFa.lo, hi: COLOMBO_NORMS.LFa.hi },
+  RFa: { lo: COLOMBO_NORMS.RFa.lo, hi: COLOMBO_NORMS.RFa.hi },
+  SB: { lo: COLOMBO_NORMS.SB.lo, hi: COLOMBO_NORMS.SB.hi },
 };
 
 function cellColor(val: number, norm: { lo: number; hi: number }): string {
@@ -31,6 +27,17 @@ function cellColor(val: number, norm: { lo: number; hi: number }): string {
 function fmt(v: number | undefined, digits = 2): string {
   if (v === undefined || v === null) return "—";
   return v.toFixed(digits);
+}
+
+/**
+ * True if this phase's proprietary spectral aggregates (LFa/RFa/SB and the
+ * respiratory-frequency estimate reported alongside them) are not reproducible
+ * from this recording. Kept identical to the Numerical Summary's gate so the
+ * two tables never disagree — a raw-ECG .ans shows "—" for every spectral cell
+ * here, exactly as the Numerical Summary shows "unavailable".
+ */
+function spectralUnavailable(m: PhaseMetrics | undefined): boolean {
+  return m?.provenance?.LFa?.method === "unavailable";
 }
 
 export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
@@ -61,26 +68,37 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
         </thead>
         <tbody>
           {PHASE_LABELS.map((pl, i) => {
-            const m = phaseMap.get(pl.phase);
+            const m = phaseMap.get(pl.key);
             return (
-              <tr key={pl.phase} className={`border-b border-border/20 ${i % 2 === 0 ? "bg-card/20" : ""}`}>
+              <tr key={pl.key} className={`border-b border-border/20 ${i % 2 === 0 ? "bg-card/20" : ""}`}>
                 <td className="py-2.5 pr-4 font-medium whitespace-nowrap">{pl.short}</td>
                 <td className="py-2.5 pr-4 tabular-nums text-muted-foreground">{m?.duration ?? "—"}</td>
                 <td className="py-2.5 pr-4 tabular-nums">
                   {m ? `${Math.round(m.meanHR)} ± ${Math.round(m.rangeHR)}` : "—"}
                 </td>
-                <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.FRF, NORMS.FRF) : "inherit" }}>
-                  {fmt(m?.FRF)}
-                </td>
-                <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.LFa, NORMS.LFa) : "inherit" }}>
-                  {fmt(m?.LFa)}
-                </td>
-                <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.RFa, NORMS.RFa) : "inherit" }}>
-                  {fmt(m?.RFa)}
-                </td>
-                <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.SB, NORMS.SB) : "inherit" }}>
-                  {fmt(m?.SB)}
-                </td>
+                {spectralUnavailable(m) ? (
+                  <>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
+                  </>
+                ) : (
+                  <>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.FRF, NORMS.FRF) : "inherit" }}>
+                      {fmt(m?.FRF)}
+                    </td>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.LFa, NORMS.LFa) : "inherit" }}>
+                      {fmt(m?.LFa)}
+                    </td>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.RFa, NORMS.RFa) : "inherit" }}>
+                      {fmt(m?.RFa)}
+                    </td>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.SB, NORMS.SB) : "inherit" }}>
+                      {fmt(m?.SB)}
+                    </td>
+                  </>
+                )}
                 <td className="py-2.5 pr-4 tabular-nums text-muted-foreground">
                   {m?.SBP && m?.DBP ? `${Math.round(m.SBP)}/${Math.round(m.DBP)}` : "—"}
                 </td>

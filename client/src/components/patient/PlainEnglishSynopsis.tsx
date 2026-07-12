@@ -1,7 +1,5 @@
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { RefreshCw } from "lucide-react";
-import { apiRequest } from "@/lib/queryClient";
+import { motion, useReducedMotion } from "framer-motion";
+import { RefreshCw, Sparkles } from "lucide-react";
 import type { ANSReport } from "@shared/schema";
 
 interface PlainEnglishSynopsisProps {
@@ -10,9 +8,13 @@ interface PlainEnglishSynopsisProps {
   loading: boolean;
   error: string | null;
   onRetry: () => void;
+  /** True while best-effort AI enrichment runs; the plain-English synopsis is
+   *  already visible, so this only shows a small non-blocking badge. */
+  enhancing?: boolean;
 }
 
-export function PlainEnglishSynopsis({ report: _report, synopsis, loading, error, onRetry }: PlainEnglishSynopsisProps) {
+export function PlainEnglishSynopsis({ report: _report, synopsis, loading, error, onRetry, enhancing }: PlainEnglishSynopsisProps) {
+  const reduce = useReducedMotion();
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -21,9 +23,21 @@ export function PlainEnglishSynopsis({ report: _report, synopsis, loading, error
       className="rounded-2xl bg-card/50 border border-border/30 p-5"
       data-testid="plain-english-synopsis"
     >
-      <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium mb-3">
-        Your Report — Plain English
-      </h3>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium">
+          Your Report — Plain English
+        </h3>
+        {enhancing && (
+          <motion.span
+            data-testid="synopsis-enhancing"
+            className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border border-cyan-500/30 text-cyan-300/90 whitespace-nowrap"
+            animate={reduce ? { opacity: 1 } : { opacity: [0.55, 1, 0.55] }}
+            transition={reduce ? { duration: 0 } : { duration: 1.6, repeat: Infinity }}
+          >
+            <Sparkles className="w-3 h-3" /> Enhancing with AI…
+          </motion.span>
+        )}
+      </div>
 
       {loading && (
         <div className="space-y-3">

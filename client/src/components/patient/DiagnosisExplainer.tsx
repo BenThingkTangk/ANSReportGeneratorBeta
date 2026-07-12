@@ -85,13 +85,93 @@ const EXPLAINERS: Record<string, { title: string; whatItIs: string; everyday: st
     doNow: ["Slow positional changes", "Steady hydration", "HRV-paced breathing", "Specialist evaluation"],
     icon: ShieldCheck,
   },
+  PE_STAND: {
+    title: "Parasympathetic Excess on Standing",
+    whatItIs: "When you stand, your 'rest and digest' system spikes instead of stepping back — the opposite of the normal response.",
+    everyday: "Dizziness, unsteady blood pressure, or a wave of fatigue when you get to your feet.",
+    doNow: ["Stand up in two slow stages", "Hydration + salt", "Counter-pressure maneuvers (leg crossing, buttock squeeze)", "Discuss with your doctor"],
+    icon: ShieldCheck,
+  },
+  PE_VALSALVA: {
+    title: "Parasympathetic Excess during Valsalva",
+    whatItIs: "During the bear-down (Valsalva) part of the test, your vagal 'brake' engaged more strongly than expected.",
+    everyday: "May go with low resting heart rate and a tendency to feel faint when straining, coughing, or lifting.",
+    doNow: ["Avoid heavy straining/breath-holding", "Exhale through exertion", "Stay hydrated", "Mention to your physician"],
+    icon: ShieldCheck,
+  },
+  SE_STAND: {
+    title: "Sympathetic Excess on Standing",
+    whatItIs: "Your 'fight or flight' system over-fires when you stand, pushing heart rate and vascular tone higher than needed.",
+    everyday: "Racing heart, jitteriness, or a pressured feeling when upright; sometimes trouble settling afterward.",
+    doNow: ["Slow, paced breathing on standing", "Limit caffeine", "Gentle recumbent-to-upright conditioning", "Discuss with your doctor"],
+    icon: Activity,
+  },
+  SE_VALSALVA: {
+    title: "Sympathetic Excess during Valsalva",
+    whatItIs: "During the bear-down (Valsalva) maneuver your sympathetic surge was larger than the typical response.",
+    everyday: "Blood-pressure spikes with straining or stress; can feel tense or wired.",
+    doNow: ["Breathe out through exertion — don't hold your breath", "Stress-reduction / HRV biofeedback", "Limit stimulants", "Physician follow-up"],
+    icon: Activity,
+  },
+  CAN_HIGH_SB: {
+    title: "Cardiovascular Autonomic Neuropathy (Sympathetic-Predominant)",
+    whatItIs: "Reduced autonomic nerve function with the balance tipped toward the 'fight or flight' side (high sympathovagal balance).",
+    everyday: "Elevated resting heart rate, poor stress recovery, and dizziness on standing can occur together.",
+    doNow: ["Hydration + salt", "Paced breathing / stress reduction", "Targeted supplementation as advised", "Specialist follow-up"],
+    icon: AlertCircle,
+  },
+  CAN_LOW_SB: {
+    title: "Cardiovascular Autonomic Neuropathy (Parasympathetic-Predominant)",
+    whatItIs: "Reduced autonomic nerve function with the balance tipped toward the 'rest and digest' side (low sympathovagal balance).",
+    everyday: "Fatigue, low blood pressure, sluggish digestion, and exercise intolerance are common.",
+    doNow: ["Low-intensity aerobic conditioning", "Hydration + salt", "Adequate sleep", "Specialist follow-up"],
+    icon: AlertCircle,
+  },
+  DAN: {
+    title: "Diabetic / Diffuse Autonomic Neuropathy",
+    whatItIs: "A broad reduction in autonomic nerve function affecting several body systems.",
+    everyday: "May include dizziness, digestive changes, temperature or sweating changes, and exercise intolerance.",
+    doNow: ["Optimize any underlying metabolic condition with your doctor", "Pacing to avoid push/crash", "Hydration + salt", "Specialist referral"],
+    icon: AlertCircle,
+  },
+  NEUROGENIC_SYNCOPE: {
+    title: "Neurogenic Syncope Pattern",
+    whatItIs: "Your autonomic pattern matches fainting that originates from nerve-signaling rather than the heart's pump.",
+    everyday: "Fainting or near-fainting triggered by standing, heat, emotion, or pain.",
+    doNow: ["Recognize early warning signs and sit/lie down", "Counter-pressure maneuvers", "Hydration + salt", "Discuss tilt-table testing with your doctor"],
+    icon: AlertCircle,
+  },
+  CARDIOGENIC_SYNCOPE: {
+    title: "Cardiogenic Syncope Risk",
+    whatItIs: "Features that can be associated with fainting arising from the heart itself — this warrants prompt cardiac review.",
+    everyday: "Fainting with little warning, sometimes during exertion or lying down; may feel palpitations.",
+    doNow: ["Seek cardiac evaluation promptly", "Avoid strenuous exertion until cleared", "Do not drive if you have unexplained fainting", "Follow your physician's guidance"],
+    icon: AlertCircle,
+  },
+  WHITE_COAT: {
+    title: "White-Coat Response",
+    whatItIs: "Your readings suggest a stress response to the testing situation itself, which can transiently raise blood pressure and heart rate.",
+    everyday: "Numbers may look higher in clinic than they do at home during normal daily life.",
+    doNow: ["Consider home BP monitoring", "Relaxed, paced breathing before readings", "Share home readings with your doctor", "Re-test in a calm setting"],
+    icon: ShieldCheck,
+  },
+  OD_NORMAL: {
+    title: "Orthostatic Response — Within Normal Limits",
+    whatItIs: "Your blood pressure and heart-rate response to standing fell within the expected range.",
+    everyday: "You are unlikely to feel dizzy or faint from position changes on this measure.",
+    doNow: ["Maintain good hydration", "Keep up regular activity", "No specific action needed for this finding"],
+    icon: ShieldCheck,
+  },
 };
 
-const FALLBACK = (code: string, severity: string): typeof EXPLAINERS[string] => ({
-  title: code.replace(/_/g, " "),
-  whatItIs: `An autonomic finding (${severity.toLowerCase()}) was detected on your test.`,
-  everyday: "Your clinician will review this with you in detail.",
-  doNow: ["Discuss this finding with your physician at follow-up"],
+// Safety net for any code without authored copy. It must NEVER surface a raw
+// code (e.g. "SE_VALSALVA") to the patient — it renders a neutral, human title
+// so a missing entry degrades gracefully instead of showing a boilerplate code.
+const FALLBACK = (_code: string, severity: string): typeof EXPLAINERS[string] => ({
+  title: "Autonomic Finding",
+  whatItIs: `Your test flagged an autonomic pattern (${severity.toLowerCase()} significance) that your clinician will interpret in context.`,
+  everyday: "Your clinician will review what this means for you in detail.",
+  doNow: ["Discuss this finding with your physician at your follow-up"],
   icon: Activity,
 });
 
@@ -116,9 +196,14 @@ export function DiagnosisExplainer({ report }: DiagnosisExplainerProps) {
         <div className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center" style={{ background: "hsl(140 60% 50% / 0.15)" }}>
           <ShieldCheck className="w-6 h-6" style={{ color: "hsl(140 60% 65%)" }} />
         </div>
-        <h3 className="text-base font-semibold mb-1">No major findings detected</h3>
+        <h3 className="text-base font-semibold mb-1">
+          No abnormalities detected among measured signals; other domains were not assessed
+        </h3>
         <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-          Your autonomic nervous system is performing within normal ranges across all measured patterns.
+          The signals this recording could measure were within normal ranges.
+          Some autonomic domains depend on measures not captured by this file and
+          were not assessed — this is not a statement of full normality. A
+          clinician can review the signed vendor report for a complete picture.
         </p>
       </motion.div>
     );
@@ -163,7 +248,9 @@ export function DiagnosisExplainer({ report }: DiagnosisExplainerProps) {
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold truncate">{expl.title}</div>
                   <div className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: sev.color }}>
-                    {sev.label} · {ind.code}
+                    {/* Patient-facing: show severity only, never the raw indication
+                        code (S4-2). Clinicians see codes in the clinician view. */}
+                    {sev.label}
                   </div>
                 </div>
               </div>

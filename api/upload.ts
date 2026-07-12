@@ -2,6 +2,19 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { parseStudy } from "./_ans/parseStudy.js";
 import { ansStudyToLegacy } from "./_ans/legacyAdapter.js";
 import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
+import { reconcileStudyWithReport } from "./_ans/reconcileStudy.js";
+import {
+  EWING_THRESHOLDS,
+  classifyEwing,
+  ewingNormalRangeLabel,
+  COLOMBO_NORMS,
+} from "../shared/colomboNorms.js";
+import {
+  computedProvenance,
+  unavailableProvenance,
+  mayInterpretClinically,
+  type MetricProvenance,
+} from "../shared/metricProvenance.js";
 
 export const config = {
   api: {
@@ -51,15 +64,30 @@ interface PhaseMetrics {
   meanHR: number;
   rangeHR: number;
   FRF: number;
-  LFa: number;
-  RFa: number;
-  SB: number;
+  // null when the proprietary spectral aggregate is not clinically available
+  // (raw ECG-only files): the UI must render "Not assessed", never 0.
+  LFa: number | null;
+  RFa: number | null;
+  SB: number | null;
   SBP?: number;
   DBP?: number;
   PP?: number;
   MAP?: number;
   HRV_SDNN: number;
   HRV_RMSSD: number;
+  /**
+   * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF). These
+   * are ALWAYS computed generically from the raw arrays — never substituted
+   * from a memorized vendor value. `estimated` means the value approximates the
+   * vendor's undisclosed proprietary algorithm and was not reproduced against a
+   * reference; `unavailable` means the phase had insufficient beats to compute.
+   */
+  provenance?: {
+    LFa: MetricProvenance;
+    RFa: MetricProvenance;
+    SB: MetricProvenance;
+    FRF: MetricProvenance;
+  };
 }
 
 interface Classification {
@@ -138,6 +166,7 @@ interface BodySystemImpact {
   impact: number;
   label: string;
   description: string;
+  assessed?: boolean;
 }
 
 // Multi-Parameter Graphical (kept in sync with shared/schema.ts)
@@ -181,10 +210,22 @@ interface ANSReport {
   wellnessBreakdown: WellnessBreakdown;
   riskLevel: string;
   energyLevel: "Low" | "Moderate" | "High";
+  /**
+   * True only when the proprietary spectral aggregates (LFa/RFa/SB) are
+   * available at a clinically-usable provenance tier. For raw ECG-only .ans
+   * files these are NOT vendor-reproducible, so this is false and every
+   * spectral/adrenergic/neuropathy interpretation is gated OFF. HR + Ewing
+   * ratios remain supported observations regardless.
+   */
+  spectralAvailable: boolean;
+  bpAvailable: boolean;
   autonomicBalance: {
-    parasympathetic: number;
-    sympathetic: number;
-    balance: number;
+    // null when spectral aggregates are unavailable — the UI must render
+    // "Not assessed", never coerce to 0 or a 0/100 percentage split.
+    parasympathetic: number | null;
+    sympathetic: number | null;
+    balance: number | null;
+    available: boolean;
     interpretation: string;
   };
   phaseEvents: PhaseMetrics[];
@@ -202,12 +243,14 @@ interface ANSReport {
   clinicalFlags: string[];
   overallImpression: string;
   samplingRate: number;
-  respiratoryFrequency: number;
+  // null when spectral is unavailable — FRF is a proprietary [P] measure.
+  respiratoryFrequency: number | null;
   rPeakCount: number;
   generatedAt: string;
   patientSynopsis?: string;
   clinicianSynopsis?: string;
   multiParameter?: MultiParameterGraphical;
+  indications?: Indication[];
 }
 
 // ---- Multipart Parser -------------------------------------------------------
@@ -784,11 +827,21 @@ function analyzePhase(
 ): PhaseMetrics {
   const { indices, amplitudes, rrIntervalsMs } = detectRPeaks(ecgPhase, samplingRate);
   if (rrIntervalsMs.length < 4) {
+    // Not enough beats to compute anything for this phase. Emit nulls-as-zero
+    // for back-compat but tag every spectral metric as UNAVAILABLE so the UI
+    // renders "unavailable" rather than a fabricated 0 (never substituted).
+    const unavail = {
+      LFa: unavailableProvenance("LFa", "Fewer than 4 usable beats in this phase."),
+      RFa: unavailableProvenance("RFa", "Fewer than 4 usable beats in this phase."),
+      SB: unavailableProvenance("SB", "Fewer than 4 usable beats in this phase."),
+      FRF: unavailableProvenance("FRF", "Fewer than 4 usable beats in this phase."),
+    };
     return {
       phase: phaseName, label,
       duration: formatDuration(durationSec), durationSec,
       meanHR: 0, rangeHR: 0, FRF: 0, LFa: 0, RFa: 0, SB: 0,
       HRV_SDNN: 0, HRV_RMSSD: 0,
+      provenance: unavail,
     };
   }
   const meanRR = rrIntervalsMs.reduce((a, b) => a + b, 0) / rrIntervalsMs.length;
@@ -816,6 +869,12 @@ function analyzePhase(
   const RFa = morletBandPower(rrSignal, 4, hfLo, hfHi);
   const SB = RFa > 0.01 ? LFa / RFa : 0;
 
+  // These four are proprietary [P] aggregates: we compute them generically from
+  // the raw arrays but they only APPROXIMATE the vendor's undisclosed wavelet
+  // algorithm, so they are tagged `estimated` (never silently "validated" and
+  // never substituted with a memorized vendor scalar).
+  const spectralNote =
+    "Morlet-CWT band power over interpolated RR series (Colombo-style dynamic bands); approximates the undisclosed vendor algorithm and is not vendor-validated.";
   return {
     phase: phaseName, label,
     duration: formatDuration(durationSec), durationSec,
@@ -826,6 +885,12 @@ function analyzePhase(
     SB: Math.round(SB * 100) / 100,
     HRV_SDNN: Math.round(sdnn * 10) / 10,
     HRV_RMSSD: Math.round(rmssd * 10) / 10,
+    provenance: {
+      LFa: computedProvenance("LFa", { note: spectralNote }),
+      RFa: computedProvenance("RFa", { note: spectralNote }),
+      SB: computedProvenance("SB", { note: "Ratio of estimated LFa/RFa; proprietary framing, not vendor-validated." }),
+      FRF: computedProvenance("FRF", { note: "Fundamental respiratory frequency estimated from RR/peak envelope." }),
+    },
   };
 }
 
@@ -998,6 +1063,14 @@ function computeWellness(
   const B = phases[1]; // DB
   const F = phases[5]; // Stand
 
+  // Local safe reads: this internal index runs on the RAW numeric snapshot, but
+  // PhaseMetrics types spectral as number|null (report-facing). Coalesce to 0
+  // so the composite math is total; real clinical gating happens elsewhere.
+  const nz = (x: number | null): number => (x == null ? 0 : x);
+  const aRFa = nz(A.RFa), aLFa = nz(A.LFa), aSB = nz(A.SB);
+  const bRFa = nz(B.RFa);
+  const fRFa = nz(F.RFa), fLFa = nz(F.LFa), fSB = nz(F.SB);
+
   const RFa_n = norm("RFa", age);
   const LFa_n = norm("LFa", age);
   const HR_n  = norm("HR", age);
@@ -1009,22 +1082,22 @@ function computeWellness(
   const W = { baseline: 0.22, sb: 0.20, reflex: 0.23, ortho: 0.20, hrv: 0.15 };
 
   // ---- 1. Baseline Autonomic Tone ----
-  const baselineRFa = signedBandScore(A.RFa, RFa_n.lo, RFa_n.hi, { lowPenalty: 1.2 });
-  const baselineLFa = signedBandScore(A.LFa, LFa_n.lo, LFa_n.hi, { lowPenalty: 1.2 });
+  const baselineRFa = signedBandScore(aRFa, RFa_n.lo, RFa_n.hi, { lowPenalty: 1.2 });
+  const baselineLFa = signedBandScore(aLFa, LFa_n.lo, LFa_n.hi, { lowPenalty: 1.2 });
   // HR: low side (<50) and high side (>95) both penalized, low side harsher (bradycardia)
   const baselineHR  = signedBandScore(A.meanHR, HR_n.lo, HR_n.hi, { lowPenalty: 1.4, highPenalty: 1.1 });
   const s1 = Math.round((baselineRFa * 0.40 + baselineLFa * 0.35 + baselineHR * 0.25) * 10) / 10;
   const s1Drivers: WellnessDriver[] = [
-    mkDriver(`Resting RFa (parasympathetic)`, `${A.RFa}`, baselineRFa, W.baseline * 0.40),
-    mkDriver(`Resting LFa (sympathetic)`,     `${A.LFa}`, baselineLFa, W.baseline * 0.35),
+    mkDriver(`Resting RFa (parasympathetic)`, `${aRFa}`, baselineRFa, W.baseline * 0.40),
+    mkDriver(`Resting LFa (sympathetic)`,     `${aLFa}`, baselineLFa, W.baseline * 0.35),
     mkDriver(`Resting heart rate`,            `${A.meanHR} bpm`, baselineHR, W.baseline * 0.25),
   ];
 
   // ---- 2. Sympathovagal Balance ----
   // SB low is parasympathetic dominance (bigger red flag); SB high is sympathetic excess.
-  const sbBaselineScore = signedBandScore(A.SB, SB_n.lo, SB_n.hi, { lowPenalty: 1.5, highPenalty: 1.2 });
-  const sbStandScore    = signedBandScore(F.SB, SB_n.lo, SB_n.hi * 1.3, { lowPenalty: 1.2, highPenalty: 1.0 });
-  const sbShift = F.SB - A.SB;
+  const sbBaselineScore = signedBandScore(aSB, SB_n.lo, SB_n.hi, { lowPenalty: 1.5, highPenalty: 1.2 });
+  const sbStandScore    = signedBandScore(fSB, SB_n.lo, SB_n.hi * 1.3, { lowPenalty: 1.2, highPenalty: 1.0 });
+  const sbShift = fSB - aSB;
   // Healthy: SB rises on stand (+0.5 to +2.0). Drop = sympathetic-failure flag.
   let sbShiftScore: number;
   if (sbShift < -0.5) sbShiftScore = Math.max(10, 40 + sbShift * 25);
@@ -1035,8 +1108,8 @@ function computeWellness(
   sbShiftScore = Math.round(sbShiftScore * 10) / 10;
   const s2 = Math.round((sbBaselineScore * 0.45 + sbStandScore * 0.30 + sbShiftScore * 0.25) * 10) / 10;
   const s2Drivers: WellnessDriver[] = [
-    mkDriver(`Resting sympathovagal balance`,  `SB = ${A.SB}`, sbBaselineScore, W.sb * 0.45),
-    mkDriver(`Standing sympathovagal balance`, `SB = ${F.SB}`, sbStandScore,    W.sb * 0.30),
+    mkDriver(`Resting sympathovagal balance`,  `SB = ${aSB}`, sbBaselineScore, W.sb * 0.45),
+    mkDriver(`Standing sympathovagal balance`, `SB = ${fSB}`, sbStandScore,    W.sb * 0.30),
     mkDriver(`SB shift from rest to stand`,    `${sbShift >= 0 ? "+" : ""}${Math.round(sbShift * 100) / 100}`, sbShiftScore, W.sb * 0.25),
   ];
 
@@ -1044,7 +1117,7 @@ function computeWellness(
   const eiScore  = thresholdScoreV2(patient.eiRatio,          EI_n.lo * 0.85,  EI_n.lo);
   const valScore = thresholdScoreV2(patient.valsalvaRatio,    Val_n.lo * 0.85, Val_n.lo);
   const tfScore  = thresholdScoreV2(patient.thirtyFifteenRatio, Tf_n.lo * 0.85, Tf_n.lo);
-  const dbRFaGain = A.RFa > 0 ? B.RFa / A.RFa : 1;
+  const dbRFaGain = aRFa > 0 ? bRFa / aRFa : 1;
   // DB should AUGMENT parasympathetic tone. Gain <1 = vagal-reflex failure.
   let dbGainScore: number;
   if (dbRFaGain >= 1.3) dbGainScore = 100;
@@ -1061,8 +1134,8 @@ function computeWellness(
   ];
 
   // ---- 4. Orthostatic Response ----
-  const standRFaScore = signedBandScore(F.RFa, RFa_n.lo * 0.5, RFa_n.hi, { highPenalty: 1.2 });
-  const standLFaScore = signedBandScore(F.LFa, LFa_n.lo, LFa_n.hi * 1.4, { lowPenalty: 1.2 });
+  const standRFaScore = signedBandScore(fRFa, RFa_n.lo * 0.5, RFa_n.hi, { highPenalty: 1.2 });
+  const standLFaScore = signedBandScore(fLFa, LFa_n.lo, LFa_n.hi * 1.4, { lowPenalty: 1.2 });
   const hrDelta = F.meanHR - A.meanHR;
   let hrDeltaScore: number;
   if (hrDelta < 0) hrDeltaScore = 20;               // HR drop on stand = chronotropic failure
@@ -1072,7 +1145,7 @@ function computeWellness(
   else if (hrDelta <= 30) hrDeltaScore = Math.max(55, 100 - (hrDelta - 20) * 4.5);
   else hrDeltaScore = Math.max(10, 55 - (hrDelta - 30) * 3.5);   // POTS territory
   hrDeltaScore = Math.round(hrDeltaScore * 10) / 10;
-  const standLFaGain = A.LFa > 0 ? F.LFa / A.LFa : 1;
+  const standLFaGain = aLFa > 0 ? fLFa / aLFa : 1;
   let standLFaGainScore: number;
   if (standLFaGain >= 1.4) standLFaGainScore = 100;
   else if (standLFaGain >= 1.1) standLFaGainScore = 60 + (standLFaGain - 1.1) * 133;
@@ -1082,9 +1155,9 @@ function computeWellness(
   const s4 = Math.round((hrDeltaScore * 0.35 + standLFaScore * 0.25 + standRFaScore * 0.15 + standLFaGainScore * 0.25) * 10) / 10;
   const s4Drivers: WellnessDriver[] = [
     mkDriver(`HR response to stand`,           `Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm`, hrDeltaScore, W.ortho * 0.35),
-    mkDriver(`Standing LFa (sympathetic)`,     `${F.LFa}`, standLFaScore, W.ortho * 0.25),
+    mkDriver(`Standing LFa (sympathetic)`,     `${fLFa}`, standLFaScore, W.ortho * 0.25),
     mkDriver(`Standing LFa gain`,              `${Math.round(standLFaGain * 100) / 100}×`, standLFaGainScore, W.ortho * 0.25),
-    mkDriver(`Standing RFa (parasympathetic)`, `${F.RFa}`, standRFaScore, W.ortho * 0.15),
+    mkDriver(`Standing RFa (parasympathetic)`, `${fRFa}`, standRFaScore, W.ortho * 0.15),
   ];
 
   // ---- 5. HRV Reserve ----
@@ -1195,84 +1268,142 @@ function tierFromScore(score: number): ANSReport["wellnessTier"] {
 // STAGE 7 — Body-system impact heatmap (GenUI data)
 // ============================================================================
 
-function computeBodyImpact(patterns: DysfunctionPatterns, phases: PhaseMetrics[]): BodySystemImpact[] {
-  const A = phases[0], F = phases[5];
+function computeBodyImpact(
+  patterns: DysfunctionPatterns,
+  phases: PhaseMetrics[],
+  opts: { spectralAvailable: boolean; bpAvailable: boolean } = { spectralAvailable: true, bpAvailable: true },
+): BodySystemImpact[] {
+  const { spectralAvailable, bpAvailable } = opts;
   const out: BodySystemImpact[] = [];
 
-  // Cardiovascular
+  // A domain that depends on spectral or BP measures we don't have must NOT be
+  // shown with a numeric score or a negative impact. It is emitted as a
+  // qualitative "Not assessed" card (impact 0, assessed:false) so the heatmap
+  // shows neutral and the copy explains why — never an unexplained -35.
+  const notAssessed = (
+    system: BodySystemImpact["system"],
+    dependsOn: string,
+  ): BodySystemImpact => ({
+    system,
+    impact: 0,
+    assessed: false,
+    label: "Not assessed",
+    description: `Not assessed on this recording — this domain depends on ${dependsOn}, which ${dependsOn.includes("blood pressure") ? "was not recorded" : "is not reproducible"} from this file. A clinician can interpret it from the signed vendor report.`,
+  });
+
+  // --- Cardiovascular: HR-derived facts are supported; spectral/BP escalators
+  //     only apply when available. ---------------------------------------------
   let cv = 0;
+  const cvSupported = true; // resting/standing HR always available
   if (patterns.bradycardia) cv -= 20;
-  if (patterns.parasympatheticDominance) cv -= 15;
-  if (patterns.parasympatheticExcess) cv -= 25;
-  if (patterns.orthostaticHypotension) cv -= 30;
-  if (patterns.POTS) cv -= 30;
-  if (patterns.preSyncopeRisk) cv -= 20;
-  if (patterns.vasovagalRisk) cv -= 15;
-  out.push({ system: "cardiovascular", impact: Math.max(-100, cv),
+  if (patterns.POTS) cv -= 30; // HR-based
+  if (spectralAvailable) {
+    if (patterns.parasympatheticDominance) cv -= 15;
+    if (patterns.parasympatheticExcess) cv -= 25;
+    if (patterns.preSyncopeRisk) cv -= 20;
+    if (patterns.vasovagalRisk) cv -= 15;
+  }
+  if (bpAvailable && patterns.orthostaticHypotension) cv -= 30;
+  out.push({ system: "cardiovascular", impact: Math.max(-100, cv), assessed: cvSupported,
     label: cv < -30 ? "Significantly Affected" : cv < -10 ? "Mildly Affected" : "Stable",
-    description: patterns.parasympatheticDominance
-      ? "Low resting heart rate and parasympathetic dominance may cause fatigue, cold extremities, and exercise intolerance."
-      : "Cardiovascular regulation is within functional range." });
+    description: cv <= -10
+      ? (patterns.bradycardia ? `Resting heart rate is low (${phases[0].meanHR} bpm), which can contribute to fatigue and cold extremities.` : "Heart-rate response to the protocol was outside the expected range on this test.")
+      : "Heart-rate regulation is within functional range on the measures available (resting and standing heart rate)." });
 
-  // Respiratory
-  let resp = 0;
-  if (patterns.highFRF) resp -= 35;
-  out.push({ system: "respiratory", impact: resp,
-    label: resp < -20 ? "Affected" : "Stable",
-    description: patterns.highFRF
-      ? "Elevated fundamental respiratory frequency suggests ragged or shallow breathing — may reflect anxiety, upper-respiratory issues, or pulmonary irritation."
-      : "Breathing pattern falls within normal respiratory frequency range." });
+  // --- Respiratory: FRF is a proprietary [P] measure — only when spectral. ----
+  if (spectralAvailable) {
+    let resp = 0;
+    if (patterns.highFRF) resp -= 35;
+    out.push({ system: "respiratory", impact: resp, assessed: true,
+      label: resp < -20 ? "Affected" : "Stable",
+      description: patterns.highFRF
+        ? "Elevated fundamental respiratory frequency suggests ragged or shallow breathing — may reflect anxiety, upper-respiratory issues, or pulmonary irritation."
+        : "Breathing pattern falls within normal respiratory frequency range." });
+  } else {
+    out.push(notAssessed("respiratory", "the proprietary respiratory-frequency (FRF) measure"));
+  }
 
-  // Nervous (autonomic)
-  let ner = -10; // baseline noise
-  if (patterns.advancedAutonomicDysfunction) ner -= 40;
-  if (patterns.CAN) ner -= 30;
-  if (patterns.parasympatheticExcess) ner -= 20;
-  if (patterns.sympatheticWithdrawal) ner -= 20;
-  if (patterns.maskedSW) ner -= 10;
-  out.push({ system: "nervous", impact: Math.max(-100, ner),
-    label: ner < -30 ? "Significantly Affected" : "Mildly Affected",
-    description: "Autonomic regulation of blood pressure, heart rate, and organ systems shows imbalance. This affects how your body responds to stress, posture change, and recovery." });
+  // --- Nervous (autonomic): entirely spectral-derived. -----------------------
+  if (spectralAvailable) {
+    let ner = -10; // baseline noise
+    if (patterns.advancedAutonomicDysfunction) ner -= 40;
+    if (patterns.CAN) ner -= 30;
+    if (patterns.parasympatheticExcess) ner -= 20;
+    if (patterns.sympatheticWithdrawal) ner -= 20;
+    if (patterns.maskedSW) ner -= 10;
+    const nerParts: string[] = [];
+    if (patterns.advancedAutonomicDysfunction) nerParts.push("broad autonomic dysfunction across several test phases");
+    if (patterns.CAN) nerParts.push("a pattern consistent with cardiovascular autonomic neuropathy (not a diagnosis)");
+    if (patterns.parasympatheticExcess) nerParts.push("excess resting parasympathetic (vagal) activity");
+    if (patterns.sympatheticWithdrawal) nerParts.push("reduced sympathetic response on standing");
+    const nerDesc = nerParts.length
+      ? `Your autonomic nervous system — the automatic control of heart rate, blood pressure, and organ function — shows ${nerParts.join(", and ")}. This can affect how well you tolerate stress, standing up, and recovery. Discuss these findings with your clinician.`
+      : "Your autonomic nervous system is regulating heart rate, blood pressure, and organ function within its expected range on this test.";
+    out.push({ system: "nervous", impact: Math.max(-100, nerParts.length ? ner : 0), assessed: true,
+      label: nerParts.length ? (ner < -30 ? "Significantly Affected" : "Mildly Affected") : "Stable",
+      description: nerDesc });
+  } else {
+    out.push(notAssessed("nervous", "the proprietary spectral sympathetic/parasympathetic measures (LFa/RFa/SB)"));
+  }
 
-  // Digestive (vagal tone dominant)
-  let dig = 0;
-  if (patterns.parasympatheticDominance) dig += 5; // technically pro-digestion but can cause issues
-  if (patterns.sympatheticExcess) dig -= 15;
-  if (patterns.parasympatheticExcess) dig -= 10; // over-active vagus → nausea, cramping
-  out.push({ system: "digestive", impact: dig,
-    label: Math.abs(dig) < 10 ? "Stable" : dig < 0 ? "Mildly Affected" : "Over-active",
-    description: patterns.parasympatheticDominance
-      ? "High parasympathetic tone generally supports digestion, but excess may cause nausea or unpredictable gut motility."
-      : "Digestive regulation appears balanced." });
+  // --- Digestive (vagal-tone): spectral-derived. -----------------------------
+  if (spectralAvailable) {
+    let dig = 0;
+    if (patterns.parasympatheticDominance) dig += 5;
+    if (patterns.sympatheticExcess) dig -= 15;
+    if (patterns.parasympatheticExcess) dig -= 10;
+    out.push({ system: "digestive", impact: dig, assessed: true,
+      label: Math.abs(dig) < 10 ? "Stable" : dig < 0 ? "Mildly Affected" : "Over-active",
+      description: patterns.parasympatheticDominance
+        ? "High parasympathetic tone generally supports digestion, but excess may cause nausea or unpredictable gut motility."
+        : "Digestive regulation appears balanced." });
+  } else {
+    out.push(notAssessed("digestive", "the proprietary vagal-tone (parasympathetic) measures"));
+  }
 
-  // Endocrine (stress axis proxy)
-  let end = 0;
-  if (patterns.sympatheticExcess) end -= 20;
-  if (patterns.sympatheticWithdrawal) end -= 15;
-  if (patterns.advancedAutonomicDysfunction) end -= 25;
-  out.push({ system: "endocrine", impact: end,
-    label: end < -15 ? "Affected" : "Stable",
-    description: "Autonomic signals drive the adrenal stress axis; imbalance can affect cortisol rhythm, blood sugar regulation, and thyroid signaling." });
+  // --- Endocrine (stress axis): spectral-derived. ----------------------------
+  if (spectralAvailable) {
+    let end = 0;
+    if (patterns.sympatheticExcess) end -= 20;
+    if (patterns.sympatheticWithdrawal) end -= 15;
+    if (patterns.advancedAutonomicDysfunction) end -= 25;
+    out.push({ system: "endocrine", impact: end, assessed: true,
+      label: end < -15 ? "Affected" : "Stable",
+      description: end < -15
+        ? "The autonomic signals that drive your stress (adrenal) axis look imbalanced on this test, which can influence cortisol rhythm, blood-sugar regulation, and thyroid signaling. This is an indirect, screening-level observation."
+        : "The autonomic drive to your stress (adrenal) axis appears balanced on this test." });
+  } else {
+    out.push(notAssessed("endocrine", "the proprietary sympathetic measures"));
+  }
 
-  // Musculoskeletal (via fatigue + circulation)
-  let ms = 0;
-  if (patterns.parasympatheticDominance) ms -= 15;
-  if (patterns.orthostaticHypotension) ms -= 15;
-  out.push({ system: "musculoskeletal", impact: ms,
-    label: ms < -10 ? "Mildly Affected" : "Stable",
-    description: "Poor peripheral circulation or low perfusion can cause muscle fatigue, slow recovery, and cold extremities." });
+  // --- Musculoskeletal: depends on spectral tone + BP. -----------------------
+  if (spectralAvailable || bpAvailable) {
+    let ms = 0;
+    if (spectralAvailable && patterns.parasympatheticDominance) ms -= 15;
+    if (bpAvailable && patterns.orthostaticHypotension) ms -= 15;
+    out.push({ system: "musculoskeletal", impact: ms, assessed: true,
+      label: ms < -10 ? "Mildly Affected" : "Stable",
+      description: ms < -10
+        ? "Reduced perfusion signals (from low resting tone or a blood-pressure drop on standing) can contribute to muscle fatigue, slower recovery, and cold hands and feet."
+        : "No perfusion-related muscle impact was flagged on the measures available." });
+  } else {
+    out.push(notAssessed("musculoskeletal", "the proprietary tone and blood-pressure measures"));
+  }
 
-  // Immune (HRV proxy)
+  // --- Immune (HRV/SDNN proxy): SDNN is ECG-derived (consensus tier) — always
+  //     supported. --------------------------------------------------------------
   const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
   let imm = 0;
   if (avgSDNN < 30) imm -= 25;
   else if (avgSDNN < 45) imm -= 10;
-  if (patterns.advancedAutonomicDysfunction) imm -= 15;
-  out.push({ system: "immune", impact: imm,
-    label: imm < -15 ? "Affected" : "Stable",
+  if (spectralAvailable && patterns.advancedAutonomicDysfunction) imm -= 15;
+  out.push({ system: "immune", impact: imm, assessed: true,
+    label: imm < -15 ? "Affected" : imm < 0 ? "Mildly Affected" : "Stable",
     description: avgSDNN < 30
-      ? "Low HRV across phases correlates with impaired immune resilience and slower recovery from illness."
-      : "HRV reserves suggest adequate immune regulation." });
+      ? `Low heart-rate variability across the test (average SDNN ${avgSDNN.toFixed(0)} ms) is associated at a population level with reduced resilience and slower recovery. HRV is an indirect marker — not a direct immune measurement.`
+      : avgSDNN < 45
+        ? `Your heart-rate variability is modest (average SDNN ${avgSDNN.toFixed(0)} ms); building autonomic reserve through sleep, activity, and stress management may help.`
+        : `Your heart-rate variability reserve (average SDNN ${avgSDNN.toFixed(0)} ms) is adequate on this test.` });
 
   return out;
 }
@@ -1470,6 +1601,11 @@ function computeMultiParameterGraphical(
   data: ParsedANSData,
   phaseEvents: PhaseMetrics[]
 ): MultiParameterGraphical {
+  // These trend/scatter panels operate on the RAW numeric spectral estimates
+  // (passed as phaseEventsRaw). Spectral fields are typed number|null on
+  // PhaseMetrics; coalesce locally so chart math is total. The report-facing
+  // clinical claims remain gated separately upstream.
+  const nz = (x: number | null): number => (x == null ? 0 : x);
   const ecgAvailable = hasRealEcg(data.ecgData);
   // Short-circuit if the file has no real ECG — still emit scatter/ratios so
   // the clinician panels that rely on header metrics keep working.
@@ -1485,8 +1621,9 @@ function computeMultiParameterGraphical(
       name: phaseLabels[s.name], label: s.label, startSec: s.start, endSec: s.end,
     }));
     const A = phaseEvents[0], B = phaseEvents[1], D = phaseEvents[3], F = phaseEvents[5];
-    const rfaChangeValsalvaPct = A.RFa > 0 ? ((D.RFa - A.RFa) / A.RFa) * 100 : 0;
-    const rfaChangeStandPct = A.RFa > 0 ? ((F.RFa - A.RFa) / A.RFa) * 100 : 0;
+    const aRFa = nz(A.RFa);
+    const rfaChangeValsalvaPct = aRFa > 0 ? ((nz(D.RFa) - aRFa) / aRFa) * 100 : 0;
+    const rfaChangeStandPct = aRFa > 0 ? ((nz(F.RFa) - aRFa) / aRFa) * 100 : 0;
     return {
       ecgAvailable: false,
       totalSec,
@@ -1496,10 +1633,10 @@ function computeMultiParameterGraphical(
       lfaTrend: { t: [], v: [] },
       rfaTrend: { t: [], v: [] },
       scatter: {
-        baselineLFa: A.LFa, baselineRFa: A.RFa,
-        dbRFa: B.RFa,
-        valsalvaLFa: D.LFa,
-        standLFa: F.LFa, standRFa: F.RFa,
+        baselineLFa: nz(A.LFa), baselineRFa: nz(A.RFa),
+        dbRFa: nz(B.RFa),
+        valsalvaLFa: nz(D.LFa),
+        standLFa: nz(F.LFa), standRFa: nz(F.RFa),
         rfaChangeValsalvaPct: Math.round(rfaChangeValsalvaPct * 10) / 10,
         rfaChangeStandPct: Math.round(rfaChangeStandPct * 10) / 10,
       },
@@ -1533,13 +1670,14 @@ function computeMultiParameterGraphical(
 
   // --- Scatter + % change ---
   const A = phaseEvents[0], B = phaseEvents[1], D = phaseEvents[3], F = phaseEvents[5];
-  const rfaChangeValsalvaPct = A.RFa > 0 ? ((D.RFa - A.RFa) / A.RFa) * 100 : 0;
-  const rfaChangeStandPct = A.RFa > 0 ? ((F.RFa - A.RFa) / A.RFa) * 100 : 0;
+  const aRFa = nz(A.RFa);
+  const rfaChangeValsalvaPct = aRFa > 0 ? ((nz(D.RFa) - aRFa) / aRFa) * 100 : 0;
+  const rfaChangeStandPct = aRFa > 0 ? ((nz(F.RFa) - aRFa) / aRFa) * 100 : 0;
 
   // --- Coupling windows (4 panels: Baseline / DB / Valsalva / Stand) ---
   const testClock = parseTestStartClockSec(data);
   const couplingSpecs: Array<{ phase: CardioRespiratoryWindow["phase"]; label: string; idx: number; win: number; annots: () => string[] }> = [
-    { phase: "Baseline", label: "Baseline (1 min)", idx: 2, win: 60, annots: () => [`RFA = ${A.RFa.toFixed(2)}`, `LFA/RFA = ${A.SB.toFixed(2)}`] },
+    { phase: "Baseline", label: "Baseline (1 min)", idx: 2, win: 60, annots: () => [`RFA = ${nz(A.RFa).toFixed(2)}`, `LFA/RFA = ${nz(A.SB).toFixed(2)}`] },
     { phase: "DeepBreathing", label: "Deep Breathing (1 min)", idx: 1, win: 60, annots: () => [`E/I Ratio = ${data.eiRatio.toFixed(2)}`, `ref (1.2 - 1.6)`] },
     { phase: "Valsalva", label: "Valsalva (1 min)", idx: 3, win: 60, annots: () => [`Valsalva Ratio = ${data.valsalvaRatio.toFixed(2)}`, `ref (1.2 - 1.6)`] },
     { phase: "Stand", label: "Stand (1 min)", idx: 5, win: 90, annots: () => [`30:15 Ratio = ${data.thirtyFifteenRatio.toFixed(2)}`, `ref (1.15 - 1.5)`] },
@@ -1561,10 +1699,10 @@ function computeMultiParameterGraphical(
     lfaTrend: lfa,
     rfaTrend: rfa,
     scatter: {
-      baselineLFa: A.LFa, baselineRFa: A.RFa,
-      dbRFa: B.RFa,
-      valsalvaLFa: D.LFa,
-      standLFa: F.LFa, standRFa: F.RFa,
+      baselineLFa: nz(A.LFa), baselineRFa: nz(A.RFa),
+      dbRFa: nz(B.RFa),
+      valsalvaLFa: nz(D.LFa),
+      standLFa: nz(F.LFa), standRFa: nz(F.RFa),
       rfaChangeValsalvaPct: Math.round(rfaChangeValsalvaPct * 10) / 10,
       rfaChangeStandPct: Math.round(rfaChangeStandPct * 10) / 10,
     },
@@ -1814,28 +1952,18 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
     return analyzePhase(ecgSlice, samplingRate, seg.name, seg.label, seg.end - seg.start);
   });
 
-  // --- Demo override for Jill Shah: inject PDF-known phase values ---
-  // When a known demo file is uploaded, overwrite the computed metrics with
-  // the ground-truth values from the original Colombo PDF so the reproduction
-  // is pixel-perfect. Real .ans uploads (any other patient) use the computed
-  // values from the algorithm above.
-  const isJillShah = /^shah$/i.test((data.lastName || "").trim())
-                  && /^jill$/i.test((data.firstName || "").trim());
-  if (isJillShah) {
-    const assign = (p: PhaseMetrics, v: Partial<PhaseMetrics>) => Object.assign(p, v);
-    // Values from parsed.Shah-Jill-Fri-Sep-26-2025.txt (6-phase A–F table)
-    assign(phaseEvents[0], { meanHR: 56, FRF: 0.12, LFa: 0.91, RFa: 5.13, SB: 0.18 });
-    assign(phaseEvents[1], { meanHR: 58, FRF: 0.20, LFa: 1.04, RFa: 2.88, SB: 0.36 }); // DB
-    assign(phaseEvents[2], { meanHR: 60, FRF: 0.12, LFa: 1.31, RFa: 3.42, SB: 0.38 }); // Baseline C
-    assign(phaseEvents[3], { meanHR: 72, FRF: 0.14, LFa: 21.11, RFa: 2.93, SB: 7.20 }); // Valsalva
-    assign(phaseEvents[4], { meanHR: 58, FRF: 0.12, LFa: 1.15, RFa: 3.90, SB: 0.29 }); // Baseline E
-    assign(phaseEvents[5], { meanHR: 64, FRF: 0.14, LFa: 2.62, RFa: 6.55, SB: 0.40 }); // Stand
-    // Set Stand BP (93/61) and ensure baseline HR range is plausible
-    phaseEvents[5].SBP = 93;
-    phaseEvents[5].DBP = 61;
-    phaseEvents[5].PP = 32;
-    phaseEvents[5].MAP = Math.round((93 + 2 * 61) / 3);
-  }
+  // --- No vendor-value substitution ------------------------------------------
+  // The per-phase spectral aggregates (LFa/RFa/FRF/SB) are NOT stored as scalars
+  // in the .ans binary; the vendor derives them via an undisclosed wavelet
+  // algorithm and prints them only in the signed PDF. We DELIBERATELY do not
+  // memorize or fingerprint-substitute those PDF values at runtime — doing so
+  // would silently pass off a per-file identity match as a generic computation
+  // and violate generic accuracy. Instead `analyzePhase` above computes each
+  // aggregate generically from the raw arrays and tags it `computed/estimated`
+  // (proprietary tier [P]) via its `provenance`. Consumers must render these as
+  // estimates, and unavailable phases as "unavailable" — never as vendor truth.
+  // The de-identified vendor scalars live ONLY in the offline regression oracle
+  // (eval/ ground-truth), which never touches this render path.
 
   // Baseline A is the canonical resting measurement
   const A = phaseEvents[0];
@@ -1853,18 +1981,75 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
     A.MAP = Math.round((A.SBP + 2 * A.DBP) / 3);
   }
 
+  // --- Spectral / BP availability gate ---------------------------------------
+  // The proprietary spectral aggregates (LFa/RFa/SB) are only ever `computed`
+  // (estimated) from the raw ECG for these files — never vendor-reported or
+  // validated — so they are NOT clinically actionable. An estimated LFa that
+  // collapses toward 0 must never be read as "sympathetic 0%" or trigger an
+  // autonomic-neuropathy / parasympathetic / treatment finding. We decide once,
+  // generically, from provenance (no patient/hash branching), then null the
+  // spectral fields and gate every spectral-derived consumer below.
+  const spectralAvailable = !!(
+    A.provenance &&
+    mayInterpretClinically(A.provenance.LFa) &&
+    mayInterpretClinically(A.provenance.RFa) &&
+    mayInterpretClinically(A.provenance.SB)
+  );
+  const bpAvailable = A.SBP != null && A.DBP != null;
+
+  // Snapshot the raw (estimated) spectral values BEFORE nulling. The internal
+  // wellness index and the clinician trend charts operate on these numeric
+  // estimates; the report-facing `phaseEvents` (and every clinical claim /
+  // therapy / balance / body-impact consumer) use the NULLED copy so nothing
+  // fabricated ever surfaces as a clinical finding when spectral is
+  // unavailable. This keeps types sound (raw = numbers) while the gate holds.
+  const phaseEventsRaw: PhaseMetrics[] = phaseEvents.map((p) => ({ ...p }));
+
+  if (!spectralAvailable) {
+    // Explicitly mark spectral fields unavailable across all phases so the UI
+    // renders "Not assessed" and downstream numeric logic can't coerce them.
+    for (const ph of phaseEvents) {
+      (ph as unknown as { LFa: number | null }).LFa = null;
+      (ph as unknown as { RFa: number | null }).RFa = null;
+      (ph as unknown as { SB: number | null }).SB = null;
+      if (ph.provenance) {
+        ph.provenance.LFa = unavailableProvenance("LFa", "Proprietary spectral aggregate is not reproducible from the raw .ans; vendor value available only in the signed PDF.");
+        ph.provenance.RFa = unavailableProvenance("RFa", "Proprietary spectral aggregate is not reproducible from the raw .ans; vendor value available only in the signed PDF.");
+        ph.provenance.SB = unavailableProvenance("SB", "Sympathovagal balance depends on unavailable LFa/RFa.");
+      }
+    }
+  }
+
+  // Numeric accessors that are safe under the availability gate. When spectral
+  // is unavailable these return null so no comparison can silently treat a
+  // fabricated 0 as a real low value.
+  const sLFa = (p: PhaseMetrics): number | null => (spectralAvailable ? (p.LFa as number) : null);
+  const sRFa = (p: PhaseMetrics): number | null => (spectralAvailable ? (p.RFa as number) : null);
+  const sSB = (p: PhaseMetrics): number | null => (spectralAvailable ? (p.SB as number) : null);
+
   // Classify patient-reported (or computed) Ewing ratios
   const age = data.age;
-  const eiN = norm("EI", age);
-  const valN = norm("Valsalva", age);
-  const tfN = norm("ThirtyFifteen", age);
+  // Ewing time-domain ratios are ONE-SIDED (greater-than) normals: a value at
+  // or above the Colombo threshold is Normal. Using the two-sided `classify`
+  // here was the S1-3 defect (values comfortably above threshold were flagged
+  // "Borderline Low"). Thresholds come from the single source of truth.
+  const eiT = EWING_THRESHOLDS.eiRatio;
+  const valT = EWING_THRESHOLDS.valsalvaRatio;
+  const tfT = EWING_THRESHOLDS.thirtyFifteenRatio;
+  const toClassification = (
+    value: number,
+    t: typeof eiT,
+  ): Classification => {
+    const c = classifyEwing(value, t);
+    return { label: c.label, severity: c.severity, value, lo: t.normalAbove, hi: Infinity };
+  };
   const ratios = {
-    eiRatio: { value: data.eiRatio, normal: `> ${eiN.lo.toFixed(3)}`,
-      classification: classify(data.eiRatio, eiN.lo, eiN.hi) },
-    valsalvaRatio: { value: data.valsalvaRatio, normal: `> ${valN.lo.toFixed(3)}`,
-      classification: classify(data.valsalvaRatio, valN.lo, valN.hi) },
-    thirtyFifteenRatio: { value: data.thirtyFifteenRatio, normal: `> ${tfN.lo.toFixed(3)}`,
-      classification: classify(data.thirtyFifteenRatio, tfN.lo, tfN.hi) },
+    eiRatio: { value: data.eiRatio, normal: ewingNormalRangeLabel(eiT),
+      classification: toClassification(data.eiRatio, eiT) },
+    valsalvaRatio: { value: data.valsalvaRatio, normal: ewingNormalRangeLabel(valT),
+      classification: toClassification(data.valsalvaRatio, valT) },
+    thirtyFifteenRatio: { value: data.thirtyFifteenRatio, normal: ewingNormalRangeLabel(tfT),
+      classification: toClassification(data.thirtyFifteenRatio, tfT) },
   };
 
   // Dysfunction patterns (driven by Colombo rules from the PDF)
@@ -1873,23 +2058,40 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   const RFa_n = norm("RFa", age);
   const LFa_n = norm("LFa", age);
 
+  // HR-only patterns are always supported (ECG-derived, consensus tier).
   const bradycardia = A.meanHR > 0 && A.meanHR < HR_n.lo;
-  const parasympatheticDominance = A.SB > 0 && A.SB < SB_n.lo;
-  const highFRF = B.FRF > 0.15;
-  const dbRFaLow = B.RFa < 19; // from Jill's PDF: DB norm 19.97-70.79
-  const standRFaHigh = F.RFa > RFa_n.hi * 0.8 || F.RFa > A.RFa * 1.2;
-  const parasympatheticExcess = standRFaHigh;
-  const parasympatheticWithdrawal = A.RFa < RFa_n.lo;
-  const sympatheticExcess = F.LFa > LFa_n.hi;
-  const sympatheticWithdrawal = F.LFa < A.LFa * 0.9; // failure to mobilize on stand
-  const maskedSW = parasympatheticExcess && sympatheticWithdrawal;
-  const valsalvaLFa = D.LFa;
-  const standLFa = F.LFa;
-  const preSyncopeRisk = standLFa > valsalvaLFa * 0.9; // stand peak ≈ valsalva peak
   const hrDelta = F.meanHR - A.meanHR;
-  const POTS = hrDelta >= 30;
-  const orthostaticHypotension = (data.baselineSystolicBP ?? 120) - (A.SBP ?? 120) > 20;
-  const vasovagalRisk = F.RFa > F.LFa;
+  const POTS = A.meanHR > 0 && hrDelta >= 30;
+  // FRF norm band is the single source of truth (Colombo 0.09–0.15 Hz). FRF is
+  // a proprietary [P] framing — gate it on spectral availability too.
+  const highFRF = spectralAvailable && B.FRF > COLOMBO_NORMS.FRF.hi;
+
+  // --- SPECTRAL-GATED patterns ------------------------------------------------
+  // Every pattern below depends on LFa/RFa/SB. When spectral is unavailable they
+  // are ALL false — we never coerce a null spectral value to 0 and read it as a
+  // "low" finding. This is what previously produced the spurious Parasympathetic
+  // Excess / Advanced Autonomic Neuropathy on a raw ECG-only file.
+  const A_SB = sSB(A), A_RFa = sRFa(A), A_LFa = sLFa(A);
+  const B_RFa = sRFa(B);
+  const D_LFa = sLFa(D);
+  const F_RFa = sRFa(F), F_LFa = sLFa(F);
+
+  const parasympatheticDominance = A_SB != null && A_SB > 0 && A_SB < SB_n.lo;
+  const dbRFaLow = B_RFa != null && B_RFa < 19; // Jill's PDF DB norm 19.97-70.79
+  const standRFaHigh =
+    F_RFa != null && A_RFa != null &&
+    (F_RFa > RFa_n.hi * 0.8 || F_RFa > A_RFa * 1.2);
+  const parasympatheticExcess = standRFaHigh;
+  const parasympatheticWithdrawal = A_RFa != null && A_RFa < RFa_n.lo;
+  const sympatheticExcess = F_LFa != null && F_LFa > LFa_n.hi;
+  const sympatheticWithdrawal = F_LFa != null && A_LFa != null && F_LFa < A_LFa * 0.9;
+  const maskedSW = parasympatheticExcess && sympatheticWithdrawal;
+  const preSyncopeRisk =
+    D_LFa != null && F_LFa != null && F_LFa > D_LFa * 0.9; // stand peak ≈ valsalva
+  // Orthostatic hypotension requires real BP — gated on bpAvailable.
+  const orthostaticHypotension =
+    bpAvailable && (data.baselineSystolicBP ?? 120) - (A.SBP ?? 120) > 20;
+  const vasovagalRisk = F_RFa != null && F_LFa != null && F_RFa > F_LFa;
   const advancedAutonomicDysfunction = parasympatheticWithdrawal && sympatheticWithdrawal;
   const CAN = advancedAutonomicDysfunction && ratios.eiRatio.classification.severity === "Abnormal";
 
@@ -1905,36 +2107,69 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   const baselineFindings: string[] = [];
   if (bradycardia) baselineFindings.push(`Low HR (possible Bradycardia) — ${A.meanHR} bpm${data.baselineSystolicBP ? ` and ${A.SBP && A.SBP >= 90 && A.SBP <= 120 ? "Normal" : A.SBP && A.SBP < 90 ? "Low" : "Borderline"} BP` : ""}`);
   else baselineFindings.push(`Normal HR and ${data.baselineSystolicBP ? "Normal" : "unreported"} BP`);
-  const lfaA = classify(A.LFa, LFa_n.lo, LFa_n.hi);
-  if (lfaA.label === "Borderline Low") baselineFindings.push("Borderline low sympathetic modulation (LFa)");
-  else if (lfaA.severity === "Normal") baselineFindings.push("Normal sympathetic modulation (LFa)");
-  else baselineFindings.push(`${lfaA.label} sympathetic modulation (LFa)`);
-  const rfaA = classify(A.RFa, RFa_n.lo, RFa_n.hi);
-  if (rfaA.severity === "Normal") baselineFindings.push("Normal parasympathetic modulation (RFa)");
-  else baselineFindings.push(`${rfaA.label} parasympathetic modulation (RFa)`);
-  if (parasympatheticDominance) {
-    baselineFindings.push("Low sympathovagal balance (SB = LFa/RFa) suggesting possible parasympathetic dominance. This may be associated with fatigue, exercise intolerance, depression, poor circulation, and frequent headaches or migraines.");
+  // Spectral (LFa/RFa/SB) modulation findings are only emitted when the
+  // proprietary aggregates are clinically available. Otherwise we state, once,
+  // that they were not assessed — never a fabricated Normal/Low classification.
+  if (spectralAvailable) {
+    const lfaA = classify(A.LFa as number, LFa_n.lo, LFa_n.hi);
+    if (lfaA.label === "Borderline Low") baselineFindings.push("Borderline low sympathetic modulation (LFa)");
+    else if (lfaA.severity === "Normal") baselineFindings.push("Normal sympathetic modulation (LFa)");
+    else baselineFindings.push(`${lfaA.label} sympathetic modulation (LFa)`);
+    const rfaA = classify(A.RFa as number, RFa_n.lo, RFa_n.hi);
+    if (rfaA.severity === "Normal") baselineFindings.push("Normal parasympathetic modulation (RFa)");
+    else baselineFindings.push(`${rfaA.label} parasympathetic modulation (RFa)`);
+    if (parasympatheticDominance) {
+      baselineFindings.push("Low sympathovagal balance (SB = LFa/RFa) suggesting possible parasympathetic dominance. This may be associated with fatigue, exercise intolerance, depression, poor circulation, and frequent headaches or migraines.");
+    }
+  } else {
+    baselineFindings.push("Sympathetic/parasympathetic spectral measures (LFa/RFa/SB) not assessed — not reproducible from this recording. Clinician review of the vendor report is required for spectral interpretation.");
   }
   phaseFindings.push({ phase: "INITIAL BASELINE", indication: "Indication of balance in the patient's Autonomic Nervous System (ANS) and protection of the heart", findings: baselineFindings });
 
   const dbFindings: string[] = [];
-  if (highFRF) {
-    dbFindings.push(`NOTE: Fundamental Respiratory Frequency (FRF) is high during DB (${B.FRF.toFixed(2)} Hz; Normal: 0.09–0.15) which may artificially reduce the parasympathetic measure. High FRF may be associated with upper respiratory or pulmonary disorder and anxiety. Consider treating the patient and retesting to obtain the true interpretation for the DB phase.`);
+  // lfaD/rfaD/lfaF are null when spectral is unavailable so the impression
+  // counting below can't treat a missing value as "Abnormal".
+  const lfaD = spectralAvailable ? classify(D.LFa as number, LFa_n.lo, LFa_n.hi) : null;
+  const rfaD = spectralAvailable ? classify(D.RFa as number, RFa_n.lo, RFa_n.hi) : null;
+  const lfaF = spectralAvailable ? classify(F.LFa as number, LFa_n.lo, LFa_n.hi) : null;
+  if (spectralAvailable) {
+    if (highFRF) {
+      dbFindings.push(`NOTE: Fundamental Respiratory Frequency (FRF) is high during DB (${B.FRF.toFixed(2)} Hz; Normal: 0.09–0.15) which may artificially reduce the parasympathetic measure. High FRF may be associated with upper respiratory or pulmonary disorder and anxiety. Consider treating the patient and retesting to obtain the true interpretation for the DB phase.`);
+    }
+    if (dbRFaLow) dbFindings.push("Low parasympathetic response (RFa) to DB suggesting possible autonomic dysfunction");
+    else dbFindings.push("Normal parasympathetic response (RFa) to DB");
+    dbFindings.push(`${lfaD!.severity === "Normal" ? "Normal" : lfaD!.label} sympathetic response (LFa) to Valsalva`);
+    dbFindings.push(`${rfaD!.severity === "Normal" ? "Normal" : rfaD!.label} parasympathetic response (RFa) to Valsalva`);
+  } else {
+    dbFindings.push("Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed — not reproducible from this recording.");
   }
-  if (dbRFaLow) dbFindings.push("Low parasympathetic response (RFa) to DB suggesting possible autonomic dysfunction");
-  else dbFindings.push("Normal parasympathetic response (RFa) to DB");
-  const lfaD = classify(D.LFa, LFa_n.lo, LFa_n.hi);
-  dbFindings.push(`${lfaD.severity === "Normal" ? "Normal" : lfaD.label} sympathetic response (LFa) to Valsalva`);
-  const rfaD = classify(D.RFa, RFa_n.lo, RFa_n.hi);
-  dbFindings.push(`${rfaD.severity === "Normal" ? "Normal" : rfaD.label} parasympathetic response (RFa) to Valsalva`);
+  // The E/I ratio is the cardiovagal Ewing measure of the Deep-Breathing phase —
+  // ECG-derived and always computed, so it is a SUPPORTED observation reported
+  // here regardless of spectral availability (never suppressed with the spectral
+  // aggregates). The Valsalva ratio is likewise the Ewing measure of the Valsalva
+  // phase.
+  {
+    const ei = ratios.eiRatio;
+    const val = ratios.valsalvaRatio;
+    dbFindings.push(
+      `${ei.classification.severity === "Normal" ? "Normal" : ei.classification.label} E/I ratio (deep-breathing cardiovagal response) = ${ei.value.toFixed(2)} (normal ${ei.normal})`,
+    );
+    dbFindings.push(
+      `${val.classification.severity === "Normal" ? "Normal" : val.classification.label} Valsalva ratio (cardiovagal response) = ${val.value.toFixed(2)} (normal ${val.normal})`,
+    );
+  }
   phaseFindings.push({ phase: "DEEP BREATHING (DB) AND VALSALVA RESPONSES", indication: "Detection of early signs of autonomic dysfunction and chronic disease", findings: dbFindings });
 
   const standFindings: string[] = [];
-  const lfaF = classify(F.LFa, LFa_n.lo, LFa_n.hi);
-  standFindings.push(`${lfaF.severity === "Normal" ? "Normal" : lfaF.label} sympathetic response (LFa) to stand`);
-  if (preSyncopeRisk) standFindings.push('A higher peak sympathetic response (LFa) to stand compared to the response during Valsalva suggesting a possible risk of pre-syncope [Check "HR" and "Trends" plot and EKG Report to rule out ectopy]');
-  if (vasovagalRisk) standFindings.push("Relatively higher parasympathetic activation (RFa) compared to sympathetic activation (LFa) throughout the test suggesting risk of possible vasovagal pre-syncope");
-  if (parasympatheticExcess) standFindings.push("High parasympathetic activation (RFa) indicating excess parasympathetic activity ** [Check for symptoms such as unstable BP and dizziness]");
+  if (spectralAvailable) {
+    standFindings.push(`${lfaF!.severity === "Normal" ? "Normal" : lfaF!.label} sympathetic response (LFa) to stand`);
+    if (preSyncopeRisk) standFindings.push('A higher peak sympathetic response (LFa) to stand compared to the response during Valsalva suggesting a possible risk of pre-syncope [Check "HR" and "Trends" plot and EKG Report to rule out ectopy]');
+    if (vasovagalRisk) standFindings.push("Relatively higher parasympathetic activation (RFa) compared to sympathetic activation (LFa) throughout the test suggesting risk of possible vasovagal pre-syncope");
+    if (parasympatheticExcess) standFindings.push("High parasympathetic activation (RFa) indicating excess parasympathetic activity ** [Check for symptoms such as unstable BP and dizziness]");
+  } else {
+    standFindings.push("Spectral response to standing (LFa/RFa) not assessed — not reproducible from this recording.");
+  }
+  // HR response to standing IS supported (ECG-derived).
   if (hrDelta >= 10 && hrDelta <= 30) standFindings.push("Normal HR response");
   else if (hrDelta < 10) standFindings.push("Insufficient HR response to stand");
   else standFindings.push(`Excessive HR rise of ${hrDelta} bpm — POTS criteria`);
@@ -1944,16 +2179,33 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   // Only strict abnormalities to DB / Valsalva / Stand challenges count here.
   // PE on stand is noted separately as a pattern (may mask SW) but does not
   // increment the challenge count unless stand LFa is also abnormal.
-  const dbAbnormal = dbRFaLow || rfaD.severity === "Abnormal";
-  const valsalvaAbnormal = (lfaD.severity === "Abnormal" && lfaD.label === "Low");
-  const standAbnormal = (lfaF.severity === "Abnormal" && lfaF.label === "Low") || preSyncopeRisk || POTS || orthostaticHypotension;
+  const dbAbnormal = dbRFaLow || (rfaD?.severity === "Abnormal");
+  const valsalvaAbnormal = (lfaD?.severity === "Abnormal" && lfaD?.label === "Low");
+  const standAbnormalSpectral = (lfaF?.severity === "Abnormal" && lfaF?.label === "Low") || preSyncopeRisk;
+  const standAbnormal = standAbnormalSpectral || POTS || orthostaticHypotension;
   const challenges: string[] = [];
   if (dbAbnormal) challenges.push("the parasympathetic response (RFa) during DB is low");
   if (valsalvaAbnormal) challenges.push("the sympathetic response (LFa) during Valsalva is abnormal");
   if (standAbnormal) challenges.push("the response to standing is abnormal");
   const abnormalChallengeCount = challenges.length;
   let overall: string;
-  if (abnormalChallengeCount === 0) overall = "No significant abnormalities in autonomic challenges — normal autonomic function.";
+  if (!spectralAvailable) {
+    // With only ECG-derived HR + Ewing ratios, we can only report those
+    // supported observations — never an autonomic-dysfunction grading that
+    // depends on spectral challenge responses.
+    const abnormalRatios: string[] = [];
+    if (ratios.eiRatio.classification.severity === "Abnormal") abnormalRatios.push("E/I ratio");
+    if (ratios.valsalvaRatio.classification.severity === "Abnormal") abnormalRatios.push("Valsalva ratio");
+    if (ratios.thirtyFifteenRatio.classification.severity === "Abnormal") abnormalRatios.push("30:15 ratio");
+    const hrNote = POTS
+      ? ` Heart-rate rise on standing (${hrDelta} bpm) meets the POTS threshold and warrants clinician review.`
+      : bradycardia
+        ? ` Resting heart rate is low (${A.meanHR} bpm).`
+        : "";
+    overall = abnormalRatios.length === 0
+      ? `Supported observations only: cardiovagal Ewing ratios are within normal limits and heart rate/phase timing were ECG-derived.${hrNote} Spectral (sympathetic/parasympathetic) and blood-pressure measures were not assessed and require clinician review of the vendor report — no autonomic-neuropathy or sympathovagal interpretation can be made from this recording.`
+      : `Supported observations only: ${abnormalRatios.join(", ")} outside normal limits on the cardiovagal Ewing ratios.${hrNote} Spectral and blood-pressure measures were not assessed and require clinician review — no autonomic-neuropathy or sympathovagal interpretation can be made from this recording.`;
+  } else if (abnormalChallengeCount === 0) overall = "No significant abnormalities in autonomic challenges — normal autonomic function.";
   else if (abnormalChallengeCount === 1) overall = `Abnormal responses to autonomic challenges (DB, Valsalva, or standing) suggest autonomic dysfunction. Since only ${challenges[0]}, mild autonomic dysfunction is possible.`;
   else if (abnormalChallengeCount === 2) overall = "Abnormal responses to multiple autonomic challenges suggest moderate autonomic dysfunction.";
   else overall = "Abnormal responses across all autonomic challenges suggest advanced autonomic dysfunction.";
@@ -1962,8 +2214,22 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   const therapies: TherapyRecommendation[] = [];
   const contraindications: string[] = [];
 
+  // HARD SAFETY GATE: every pharmacological / supplement / salt recommendation
+  // below depends on the spectral (LFa/RFa/SB) and/or BP measures. When those
+  // are not assessed we must NOT recommend ALA, salt, Nortriptyline, Midodrine,
+  // etc. Emit an explicit "insufficient data / clinician review" card instead.
+  const canRecommendTreatment = spectralAvailable; // BP-only therapies also require spectral context here
+  if (!canRecommendTreatment) {
+    therapies.push({
+      category: "Monitoring",
+      intervention: "Insufficient data for treatment recommendations — clinician review required",
+      rationale: "The proprietary spectral measures (sympathetic LFa, parasympathetic RFa, sympathovagal balance SB) and continuous blood pressure were not assessable from this recording. No supplement (e.g. Alpha-Lipoic Acid), salt/fluid, or pharmacological recommendation can be made without them. A qualified clinician should review the signed vendor report before any therapy is considered.",
+      priority: "primary",
+    });
+  }
+
   // Parasympathetic Excess on stand/Valsalva → Nortriptyline / Amitriptyline / Duloxetine
-  if (parasympatheticExcess) {
+  if (canRecommendTreatment && parasympatheticExcess) {
     therapies.push({
       category: "Pharmacological",
       intervention: "Low-dose Nortriptyline or Amitriptyline",
@@ -1982,7 +2248,7 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   }
 
   // Parasympathetic dominance at baseline (low SB)
-  if (parasympatheticDominance) {
+  if (canRecommendTreatment && parasympatheticDominance) {
     therapies.push({
       category: "Therapeutic Target",
       intervention: "Restore sympathovagal balance (target SB 1.0 – 2.0)",
@@ -1994,9 +2260,9 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   // ALA (Alpha-Lipoic Acid) — Colombo protocol candidate for any autonomic
   // dysfunction (PE, PW, SE, SW, AAD). Gated strictly by baseline BP.
   const baselineSBP = data.baselineSystolicBP ?? 120;
-  const alaCandidate = advancedAutonomicDysfunction || parasympatheticWithdrawal
+  const alaCandidate = canRecommendTreatment && (advancedAutonomicDysfunction || parasympatheticWithdrawal
     || parasympatheticExcess || sympatheticWithdrawal || sympatheticExcess
-    || parasympatheticDominance;
+    || parasympatheticDominance);
   if (alaCandidate) {
     if (baselineSBP < 95) {
       contraindications.push("Alpha-Lipoic Acid (ALA) is contraindicated due to low baseline blood pressure [Magidenko 2007; NutritionalReviews.org 2007]");
@@ -2012,7 +2278,7 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   }
 
   // Hydration + salt protocol (POTS / orthostatic / syncope)
-  if (POTS || orthostaticHypotension || preSyncopeRisk || vasovagalRisk) {
+  if (canRecommendTreatment && (POTS || orthostaticHypotension || preSyncopeRisk || vasovagalRisk)) {
     therapies.push({
       category: "Lifestyle",
       intervention: "Hydration + salt protocol",
@@ -2023,7 +2289,7 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   }
 
   // Low-and-slow exercise (PE or SE)
-  if (parasympatheticExcess || sympatheticExcess) {
+  if (canRecommendTreatment && (parasympatheticExcess || sympatheticExcess)) {
     therapies.push({
       category: "Exercise",
       intervention: "Low-and-Slow Exercise Protocol",
@@ -2034,7 +2300,7 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   }
 
   // Midodrine / Droxidopa for SW
-  if (sympatheticWithdrawal && !parasympatheticExcess) {
+  if (canRecommendTreatment && sympatheticWithdrawal && !parasympatheticExcess) {
     therapies.push({
       category: "Pharmacological",
       intervention: "Midodrine",
@@ -2063,46 +2329,65 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   }
 
   // Wellness
-  const breakdown = computeWellness(data, phaseEvents, patterns);
+  // Wellness runs on the raw numeric snapshot (estimated spectral) so the
+  // composite index stays stable; it is an internal reserve score, not a
+  // spectral clinical claim. All spectral CLAIMS remain gated above.
+  const breakdown = computeWellness(data, phaseEventsRaw, patterns);
   const score = Math.round(breakdown.final);
   const tier = tierFromScore(score);
 
-  let riskLevel = "Normal";
+  let riskLevel = spectralAvailable ? "Normal" : "Not assessed — spectral/BP data unavailable";
   if (advancedAutonomicDysfunction) riskLevel = "High — Advanced Autonomic Dysfunction";
   else if (CAN) riskLevel = "High — Cardiovascular Autonomic Neuropathy";
-  else if (POTS) riskLevel = "Moderate — POTS";
+  else if (POTS) riskLevel = "Moderate — POTS (HR-based; requires clinician review)";
   else if (preSyncopeRisk || orthostaticHypotension) riskLevel = "Moderate — Pre-syncope/Orthostatic";
   else if (parasympatheticExcess || sympatheticExcess || parasympatheticDominance) riskLevel = "Mild — Autonomic Imbalance";
   else if (highFRF || dbRFaLow) riskLevel = "Low — Borderline Findings";
 
+  // Energy level is a spectral-derived qualitative label — only assert it when
+  // spectral is available. Otherwise default to a neutral "Moderate" without an
+  // interpretive claim (the UI shows "Not assessed" copy alongside).
   const energyLevel: ANSReport["energyLevel"] =
+    !spectralAvailable ? "Moderate" :
     (parasympatheticDominance && bradycardia) ? "Low" :
     (parasympatheticExcess || sympatheticExcess) ? "Moderate" : "High";
 
-  const autonomicBalance = {
-    parasympathetic: A.RFa,
-    sympathetic: A.LFa,
-    balance: A.SB,
-    interpretation: parasympatheticDominance
-      ? "Parasympathetic-dominant. Your nervous system is in a prolonged 'rest and digest' state, which at this intensity is associated with fatigue and low exercise tolerance."
-      : parasympatheticExcess ? "Parasympathetic Excess on standing — your vagal tone spikes when it should step down, which can cause unstable blood pressure and dizziness."
-      : "Balanced sympathovagal tone.",
-  };
+  const autonomicBalance = spectralAvailable
+    ? {
+        parasympathetic: A.RFa as number,
+        sympathetic: A.LFa as number,
+        balance: A.SB as number,
+        available: true,
+        interpretation: parasympatheticDominance
+          ? "Parasympathetic-dominant. Your nervous system is in a prolonged 'rest and digest' state, which at this intensity is associated with fatigue and low exercise tolerance."
+          : parasympatheticExcess ? "Parasympathetic Excess on standing — your vagal tone spikes when it should step down, which can cause unstable blood pressure and dizziness."
+          : "Balanced sympathovagal tone.",
+      }
+    : {
+        // Never coerce missing spectral to 0 / a 0-100 split. The UI renders
+        // "Not assessed" from these nulls.
+        parasympathetic: null,
+        sympathetic: null,
+        balance: null,
+        available: false,
+        interpretation: "Sympathetic vs parasympathetic balance not assessed — the spectral measures (LFa/RFa/SB) are not reproducible from this recording. Clinician review of the vendor report is required.",
+      };
 
   const clinicalFlags: string[] = [];
   if (highFRF) clinicalFlags.push(`High FRF during DB (${B.FRF.toFixed(2)} Hz) — recommend retest with relaxed breathing`);
   if (data.ectopicBeats > 0) clinicalFlags.push(`${data.ectopicBeats} possible ectopic beat(s) detected`);
   if (bradycardia) clinicalFlags.push(`Bradycardia: resting HR ${A.meanHR} bpm`);
   if (parasympatheticDominance) clinicalFlags.push(`Parasympathetic dominance: SB = ${A.SB}`);
+  if (!spectralAvailable) clinicalFlags.push("Spectral measures (LFa/RFa/SB) and continuous BP not assessed — not reproducible from this recording; clinician review of the vendor report required.");
 
-  const bodySystemImpact = computeBodyImpact(patterns, phaseEvents);
+  const bodySystemImpact = computeBodyImpact(patterns, phaseEvents, { spectralAvailable, bpAvailable });
 
   // Multi-Parameter Graphical data for clinician view. Guarded in try/catch
   // because trend computation is the most expensive and newest code path
   // — if it fails we still want the rest of the report to render.
   let multiParameter: MultiParameterGraphical | undefined;
   try {
-    multiParameter = computeMultiParameterGraphical(data, phaseEvents);
+    multiParameter = computeMultiParameterGraphical(data, phaseEventsRaw);
   } catch (e) {
     console.error("Multi-parameter graphical computation failed:", e);
     multiParameter = undefined;
@@ -2140,7 +2425,9 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
     clinicalFlags,
     overallImpression: overall,
     samplingRate,
-    respiratoryFrequency: A.FRF,
+    spectralAvailable,
+    bpAvailable,
+    respiratoryFrequency: spectralAvailable ? A.FRF : null,
     rPeakCount: phaseEvents.reduce((n, p) => n + Math.round(p.meanHR * p.durationSec / 60), 0),
     generatedAt: new Date().toISOString(),
     multiParameter,
@@ -2219,7 +2506,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let diagnosticSummary: ReturnType<typeof computeDiagnosticSummary> | undefined;
     if (ansStudy) {
       try {
-        diagnosticSummary = computeDiagnosticSummary(ansStudy);
+        // Single-evaluation-engine reconciliation (S2-1/S2-2): backfill any
+        // AnsStudy fields the text parser left MISSING from the ECG-computed
+        // report, so the certainty engine scores the same numbers shown
+        // everywhere else. Parser-extracted values are never overwritten.
+        const reconciledStudy = reconcileStudyWithReport(ansStudy, report);
+        diagnosticSummary = computeDiagnosticSummary(reconciledStudy);
       } catch (err: any) {
         console.warn(
           "[ans-scoring] computeDiagnosticSummary failed:",

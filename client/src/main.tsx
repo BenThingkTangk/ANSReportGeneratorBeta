@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import getSupabase from "./lib/supabase";
+import { registerServiceWorker } from "./lib/registerSW";
 
 /**
  * Bootstrap auth callback handling BEFORE React mounts.
@@ -71,4 +72,5 @@ handleAuthCallback().finally(() => {
     window.location.hash = "#/";
   }
   createRoot(document.getElementById("root")!).render(<App />);
+  registerServiceWorker();
 });

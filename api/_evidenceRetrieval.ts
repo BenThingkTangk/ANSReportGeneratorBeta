@@ -130,7 +130,7 @@ export async function getEvidenceForRules(
       byType.set(ref.type, arr);
     }
 
-    for (const [type, keys] of byType.entries()) {
+    for (const [type, keys] of Array.from(byType.entries())) {
       const { data, error } = await admin
         .from("ans_rule_evidence_links")
         .select(

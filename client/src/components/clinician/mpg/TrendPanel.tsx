@@ -15,6 +15,7 @@ import {
 } from "recharts";
 import type { MultiParameterGraphical, TimeSeries } from "@shared/schema";
 import { ColomboExplainer } from "../ColomboExplainer";
+import { SpectralUnavailableCard } from "./SpectralUnavailableCard";
 
 /**
  * Three stacked trend charts that mirror the "full-test ribbon" of the
@@ -83,12 +84,18 @@ function fmtClock(sec: number, testStartClock: string): string {
 interface TrendPanelProps {
   mpg: MultiParameterGraphical;
   testStartClock?: string;
+  /**
+   * When false, the rolling LFa/RFa (spectral) trend is not reproducible from
+   * this recording, so that chart is replaced with a "not reproducible" card.
+   * HR and breathing trends are ECG-derived and remain shown.
+   */
+  spectralAvailable: boolean;
 }
 
-export function TrendPanel({ mpg, testStartClock = "13:08:00" }: TrendPanelProps) {
+export function TrendPanel({ mpg, testStartClock = "13:08:00", spectralAvailable }: TrendPanelProps) {
   const hrData = toChartData(mpg.heartRateTrend);
   const breathData = toChartData(mpg.breathingTrend);
-  const lfaRfaData = mergeSeries(mpg.lfaTrend, mpg.rfaTrend);
+  const lfaRfaData = spectralAvailable ? mergeSeries(mpg.lfaTrend, mpg.rfaTrend) : [];
 
   // Ticks every ~60 seconds, rounded
   const ticks: number[] = [];
@@ -104,8 +111,8 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00" }: TrendPanelProps
   // LFa/RFa fixed Y-axis at 60 (Colombo standard) so cross-test comparisons
   // stay calibrated. We extend if the patient's spectral power genuinely
   // exceeds 60 so we don't clip outliers off-screen.
-  const lfaMax = Math.max(...mpg.lfaTrend.v);
-  const rfaMax = Math.max(...mpg.rfaTrend.v);
+  const lfaMax = spectralAvailable ? Math.max(...mpg.lfaTrend.v) : 0;
+  const rfaMax = spectralAvailable ? Math.max(...mpg.rfaTrend.v) : 0;
   const lfaRfaDomainHi = Math.max(60, Math.ceil(Math.max(lfaMax, rfaMax) * 1.05));
 
   return (
@@ -211,6 +218,16 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00" }: TrendPanelProps
       <ColomboExplainer chartKey="breathingTrend" />
 
       {/* LFa vs RFa */}
+      {!spectralAvailable ? (
+        <div className="mt-6">
+          <RowLabel left="LFa (Sympathetic) vs RFa (Parasympathetic)" right="bpm²" />
+          <SpectralUnavailableCard
+            title="Rolling LFa/RFa spectral trend — not reproducible"
+            testId="mpg-lfa-rfa-unavailable"
+            compact
+          />
+        </div>
+      ) : (
       <div className="mt-6" data-testid="mpg-lfa-rfa-chart">
         <RowLabel left="LFa (Sympathetic) vs RFa (Parasympathetic)" right="bpm²" />
         <ResponsiveContainer width="100%" height={170}>
@@ -254,7 +271,8 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00" }: TrendPanelProps
           </LineChart>
         </ResponsiveContainer>
       </div>
-      <ColomboExplainer chartKey="lfaRfaTrend" />
+      )}
+      {spectralAvailable && <ColomboExplainer chartKey="lfaRfaTrend" />}
     </motion.div>
   );
 }

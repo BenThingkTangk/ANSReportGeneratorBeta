@@ -12,6 +12,7 @@ import { BodyHeatmap } from "./BodyHeatmap";
 import { SupplementsPanel } from "./SupplementsPanel";
 import { TreatmentsPanel } from "./TreatmentsPanel";
 import { NextTestCard } from "./NextTestCard";
+import { sbZoneLabel } from "@shared/colomboNorms";
 
 interface PatientPortalProps {
   report: ANSReport;
@@ -37,10 +38,32 @@ export function PatientPortal({ report }: PatientPortalProps) {
     phases[0];
   const rmssd = baselinePhase?.HRV_RMSSD ?? 0;
   const sdnn = baselinePhase?.HRV_SDNN ?? 0;
-  // LF/HF uses Colombo's LFa/RFa ratio (SB) — physiologically equivalent here.
-  const lfHf =
-    baselinePhase?.SB ??
-    (baselinePhase && baselinePhase.RFa > 0 ? baselinePhase.LFa / baselinePhase.RFa : 0);
+  // Spectral availability gate: when the proprietary LFa/RFa/SB are not
+  // reproducible, the balance split is "Not assessed". Never coerce to 0/100 or
+  // label a balance zone.
+  const spectralAvailable = report.spectralAvailable ?? ab.available ?? true;
+  // LF/HF uses Colombo's LFa/RFa ratio (SB) — only meaningful when available.
+  const lfHf: number | null =
+    !spectralAvailable
+      ? null
+      : (baselinePhase?.SB ??
+        (baselinePhase && (baselinePhase.RFa ?? 0) > 0 ? (baselinePhase.LFa as number) / (baselinePhase.RFa as number) : 0));
+  // Hero balance chip reflects the measured sympathovagal balance (SB) via the
+  // fixed Colombo cutoffs — NOT the score-derived wellness tier. This keeps the
+  // patient hero from saying "Balanced" when the clinician view flags an
+  // imbalance (S2-3). When SB is unavailable, show "Not assessed" — never a
+  // fabricated balance label.
+  const balanceChipLabel =
+    spectralAvailable && baselinePhase && baselinePhase.SB != null && Number.isFinite(baselinePhase.SB)
+      ? sbZoneLabel(baselinePhase.SB as number)
+      : spectralAvailable
+        ? tier
+        : "Not assessed";
+  // Decorative visual components animate on a numeric split. When spectral is
+  // unavailable feed a neutral 50/50 so the animation still runs — the numeric
+  // % is NEVER shown to the user (the gauge renders "Not assessed").
+  const visSymp = spectralAvailable ? (ab.sympathetic ?? 50) : 50;
+  const visPara = spectralAvailable ? (ab.parasympathetic ?? 50) : 50;
 
   const fetchSynopsis = async () => {
     setSynopsisLoading(true);
@@ -147,18 +170,20 @@ export function PatientPortal({ report }: PatientPortalProps) {
           </div>
           <div className="flex flex-col items-center justify-center">
             <NervousSystemBody
-              parasympathetic={ab.parasympathetic}
-              sympathetic={ab.sympathetic}
+              parasympathetic={visPara}
+              sympathetic={visSymp}
+              available={spectralAvailable}
             />
           </div>
           <div className="mt-4 max-w-2xl mx-auto">
             <AutonomicBalanceGauge
-              sympathetic={ab.sympathetic}
-              parasympathetic={ab.parasympathetic}
+              sympathetic={spectralAvailable ? ab.sympathetic : null}
+              parasympathetic={spectralAvailable ? ab.parasympathetic : null}
               hrvRmssdMs={rmssd}
               hrvSdnnMs={sdnn}
               lfHfRatio={lfHf}
-              balanceLabel={tier}
+              balanceLabel={balanceChipLabel}
+              available={spectralAvailable}
             />
             {ab.interpretation && (
               <p className="text-sm text-white/70 leading-relaxed mt-4 text-center max-w-xl mx-auto">
@@ -175,7 +200,7 @@ export function PatientPortal({ report }: PatientPortalProps) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.15 }}
       >
-        <CinematicEcg parasympathetic={ab.parasympathetic} sympathetic={ab.sympathetic} />
+        <CinematicEcg parasympathetic={visPara} sympathetic={visSymp} />
       </motion.div>
 
       {/* Plain English synopsis */}

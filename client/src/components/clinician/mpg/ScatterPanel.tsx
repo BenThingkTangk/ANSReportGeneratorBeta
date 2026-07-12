@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import type { MultiParameterGraphical } from "@shared/schema";
 import { ColomboExplainer } from "../ColomboExplainer";
+import { SpectralUnavailableCard } from "./SpectralUnavailableCard";
 
 /**
  * Five small-multiple scatter/response charts that mirror the right-hand
@@ -49,9 +50,16 @@ function valsalvaLfaNormalBand(age: number): { lo: number; hi: number } {
 interface ScatterPanelProps {
   mpg: MultiParameterGraphical;
   patientAge: number;
+  /**
+   * When false (raw-ECG .ans with no vendor wavelet output), every chart in
+   * this panel would rely on non-reproducible spectral aggregates, so the whole
+   * section is replaced with a single "not reproducible" card instead of
+   * plotting substitute/estimated LFa/RFa values.
+   */
+  spectralAvailable: boolean;
 }
 
-export function ScatterPanel({ mpg, patientAge }: ScatterPanelProps) {
+export function ScatterPanel({ mpg, patientAge, spectralAvailable }: ScatterPanelProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -64,16 +72,25 @@ export function ScatterPanel({ mpg, patientAge }: ScatterPanelProps) {
         Autonomic Response Maps
       </h3>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        <BaselineLfaRfa mpg={mpg} />
-        <DeepBreathingRfa mpg={mpg} age={patientAge} />
-        <ValsalvaLfa mpg={mpg} age={patientAge} />
-        <StandResponse mpg={mpg} />
-      </div>
+      {!spectralAvailable ? (
+        <SpectralUnavailableCard
+          title="Autonomic response maps — spectral output not reproducible"
+          testId="mpg-scatter-unavailable"
+        />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <BaselineLfaRfa mpg={mpg} />
+            <DeepBreathingRfa mpg={mpg} age={patientAge} />
+            <ValsalvaLfa mpg={mpg} age={patientAge} />
+            <StandResponse mpg={mpg} />
+          </div>
 
-      <div className="mt-5">
-        <RfaExcess mpg={mpg} />
-      </div>
+          <div className="mt-5">
+            <RfaExcess mpg={mpg} />
+          </div>
+        </>
+      )}
     </motion.div>
   );
 }

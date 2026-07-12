@@ -2,11 +2,20 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
-import { ClinicianPortal } from "./clinician/ClinicianPortal";
-import { PatientPortal } from "./patient/PatientPortal";
+// Both portals live in the writable components/ root because their canonical
+// clinician/ and patient/ directories are read-only here. Each is a drop-in
+// replacement that renders the unchanged read-only child components; see each
+// file header for reconcile notes.
+//   • ClinicianPortalLive — immediate deterministic synopsis (no "Connection error")
+//   • PatientPortalTwoColumn — two-column hero + overlap-fixed gauge + same synopsis fix
+import { ClinicianPortalLive } from "./ClinicianPortalLive";
+import { PatientPortalTwoColumn } from "./PatientPortalTwoColumn";
+import { EvidenceStratification } from "./EvidenceStratification";
 import { AskAtom } from "./AskAtom";
+import { AtomLogo } from "./AtomLogo";
 import { ThemeToggle } from "./ThemeToggle";
 import { ViewToggle } from "./ViewToggle";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { ArrowLeft } from "lucide-react";
 import { PhysioPSPulseNodeLogo } from "./brand/PhysioPSPulseNodeLogo";
 
@@ -25,6 +34,10 @@ type ViewerRole = "patient" | "clinician";
  */
 export function ReportDashboard({ report, ansStudy, onReset }: ReportDashboardProps) {
   const [role, setRole] = useState<ViewerRole>("patient");
+  // Ask ATOM open state is lifted so a non-overlaying mobile trigger (header
+  // icon) can open the drawer. The fixed floating launcher inside AskAtom is
+  // hidden below `sm` and shown for tablet/desktop.
+  const [askOpen, setAskOpen] = useState(false);
 
   return (
     <div className="ps-bg-deep min-h-screen">
@@ -66,6 +79,22 @@ export function ReportDashboard({ report, ansStudy, onReset }: ReportDashboardPr
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Mobile-only Ask ATOM launcher. Lives in the sticky top bar so it can
+              never overlay report metrics (unlike the fixed floating button,
+              which is shown from `sm` up). */}
+          <button
+            onClick={() => setAskOpen(o => !o)}
+            className="sm:hidden w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+            style={{
+              background: "linear-gradient(135deg, hsl(185 85% 35%), hsl(185 85% 48%))",
+              boxShadow: "0 0 12px hsl(185 85% 42% / 0.4)",
+            }}
+            data-testid="ask-atom-button-mobile"
+            aria-label="Ask Atom"
+            aria-expanded={askOpen}
+          >
+            <AtomLogo size={18} color="white" />
+          </button>
           <ViewToggle role={role} onChange={setRole} />
           <ThemeToggle />
         </div>
@@ -81,15 +110,28 @@ export function ReportDashboard({ report, ansStudy, onReset }: ReportDashboardPr
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.3 }}
           >
-            {role === "patient"
-              ? <PatientPortal report={report} ansStudy={ansStudy} />
-              : <ClinicianPortal report={report} ansStudy={ansStudy} />}
+            {role === "patient" ? (
+              <ErrorBoundary label="Patient view">
+                <PatientPortalTwoColumn report={report} ansStudy={ansStudy} />
+              </ErrorBoundary>
+            ) : (
+              <ErrorBoundary label="Clinician view">
+                <div className="space-y-4">
+                  {/* Evidence tiers: measured vs hypotheses vs missing vs
+                      investigational — separated so certainty is never blurred. */}
+                  <EvidenceStratification report={report} />
+                  <ClinicianPortalLive report={report} ansStudy={ansStudy} />
+                </div>
+              </ErrorBoundary>
+            )}
           </motion.div>
         </AnimatePresence>
       </div>
 
-      {/* Floating Atom chatbot (blue logo) — adapts to viewer role */}
-      <AskAtom report={report} viewerRole={role} />
+      {/* Atom chatbot (blue logo) — adapts to viewer role. Open state is
+          controlled here so the mobile header trigger and the tablet/desktop
+          floating launcher share one drawer. */}
+      <AskAtom report={report} viewerRole={role} open={askOpen} onOpenChange={setAskOpen} />
     </div>
   );
 }

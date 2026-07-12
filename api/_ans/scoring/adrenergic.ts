@@ -219,6 +219,12 @@ export function scoreAdrenergic(
   rationaleParts.push(
     "Valsalva BP phase data + pressure recovery time not present in .ans format; adrenergic score relies on orthostatic deltas only.",
   );
+  const METHOD_LIMITATION =
+    "Cuff orthostatic deltas only — this is an orthostatic-hypotension SCREEN. " +
+    "A full adrenergic/baroreflex grade requires beat-to-beat (continuous) BP " +
+    "(Valsalva late phase II / phase IV), which the .ans format does not carry. " +
+    "Do not report definitive adrenergic failure or a graded adrenergic index.";
+  rationaleParts.push(METHOD_LIMITATION);
 
   return {
     score: {
@@ -234,6 +240,9 @@ export function scoreAdrenergic(
       ],
       confidence,
       assessable: true,
+      // Beat-to-beat BP is absent → orthostatic screen only, never a full grade.
+      screenOnly: true,
+      methodLimitation: METHOD_LIMITATION,
     },
     findings,
     orthostatic: { sbpDelta, dbpDelta, hrDelta },

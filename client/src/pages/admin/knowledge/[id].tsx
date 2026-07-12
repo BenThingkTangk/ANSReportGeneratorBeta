@@ -36,6 +36,7 @@ interface Source {
   created_at: string;
   updated_at: string;
   chunkCount?: number;
+  chunks?: Array<{ id: string; chunkIndex: number; tokens: number | null; preview: string; length: number }>;
 }
 
 function Field({
@@ -510,6 +511,32 @@ export default function KnowledgeDetailPage() {
               )}
             </div>
           </div>
+
+          {/* RAG chunk browser — the actual passages retrieval can surface. */}
+          {source.chunks && source.chunks.length > 0 && (
+            <div style={{ marginTop: 24 }} data-testid="knowledge-chunks">
+              <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.1em", opacity: 0.7, marginBottom: 10 }}>
+                Chunks ({source.chunks.length}{source.chunkCount && source.chunkCount > source.chunks.length ? ` of ${source.chunkCount}` : ""})
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {source.chunks.map((c) => (
+                  <details
+                    key={c.id}
+                    data-testid="knowledge-chunk"
+                    style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "10px 12px" }}
+                  >
+                    <summary style={{ fontSize: 12, cursor: "pointer", opacity: 0.85 }}>
+                      Chunk #{c.chunkIndex}
+                      <span style={{ opacity: 0.55 }}>{c.tokens ? ` · ${c.tokens} tokens` : ""} · {c.length} chars</span>
+                    </summary>
+                    <p style={{ fontSize: 12, lineHeight: 1.6, opacity: 0.8, marginTop: 8, whiteSpace: "pre-wrap" }}>
+                      {c.preview}{c.length > c.preview.length ? "…" : ""}
+                    </p>
+                  </details>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div style={{ marginTop: 8 }}>
             <a

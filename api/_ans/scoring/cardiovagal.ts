@@ -15,7 +15,7 @@ import type {
   Confidence,
   Severity,
 } from "../../../shared/diagnosticSummary";
-import { bandForAge, type Thresholds } from "../thresholds";
+import { bandForAge, type Thresholds } from "../thresholds.js";
 
 interface RatioEval {
   field: string;          // e.g. "ratios.eiRatio"
