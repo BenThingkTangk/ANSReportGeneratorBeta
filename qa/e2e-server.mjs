@@ -17,10 +17,13 @@ const app = express();
 const routes = {
   "/api/parse": "../api/parse.ts",
   "/api/upload": "../api/upload.ts",
+  "/api/upload-vendor": "../api/upload-vendor.ts",
   "/api/ask-atom": "../api/ask-atom.ts",
   "/api/explanations": "../api/explanations.ts",
   "/api/synopsis": "../api/synopsis.ts",
   "/api/health": "../api/health.ts",
+  // vercel.json rewrites /api/admin/gateway → api/admin-gateway.ts in prod.
+  "/api/admin/gateway": "../api/admin-gateway.ts",
 };
 for (const [route, mod] of Object.entries(routes)) {
   const handler = (await import(mod)).default;

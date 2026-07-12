@@ -438,16 +438,17 @@ export function AutonomicBalanceGauge({
           </div>
         </div>
 
-        {/* SDNN — bottom-left */}
+        {/* SDNN — bottom-left. Fixed-width, centered, nowrap box so the value
+            (e.g. "60.1 ms") never clips past the gauge edge. */}
         <div
           className="absolute text-center"
-          style={{ top: "68%", left: "20%", transform: "translate(-50%, -50%)" }}
+          style={{ top: "68%", left: "20%", transform: "translate(-50%, -50%)", width: "34%" }}
         >
-          <div className="ps-overline" style={{ color: "hsl(18 70% 70%)", fontSize: fs(10, 8) }}>
+          <div className="ps-overline whitespace-nowrap" style={{ color: "hsl(18 70% 70%)", fontSize: fs(10, 8) }}>
             SDNN
           </div>
           <div
-            className="ps-text-mono font-bold leading-none mt-1"
+            className="ps-text-mono font-bold leading-none mt-1 whitespace-nowrap"
             style={{
               fontSize: fs(22, 14),
               color: "hsl(18 90% 72%)",
@@ -464,16 +465,17 @@ export function AutonomicBalanceGauge({
           </div>
         </div>
 
-        {/* LF/HF — bottom-right */}
+        {/* LF/HF — bottom-right. Fixed-width, centered, nowrap so "LF / HF" and
+            the value stay inside the gauge instead of clipping at the edge. */}
         <div
           className="absolute text-center"
-          style={{ top: "68%", left: "80%", transform: "translate(-50%, -50%)" }}
+          style={{ top: "68%", left: "80%", transform: "translate(-50%, -50%)", width: "34%" }}
         >
-          <div className="ps-overline" style={{ color: "hsl(185 70% 70%)", fontSize: fs(10, 8) }}>
+          <div className="ps-overline whitespace-nowrap" style={{ color: "hsl(185 70% 70%)", fontSize: fs(10, 8) }}>
             LF / HF
           </div>
           <div
-            className="ps-text-mono font-bold leading-none mt-1"
+            className="ps-text-mono font-bold leading-none mt-1 whitespace-nowrap"
             style={{
               fontSize: fs(22, 14),
               color: "hsl(187 95% 75%)",

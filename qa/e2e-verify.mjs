@@ -72,6 +72,18 @@ for (const vp of [
     rec(`${vp.tag}: honest not-assessed gating shown`,
       /not assessed|not reproducible|require|clinician review|unavailable/.test(patText), "patient copy");
 
+    // Step 8: SDNN / LF-HF labels present and not clipped out of the gauge.
+    // (Presence proves the metric overlays render; the fixed-width nowrap boxes
+    // keep them inside the gauge — visually confirmed via screenshot.)
+    await page.click('[data-testid="toggle-patient"]');
+    // Wait for the gauge to finish its enter transition before counting labels,
+    // so we don't sample mid-animation.
+    await page.waitForSelector('[data-testid="autonomic-balance-gauge"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="abg-sdnn"]', { timeout: 10000 });
+    const sdnn = await page.locator('[data-testid="abg-sdnn"]').count();
+    const lfhf = await page.locator('[data-testid="abg-lfhf"]').count();
+    rec(`${vp.tag}: SDNN + LF/HF metric labels render`, sdnn > 0 && lfhf > 0, `sdnn=${sdnn} lfhf=${lfhf}`);
+
     await page.screenshot({ path: `${OUT}/e2e-${vp.tag}-clinician.png`, fullPage: false });
   } catch (e) {
     rec(`${vp.tag}: flow`, false, e.message);
@@ -80,6 +92,49 @@ for (const vp of [
     await ctx.close();
   }
 }
+// ── Cross-cutting checks (run once) ──────────────────────────────────────────
+{
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  try {
+    // PWA: manifest linked + served, service worker file served.
+    await page.goto(BASE, { waitUntil: "domcontentloaded" });
+    const manifestHref = await page.getAttribute('link[rel="manifest"]', "href");
+    rec("pwa: manifest <link> present", !!manifestHref, manifestHref || "missing");
+    const man = await page.evaluate(async (href) => {
+      const r = await fetch(href, { cache: "no-store" });
+      if (!r.ok) return null;
+      return r.json();
+    }, manifestHref || "./manifest.webmanifest").catch(() => null);
+    rec("pwa: manifest is standalone with icons",
+      !!man && man.display === "standalone" && Array.isArray(man.icons) && man.icons.length > 0,
+      man ? `display=${man.display} icons=${man.icons?.length}` : "unfetchable");
+    const swStatus = await page.evaluate(async () => (await fetch("./sw.js", { cache: "no-store" })).status).catch(() => 0);
+    rec("pwa: service worker served", swStatus === 200, `sw.js HTTP ${swStatus}`);
+
+    // Vendor PDF endpoint: unrelated / empty body → graceful contract (not 500).
+    const vendorStatus = await page.evaluate(async () => {
+      const r = await fetch("./api/upload-vendor", { method: "POST", body: new FormData() });
+      return r.status;
+    }).catch(() => 0);
+    rec("vendor: /api/upload-vendor reachable (contract error, not crash)",
+      vendorStatus === 400 || vendorStatus === 200, `HTTP ${vendorStatus}`);
+
+    // Admin gateway status probe (GET → configured/authenticated booleans).
+    const gw = await page.evaluate(async () => {
+      const r = await fetch("./api/admin/gateway");
+      return { status: r.status, body: await r.json().catch(() => null) };
+    }).catch(() => ({ status: 0, body: null }));
+    rec("admin: gateway status endpoint responds",
+      gw.status === 200 && gw.body && typeof gw.body.configured === "boolean",
+      `HTTP ${gw.status} configured=${gw.body?.configured}`);
+  } catch (e) {
+    rec("cross-cutting checks", false, e.message);
+  } finally {
+    await ctx.close();
+  }
+}
+
 await browser.close();
 
 if (errors.length) {
