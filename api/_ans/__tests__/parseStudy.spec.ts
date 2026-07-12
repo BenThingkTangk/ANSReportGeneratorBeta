@@ -11,8 +11,9 @@
  *   - missing-vs-normal invariant: null stays null
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
+import type { AnsStudy } from "../../../shared/ansStudy.js";
 import path from "node:path";
 import { parseStudy } from "../parseStudy.js";
 import { ansStudyToLegacy } from "../legacyAdapter.js";
@@ -36,10 +37,18 @@ const describePare = hasPare ? describe : describe.skip;
 const describeFrancey = hasFrancey ? describe : describe.skip;
 
 describePare("parseStudy — real Pare/Alex fixture", () => {
-  const buf = readFileSync(FIXTURE_PARE);
-  const study = parseStudy({
-    buffer: buf,
-    fileName: "Pare-Alex-Thu-Jul-11-2024.ans",
+  // Read + parse lazily in beforeAll so this file NEVER touches the PHI
+  // fixture during collection. `describe.skip` still executes its callback
+  // body at collect time, so a top-level readFileSync would throw ENOENT on
+  // CI (where the .gitignore'd fixtures are absent) — the exact failure this
+  // fixes. beforeAll only runs when the suite is actually executed.
+  let study: AnsStudy;
+  beforeAll(() => {
+    const buf = readFileSync(FIXTURE_PARE);
+    study = parseStudy({
+      buffer: buf,
+      fileName: "Pare-Alex-Thu-Jul-11-2024.ans",
+    });
   });
 
   it("extracts the exact patient name from the binary LP-strings", () => {
@@ -85,10 +94,13 @@ describePare("parseStudy — real Pare/Alex fixture", () => {
 });
 
 describeFrancey("parseStudy — real Francey/Shannon fixture", () => {
-  const buf = readFileSync(FIXTURE_FRANCEY);
-  const study = parseStudy({
-    buffer: buf,
-    fileName: "Francey-Shannon-Fri-Oct-24-2025.ans",
+  let study: AnsStudy;
+  beforeAll(() => {
+    const buf = readFileSync(FIXTURE_FRANCEY);
+    study = parseStudy({
+      buffer: buf,
+      fileName: "Francey-Shannon-Fri-Oct-24-2025.ans",
+    });
   });
 
   it("extracts demographics deterministically (no Jill-Shah branch)", () => {
