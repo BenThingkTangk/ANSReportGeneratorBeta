@@ -4,15 +4,16 @@ import { ansStudyToLegacy } from "./_ans/legacyAdapter.js";
 import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
 import { reconcileStudyWithReport } from "./_ans/reconcileStudy.js";
 import {
-  lookupNumericalSummaryOverride,
-  applyPhaseOverride,
-} from "./_ans/numericalSummaryOverride.js";
-import {
   EWING_THRESHOLDS,
   classifyEwing,
   ewingNormalRangeLabel,
   COLOMBO_NORMS,
 } from "../shared/colomboNorms.js";
+import {
+  computedProvenance,
+  unavailableProvenance,
+  type MetricProvenance,
+} from "../shared/metricProvenance.js";
 
 export const config = {
   api: {
@@ -71,6 +72,19 @@ interface PhaseMetrics {
   MAP?: number;
   HRV_SDNN: number;
   HRV_RMSSD: number;
+  /**
+   * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF). These
+   * are ALWAYS computed generically from the raw arrays — never substituted
+   * from a memorized vendor value. `estimated` means the value approximates the
+   * vendor's undisclosed proprietary algorithm and was not reproduced against a
+   * reference; `unavailable` means the phase had insufficient beats to compute.
+   */
+  provenance?: {
+    LFa: MetricProvenance;
+    RFa: MetricProvenance;
+    SB: MetricProvenance;
+    FRF: MetricProvenance;
+  };
 }
 
 interface Classification {
@@ -796,11 +810,21 @@ function analyzePhase(
 ): PhaseMetrics {
   const { indices, amplitudes, rrIntervalsMs } = detectRPeaks(ecgPhase, samplingRate);
   if (rrIntervalsMs.length < 4) {
+    // Not enough beats to compute anything for this phase. Emit nulls-as-zero
+    // for back-compat but tag every spectral metric as UNAVAILABLE so the UI
+    // renders "unavailable" rather than a fabricated 0 (never substituted).
+    const unavail = {
+      LFa: unavailableProvenance("LFa", "Fewer than 4 usable beats in this phase."),
+      RFa: unavailableProvenance("RFa", "Fewer than 4 usable beats in this phase."),
+      SB: unavailableProvenance("SB", "Fewer than 4 usable beats in this phase."),
+      FRF: unavailableProvenance("FRF", "Fewer than 4 usable beats in this phase."),
+    };
     return {
       phase: phaseName, label,
       duration: formatDuration(durationSec), durationSec,
       meanHR: 0, rangeHR: 0, FRF: 0, LFa: 0, RFa: 0, SB: 0,
       HRV_SDNN: 0, HRV_RMSSD: 0,
+      provenance: unavail,
     };
   }
   const meanRR = rrIntervalsMs.reduce((a, b) => a + b, 0) / rrIntervalsMs.length;
@@ -828,6 +852,12 @@ function analyzePhase(
   const RFa = morletBandPower(rrSignal, 4, hfLo, hfHi);
   const SB = RFa > 0.01 ? LFa / RFa : 0;
 
+  // These four are proprietary [P] aggregates: we compute them generically from
+  // the raw arrays but they only APPROXIMATE the vendor's undisclosed wavelet
+  // algorithm, so they are tagged `estimated` (never silently "validated" and
+  // never substituted with a memorized vendor scalar).
+  const spectralNote =
+    "Morlet-CWT band power over interpolated RR series (Colombo-style dynamic bands); approximates the undisclosed vendor algorithm and is not vendor-validated.";
   return {
     phase: phaseName, label,
     duration: formatDuration(durationSec), durationSec,
@@ -838,6 +868,12 @@ function analyzePhase(
     SB: Math.round(SB * 100) / 100,
     HRV_SDNN: Math.round(sdnn * 10) / 10,
     HRV_RMSSD: Math.round(rmssd * 10) / 10,
+    provenance: {
+      LFa: computedProvenance("LFa", { note: spectralNote }),
+      RFa: computedProvenance("RFa", { note: spectralNote }),
+      SB: computedProvenance("SB", { note: "Ratio of estimated LFa/RFa; proprietary framing, not vendor-validated." }),
+      FRF: computedProvenance("FRF", { note: "Fundamental respiratory frequency estimated from RR/peak envelope." }),
+    },
   };
 }
 
@@ -1242,9 +1278,19 @@ function computeBodyImpact(patterns: DysfunctionPatterns, phases: PhaseMetrics[]
   if (patterns.parasympatheticExcess) ner -= 20;
   if (patterns.sympatheticWithdrawal) ner -= 20;
   if (patterns.maskedSW) ner -= 10;
-  out.push({ system: "nervous", impact: Math.max(-100, ner),
-    label: ner < -30 ? "Significantly Affected" : "Mildly Affected",
-    description: "Autonomic regulation of blood pressure, heart rate, and organ systems shows imbalance. This affects how your body responds to stress, posture change, and recovery." });
+  {
+    const nerParts: string[] = [];
+    if (patterns.advancedAutonomicDysfunction) nerParts.push("broad autonomic dysfunction across several test phases");
+    if (patterns.CAN) nerParts.push("a pattern consistent with cardiovascular autonomic neuropathy (not a diagnosis)");
+    if (patterns.parasympatheticExcess) nerParts.push("excess resting parasympathetic (vagal) activity");
+    if (patterns.sympatheticWithdrawal) nerParts.push("reduced sympathetic response on standing");
+    const nerDesc = nerParts.length
+      ? `Your autonomic nervous system — the automatic control of heart rate, blood pressure, and organ function — shows ${nerParts.join(", and ")}. This can affect how well you tolerate stress, standing up, and recovery. Discuss these findings with your clinician.`
+      : "Your autonomic nervous system is regulating heart rate, blood pressure, and organ function within its expected range on this test.";
+    out.push({ system: "nervous", impact: Math.max(-100, nerParts.length ? ner : 0),
+      label: nerParts.length ? (ner < -30 ? "Significantly Affected" : "Mildly Affected") : "Stable",
+      description: nerDesc });
+  }
 
   // Digestive (vagal tone dominant)
   let dig = 0;
@@ -1264,7 +1310,9 @@ function computeBodyImpact(patterns: DysfunctionPatterns, phases: PhaseMetrics[]
   if (patterns.advancedAutonomicDysfunction) end -= 25;
   out.push({ system: "endocrine", impact: end,
     label: end < -15 ? "Affected" : "Stable",
-    description: "Autonomic signals drive the adrenal stress axis; imbalance can affect cortisol rhythm, blood sugar regulation, and thyroid signaling." });
+    description: end < -15
+      ? "The autonomic signals that drive your stress (adrenal) axis look imbalanced on this test, which can influence cortisol rhythm, blood-sugar regulation, and thyroid signaling. This is an indirect, screening-level observation."
+      : "The autonomic drive to your stress (adrenal) axis appears balanced on this test." });
 
   // Musculoskeletal (via fatigue + circulation)
   let ms = 0;
@@ -1272,7 +1320,9 @@ function computeBodyImpact(patterns: DysfunctionPatterns, phases: PhaseMetrics[]
   if (patterns.orthostaticHypotension) ms -= 15;
   out.push({ system: "musculoskeletal", impact: ms,
     label: ms < -10 ? "Mildly Affected" : "Stable",
-    description: "Poor peripheral circulation or low perfusion can cause muscle fatigue, slow recovery, and cold extremities." });
+    description: ms < -10
+      ? "Reduced perfusion signals (from low resting tone or a blood-pressure drop on standing) can contribute to muscle fatigue, slower recovery, and cold hands and feet."
+      : "No perfusion-related muscle impact was flagged on this test." });
 
   // Immune (HRV proxy)
   const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
@@ -1281,10 +1331,12 @@ function computeBodyImpact(patterns: DysfunctionPatterns, phases: PhaseMetrics[]
   else if (avgSDNN < 45) imm -= 10;
   if (patterns.advancedAutonomicDysfunction) imm -= 15;
   out.push({ system: "immune", impact: imm,
-    label: imm < -15 ? "Affected" : "Stable",
+    label: imm < -15 ? "Affected" : imm < 0 ? "Mildly Affected" : "Stable",
     description: avgSDNN < 30
-      ? "Low HRV across phases correlates with impaired immune resilience and slower recovery from illness."
-      : "HRV reserves suggest adequate immune regulation." });
+      ? `Low heart-rate variability across the test (average SDNN ${avgSDNN.toFixed(0)} ms) is associated at a population level with reduced resilience and slower recovery. HRV is an indirect marker — not a direct immune measurement.`
+      : avgSDNN < 45
+        ? `Your heart-rate variability is modest (average SDNN ${avgSDNN.toFixed(0)} ms); building autonomic reserve through sleep, activity, and stress management may help.`
+        : `Your heart-rate variability reserve (average SDNN ${avgSDNN.toFixed(0)} ms) is adequate on this test.` });
 
   return out;
 }
@@ -1826,25 +1878,18 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
     return analyzePhase(ecgSlice, samplingRate, seg.name, seg.label, seg.end - seg.start);
   });
 
-  // --- Ground-truth Numerical Summary override -------------------------------
-  // The per-phase spectral values (LFa/RFa/FRF/SB) and continuous-BP MAP are NOT
-  // stored as scalars in the .ans binary — Colombo derives them via proprietary
-  // wavelet analysis and prints them in the PDF "Numerical Summary: Frequency
-  // Domain w/ RESP" table. Our open-source ECG pipeline approximates them, so
-  // for files whose authoritative table we KNOW we overlay those exact values
-  // to keep the report faithful to the clinician-signed source.
-  //
-  // This is a data fixture, not per-patient business logic: it is keyed by a
-  // study fingerprint and applied generically. Any file matching a known
-  // fingerprint gets its ground-truth overlay; every other upload uses the
-  // computed values above unchanged.
-  //
-  // LIMITATION: until the PDF Numerical Summary is ingested directly, unknown
-  // files rely on the computed approximation, which will not byte-match the PDF.
-  const groundTruth = lookupNumericalSummaryOverride(data);
-  if (groundTruth) {
-    applyPhaseOverride(phaseEvents, groundTruth);
-  }
+  // --- No vendor-value substitution ------------------------------------------
+  // The per-phase spectral aggregates (LFa/RFa/FRF/SB) are NOT stored as scalars
+  // in the .ans binary; the vendor derives them via an undisclosed wavelet
+  // algorithm and prints them only in the signed PDF. We DELIBERATELY do not
+  // memorize or fingerprint-substitute those PDF values at runtime — doing so
+  // would silently pass off a per-file identity match as a generic computation
+  // and violate generic accuracy. Instead `analyzePhase` above computes each
+  // aggregate generically from the raw arrays and tags it `computed/estimated`
+  // (proprietary tier [P]) via its `provenance`. Consumers must render these as
+  // estimates, and unavailable phases as "unavailable" — never as vendor truth.
+  // The de-identified vendor scalars live ONLY in the offline regression oracle
+  // (eval/ ground-truth), which never touches this render path.
 
   // Baseline A is the canonical resting measurement
   const A = phaseEvents[0];

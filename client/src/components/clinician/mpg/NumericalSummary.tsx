@@ -2,21 +2,22 @@ import { motion } from "framer-motion";
 import type { ANSReport, PhaseMetrics } from "@shared/schema";
 import { ColomboExplainer } from "../ColomboExplainer";
 import { COLOMBO_NORMS } from "@shared/colomboNorms";
+import { CANONICAL_PHASES } from "@shared/phaseTable";
+import { tierCaveat } from "@shared/metricProvenance";
 
 /**
  * Numerical Summary table — mirrors the bottom table on page 2 of the
  * PhysioPS Multi-Parameter Graphical report. Compact, phase-by-phase audit
  * trail of every number the graphical charts are derived from.
+ *
+ * IMPORTANT: FRF/LFa/RFa/LFa-RFa are proprietary [P] aggregates our pipeline
+ * COMPUTES generically (tagged `estimated`); they are never vendor-substituted.
+ * The table renders them as estimates and shows "unavailable" for phases where
+ * the raw signal was insufficient — never a fabricated value.
  */
 
-const PHASES: { key: PhaseMetrics["phase"]; short: string; clock?: string }[] = [
-  { key: "Baseline-A",      short: "Baseline A" },
-  { key: "DeepBreathing-B", short: "Deep Breath B" },
-  { key: "Baseline-C",      short: "Baseline C" },
-  { key: "Valsalva-D",      short: "Valsalva D" },
-  { key: "Baseline-E",      short: "Baseline E" },
-  { key: "Stand-F",         short: "Stand F" },
-];
+// Single canonical phase table (shared/phaseTable) — no local re-declaration.
+const PHASES = CANONICAL_PHASES;
 
 // Norm bands — single source of truth (shared/colomboNorms).
 const NORMS = {
@@ -36,6 +37,41 @@ function cellColor(val: number | undefined, norm: { lo: number; hi: number }): s
 function fmt(v: number | undefined, digits = 2): string {
   if (v === undefined || v === null || !Number.isFinite(v)) return "—";
   return v.toFixed(digits);
+}
+
+/** True if this phase's spectral aggregates could not be computed. */
+function spectralUnavailable(m: PhaseMetrics | undefined): boolean {
+  return m?.provenance?.LFa?.method === "unavailable";
+}
+
+/**
+ * Render a proprietary [P] spectral cell honestly:
+ *  - "unavailable" when inputs were insufficient (never a fabricated 0)
+ *  - otherwise the estimated value, tinted vs the norm band
+ */
+function SpectralCell({
+  m,
+  value,
+  norm,
+  digits = 2,
+}: {
+  m: PhaseMetrics | undefined;
+  value: number | undefined;
+  norm: { lo: number; hi: number };
+  digits?: number;
+}) {
+  if (spectralUnavailable(m)) {
+    return (
+      <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60 italic" title="Insufficient signal in this phase to compute this proprietary estimate.">
+        unavailable
+      </td>
+    );
+  }
+  return (
+    <td className="py-2.5 pr-4 tabular-nums" style={{ color: cellColor(value, norm) }}>
+      {fmt(value, digits)}
+    </td>
+  );
 }
 
 interface NumericalSummaryProps {
@@ -97,18 +133,10 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
                   <td className="py-2.5 pr-4 tabular-nums">
                     {m ? `${Math.round(m.meanHR)} ± ${Math.round(m.rangeHR)}` : "—"}
                   </td>
-                  <td className="py-2.5 pr-4 tabular-nums" style={{ color: cellColor(m?.FRF, NORMS.FRF) }}>
-                    {fmt(m?.FRF, 3)}
-                  </td>
-                  <td className="py-2.5 pr-4 tabular-nums" style={{ color: cellColor(m?.LFa, NORMS.LFa) }}>
-                    {fmt(m?.LFa)}
-                  </td>
-                  <td className="py-2.5 pr-4 tabular-nums" style={{ color: cellColor(m?.RFa, NORMS.RFa) }}>
-                    {fmt(m?.RFa)}
-                  </td>
-                  <td className="py-2.5 pr-4 tabular-nums" style={{ color: cellColor(m?.SB, NORMS.SB) }}>
-                    {fmt(m?.SB)}
-                  </td>
+                  <SpectralCell m={m} value={m?.FRF} norm={NORMS.FRF} digits={3} />
+                  <SpectralCell m={m} value={m?.LFa} norm={NORMS.LFa} />
+                  <SpectralCell m={m} value={m?.RFa} norm={NORMS.RFa} />
+                  <SpectralCell m={m} value={m?.SB} norm={NORMS.SB} />
                   <td className="py-2.5 pr-4 tabular-nums text-muted-foreground">
                     {m?.SBP && m?.DBP ? `${Math.round(m.SBP)}/${Math.round(m.DBP)}` : "—"}
                   </td>
@@ -133,6 +161,17 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
         <span style={{ color: "hsl(17 100% 60%)" }}>■ Below norm</span>
         <span className="mx-2">·</span>
         <span style={{ color: "hsl(0 72% 62%)" }}>■ Above norm</span>
+      </div>
+
+      {/* Evidence-tier caveat: FRF/LFa/RFa/LFa-RFa are proprietary [P]. */}
+      <div
+        className="mt-2 text-[10px] text-amber-500/80 leading-relaxed"
+        data-testid="num-provenance-caveat"
+      >
+        <span className="font-medium">FRF, LFa, RFa, LFa/RFa [P]:</span>{" "}
+        computed estimates, not vendor-validated. {tierCaveat("P")} Phases with
+        insufficient signal are shown as <em>unavailable</em> rather than a
+        substituted value.
       </div>
 
       <ColomboExplainer chartKey="numericalSummary" />

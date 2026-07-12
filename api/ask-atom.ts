@@ -21,7 +21,7 @@ import {
 
 const SONAR_URL = "https://api.perplexity.ai/chat/completions";
 
-const SYSTEM_PROMPT = `You are Atom, a Colombo-grounded autonomic-health assistant powered by Perplexity Sonar.
+export const SYSTEM_PROMPT = `You are Atom, a Colombo-grounded autonomic-health assistant powered by Perplexity Sonar.
 Your reasoning follows the Colombo P&S methodology (Physio PS / ANS Element / DynaCardia Rx) and the published treatment protocol below.
 
 Terminology:
@@ -111,7 +111,7 @@ Output formatting:
 - End with a tiny attribution: "— powered by Perplexity Sonar"`;
 
 /** Literal used everywhere a metric could not be measured. */
-const NOT_ASSESSED = "Not assessed";
+export const NOT_ASSESSED = "Not assessed";
 
 /**
  * Spectral/derived ANS metrics (LFa, RFa, SB, HRV) and HR/BP are only real when
@@ -119,7 +119,7 @@ const NOT_ASSESSED = "Not assessed";
  * beat-to-beat data (LFa/RFa/HRV = 0), so 0 / null / NaN mean "not assessed",
  * never a true measurement. Returns the number only when it is a genuine reading.
  */
-function assessedNum(v: number | null | undefined): number | null {
+export function assessedNum(v: number | null | undefined): number | null {
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
 }
 
@@ -128,7 +128,7 @@ interface PhaseRow {
   HRV_RMSSD?: number; HRV_SDNN?: number; SBP?: number; DBP?: number;
 }
 
-function buildEventMeanTable(phaseEvents: PhaseRow[] | undefined): string {
+export function buildEventMeanTable(phaseEvents: PhaseRow[] | undefined): string {
   if (!phaseEvents || phaseEvents.length === 0) {
     return `(no per-phase data — treat every spectral metric as ${NOT_ASSESSED})`;
   }
@@ -160,7 +160,7 @@ const SEVERITY_LABEL: Record<string, string> = {
 };
 
 /** One authoritative line per domain: severity (or Not assessed) + provenance. */
-function domainLine(label: string, s: any): string {
+export function domainLine(label: string, s: any): string {
   if (!s) return `- ${label}: ${NOT_ASSESSED} — no deterministic score produced.`;
   const assessed = s.assessable !== false && s.severity !== "not_assessed";
   if (!assessed) {
@@ -172,7 +172,13 @@ function domainLine(label: string, s: any): string {
   const prov = Array.isArray(s.sourceFields) && s.sourceFields.length
     ? `; provenance: ${s.sourceFields.join(", ")}`
     : "; provenance: unspecified";
-  return `- ${label}: ${sev}${conf}${prov}`;
+  // Surface an assessable-but-limited domain (e.g. adrenergic scored from cuff
+  // deltas without beat-to-beat BP) so the model never presents it as a full
+  // grade or claims definitive adrenergic failure.
+  const limit = s.screenOnly
+    ? ` [SCREEN ONLY — ${s.methodLimitation ?? "partial assessment; do not report as a definitive grade"}]`
+    : "";
+  return `- ${label}: ${sev}${conf}${prov}${limit}`;
 }
 
 /**
@@ -181,7 +187,7 @@ function domainLine(label: string, s: any): string {
  * impression so the model never reinterprets zero-filled or blocked metrics as
  * real (or severe) findings.
  */
-function buildAssessabilitySection(report: any): string {
+export function buildAssessabilitySection(report: any): string {
   const ds = report?.diagnosticSummary;
   if (!ds) {
     return `--------------------------------------------------
@@ -252,7 +258,7 @@ Claims BLOCKED for insufficient data — report each as "${NOT_ASSESSED}", never
 ${blockedStr}`;
 }
 
-function buildPatientContext(report: any, viewerRole: string): string {
+export function buildPatientContext(report: any, viewerRole: string): string {
   if (!report) return "(no report attached)";
   const pd = report.patientData || {};
   const name = `${pd.firstName ?? ""} ${pd.lastName ?? ""}`.trim() || "Unknown";

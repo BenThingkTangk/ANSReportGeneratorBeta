@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import type { BodySystemImpact } from "@shared/schema";
 
 interface BodyHeatmapProps {
@@ -169,6 +169,7 @@ const RENDER_ORDER: SystemKey[] = [
 export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
   const [selected, setSelected] = useState<SystemKey | null>(null);
   const [active, setActive] = useState<SystemKey | null>(null); // hover or keyboard focus
+  const prefersReducedMotion = useReducedMotion();
 
   const getImpact = (system: SystemKey): BodySystemImpact | undefined =>
     bodySystemImpact.find((b) => b.system === system);
@@ -192,9 +193,9 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, delay: 0.4 }}
+      initial={prefersReducedMotion ? false : { opacity: 0, y: 16 }}
+      animate={prefersReducedMotion ? {} : { opacity: 1, y: 0 }}
+      transition={{ duration: prefersReducedMotion ? 0 : 0.5, delay: prefersReducedMotion ? 0 : 0.4 }}
       className="rounded-2xl bg-card/50 border border-border/30 p-5"
       data-testid="body-heatmap"
     >
@@ -322,9 +323,9 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
             return (
               <motion.div
                 key={sys.system}
-                initial={{ opacity: 0, x: 12 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.1 * i }}
+                initial={prefersReducedMotion ? false : { opacity: 0, x: 12 }}
+                animate={prefersReducedMotion ? {} : { opacity: 1, x: 0 }}
+                transition={{ delay: prefersReducedMotion ? 0 : 0.1 * i }}
               >
                 <button
                   type="button"
@@ -344,9 +345,9 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   </div>
                   <div className="w-full h-1.5 rounded-full bg-[hsl(210_12%_15%)] overflow-hidden">
                     <motion.div
-                      initial={{ width: 0 }}
+                      initial={prefersReducedMotion ? false : { width: 0 }}
                       animate={{ width: `${Math.min(100, Math.abs(sys.impact))}%` }}
-                      transition={{ delay: 0.2 + 0.05 * i, duration: 0.8, ease: "easeOut" }}
+                      transition={{ delay: prefersReducedMotion ? 0 : 0.2 + 0.05 * i, duration: prefersReducedMotion ? 0 : 0.8, ease: "easeOut" }}
                       className="h-full rounded-full"
                       style={{ background: impactColor(sys.impact) }}
                     />

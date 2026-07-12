@@ -1,19 +1,14 @@
 import { motion } from "framer-motion";
 import type { PhaseMetrics } from "@shared/schema";
 import { COLOMBO_NORMS } from "@shared/colomboNorms";
+import { CANONICAL_PHASES } from "@shared/phaseTable";
 
 interface PhaseEventTableProps {
   phaseEvents: PhaseMetrics[];
 }
 
-const PHASE_LABELS = [
-  { phase: "Baseline-A",      short: "Baseline A" },
-  { phase: "DeepBreathing-B", short: "DB B" },
-  { phase: "Baseline-C",      short: "Baseline C" },
-  { phase: "Valsalva-D",      short: "Valsalva D" },
-  { phase: "Baseline-E",      short: "Baseline E" },
-  { phase: "Stand-F",         short: "Stand F" },
-];
+// Single canonical phase table (shared/phaseTable) — no local re-declaration.
+const PHASE_LABELS = CANONICAL_PHASES;
 
 // Colombo norms for color-coding — single source of truth (shared/colomboNorms).
 const NORMS = {
@@ -62,9 +57,9 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
         </thead>
         <tbody>
           {PHASE_LABELS.map((pl, i) => {
-            const m = phaseMap.get(pl.phase);
+            const m = phaseMap.get(pl.key);
             return (
-              <tr key={pl.phase} className={`border-b border-border/20 ${i % 2 === 0 ? "bg-card/20" : ""}`}>
+              <tr key={pl.key} className={`border-b border-border/20 ${i % 2 === 0 ? "bg-card/20" : ""}`}>
                 <td className="py-2.5 pr-4 font-medium whitespace-nowrap">{pl.short}</td>
                 <td className="py-2.5 pr-4 tabular-nums text-muted-foreground">{m?.duration ?? "—"}</td>
                 <td className="py-2.5 pr-4 tabular-nums">

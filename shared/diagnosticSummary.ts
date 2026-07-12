@@ -47,6 +47,20 @@ export interface DomainScore {
   assessable: boolean;
   /** Reason this domain was not assessable (only set when assessable=false). */
   notAssessedReason?: string;
+  /**
+   * Method limitation that caps the strength of an ASSESSABLE domain. E.g. the
+   * adrenergic axis scored from cuff orthostatic deltas is an
+   * orthostatic-hypotension SCREEN only — a full adrenergic/baroreflex grade
+   * requires beat-to-beat BP (Valsalva late phase II / phase IV), which the
+   * .ans format does not carry. When set, consumers must NOT present the domain
+   * as a definitive/complete adrenergic assessment.
+   */
+  methodLimitation?: string;
+  /**
+   * When true, this domain is a partial screen (not a full grade) and no
+   * definitive dysautonomia/CAN/adrenergic-failure claim may be derived from it.
+   */
+  screenOnly?: boolean;
 }
 
 // ============================================================================

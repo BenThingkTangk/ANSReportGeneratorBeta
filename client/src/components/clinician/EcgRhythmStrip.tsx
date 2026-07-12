@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
+import { computeEcgScale, ecgSampleToY } from "@shared/ecgScaling";
 
 interface EcgRhythmStripProps {
   report: ANSReport;
@@ -8,45 +9,49 @@ interface EcgRhythmStripProps {
 
 /**
  * Clinical rhythm strip — renders the first ~10 seconds of the raw ECG
- * waveform on a classic red-grid background (1 mm = 25 px wide / 0.04 s,
- * 1 mV = 10 mm tall) so the clinician can eyeball rhythm, ectopy, QRS
- * morphology and ST behaviour. Renders nothing when no raw ECG is present.
+ * waveform on a classic red-grid background so the clinician can eyeball
+ * rhythm, ectopy, QRS morphology and ST behaviour. Uses ROBUST centering &
+ * scaling (median + percentile spread, outliers clamped) so a single ectopic
+ * spike or motion artifact no longer flattens the whole strip. Renders nothing
+ * when no raw ECG is present.
  */
 export function EcgRhythmStrip({ report }: EcgRhythmStripProps) {
   const ecg = report.patientData?.ecgData ?? [];
   const fs = Math.round(1 / (report.patientData?.samplingInterval || 0.004));
+  const ectopicBeats = report.patientData?.ectopicBeats ?? 0;
+  const prefersReducedMotion = useReducedMotion();
 
-  const { path, ymin, ymax, durationSec } = useMemo(() => {
-    if (!ecg.length) return { path: "", ymin: 0, ymax: 0, durationSec: 0 };
+  const { path, ymin, ymax, durationSec, clampedPct } = useMemo(() => {
+    if (!ecg.length) return { path: "", ymin: 0, ymax: 0, durationSec: 0, clampedPct: 0 };
     const samples = Math.min(ecg.length, fs * 10); // first 10 s
     const slice = ecg.slice(0, samples);
-    let ymin = Infinity;
-    let ymax = -Infinity;
-    for (const v of slice) {
-      if (v < ymin) ymin = v;
-      if (v > ymax) ymax = v;
-    }
-    const range = Math.max(1, ymax - ymin);
-    // SVG normalized to 1000 wide, 200 tall
-    const W = 1000;
     const H = 200;
+    const W = 1000;
+    // Robust scale: median-centered, percentile half-range, outliers clamped.
+    const scale = computeEcgScale(slice);
     const dx = W / Math.max(1, samples - 1);
     let d = "";
     for (let i = 0; i < samples; i++) {
       const x = i * dx;
-      const y = H - ((slice[i] - ymin) / range) * (H - 16) - 8;
+      const y = ecgSampleToY(slice[i], scale, H, 8);
       d += i === 0 ? `M${x.toFixed(2)} ${y.toFixed(2)}` : ` L${x.toFixed(2)} ${y.toFixed(2)}`;
     }
-    return { path: d, ymin, ymax, durationSec: samples / fs };
+    return {
+      path: d,
+      ymin: scale.rawMin,
+      ymax: scale.rawMax,
+      durationSec: samples / fs,
+      clampedPct: scale.clampedFraction * 100,
+    };
   }, [ecg, fs]);
 
   if (!ecg.length || !path) return null;
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
+      initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
+      animate={prefersReducedMotion ? {} : { opacity: 1, y: 0 }}
+      transition={{ duration: prefersReducedMotion ? 0 : 0.4 }}
       className="rounded-2xl bg-card/50 border border-border/30 p-5"
       data-testid="ecg-rhythm-strip"
     >
@@ -79,9 +84,28 @@ export function EcgRhythmStrip({ report }: EcgRhythmStripProps) {
           <path d={path} fill="none" stroke="hsl(45 100% 75%)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </div>
-      <p className="text-[10px] text-muted-foreground/70 mt-2">
-        Lead II surrogate · Eyeball rhythm, QRS morphology, and ectopy. Full waveform analyzed server-side at {fs} Hz.
-      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <p className="text-[10px] text-muted-foreground/70">
+          Lead II surrogate · median-centered, robust scale. Full waveform analyzed server-side at {fs} Hz.
+        </p>
+        {ectopicBeats > 0 ? (
+          <span
+            className="text-[10px] font-medium text-amber-500"
+            data-testid="ecg-ectopy-note"
+          >
+            ⚠ {ectopicBeats} ectopic {ectopicBeats === 1 ? "beat" : "beats"} noted — may appear as a clamped spike; correlate with the full recording.
+          </span>
+        ) : (
+          <span className="text-[10px] text-muted-foreground/60" data-testid="ecg-ectopy-note">
+            No ectopic beats noted in the automated read.
+          </span>
+        )}
+        {clampedPct >= 0.5 && (
+          <span className="text-[10px] text-muted-foreground/60">
+            {clampedPct.toFixed(1)}% of samples clamped for display.
+          </span>
+        )}
+      </div>
     </motion.div>
   );
 }

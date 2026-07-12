@@ -5,6 +5,8 @@
 // frontend treats these as opaque transport types. Validation happens on the
 // server where the algorithm generates them.
 
+import type { MetricProvenance } from "./metricProvenance.js";
+
 export interface ANSPatientData {
   lastName: string;
   firstName: string;
@@ -48,6 +50,18 @@ export interface PhaseMetrics {
   MAP?: number;
   HRV_SDNN: number;
   HRV_RMSSD: number;
+  /**
+   * Per-metric provenance for the proprietary [P] spectral aggregates. Present
+   * for reports produced after the numericalSummaryOverride removal. `method`
+   * is "computed" (generic, tagged `estimated`) or "unavailable"; it is NEVER a
+   * memorized/identity-substituted vendor value.
+   */
+  provenance?: {
+    LFa: MetricProvenance;
+    RFa: MetricProvenance;
+    SB: MetricProvenance;
+    FRF: MetricProvenance;
+  };
 }
 
 export interface Classification {
