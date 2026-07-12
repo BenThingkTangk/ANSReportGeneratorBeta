@@ -6,6 +6,11 @@ import { AtomMarkdown } from "./AtomMarkdown";
 import { apiRequest } from "@/lib/queryClient";
 import { useAtomVoice } from "@/hooks/useAtomVoice";
 import { phiTermsFromReport } from "@/lib/speech";
+import {
+  isWellnessAssessable,
+  isTherapyGateOpen,
+  suggestedPrompts,
+} from "@/lib/askAtomEvidence";
 import type { ANSReport } from "@shared/schema";
 
 interface AskAtomProps {
@@ -24,18 +29,6 @@ interface ChatMessage {
   status?: ChatStatus;
 }
 
-const PATIENT_PROMPTS = [
-  "What does my score mean for daily life?",
-  "Why is my blood pressure low?",
-  "What should I ask my doctor?",
-];
-
-const CLINICIAN_PROMPTS = [
-  "Explain the Colombo interpretation",
-  "Differential diagnoses?",
-  "Dosing guidance for PE",
-];
-
 const PATIENT_FOLLOWUPS = [
   "What can I do to improve this?",
   "Is this something to worry about?",
@@ -44,12 +37,31 @@ const PATIENT_FOLLOWUPS = [
   "Will this change over time?",
 ];
 
+// Diagnosis/therapy-oriented clinician follow-ups. Only offered when the therapy
+// gate is OPEN (a supported indication + a real therapy recommendation exist).
 const CLINICIAN_FOLLOWUPS = [
   "What's the differential here?",
   "Suggested first-line therapy?",
   "Dosing and titration details?",
   "Relevant contraindications?",
   "Which monitoring parameters apply?",
+];
+
+// Safe clinician follow-ups when the therapy gate is CLOSED (e.g. raw-ECG export
+// with spectral/BP unavailable and no supported indication). These stay within
+// the report's evidence boundary — no diagnosis, therapy, or dosing.
+const CLINICIAN_FOLLOWUPS_GATED = [
+  "What was measured?",
+  "Why are spectral and BP results unavailable?",
+  "Explain the Ewing ratios that were measured",
+  "What are the limits of this recording?",
+];
+
+// Safe patient follow-ups when the therapy gate is CLOSED.
+const PATIENT_FOLLOWUPS_GATED = [
+  "What was measured?",
+  "Why are spectral and BP results unavailable?",
+  "What should I ask my clinician?",
 ];
 
 /** Keep only strings, drop blanks and duplicates. */
@@ -121,22 +133,29 @@ function isCanIndication(ind: { code?: string; name?: string } | undefined): boo
   return code.startsWith("CAN") || name.includes("CARDIOVASCULAR AUTONOMIC NEUROPATHY") || /\bCAN\b/.test(name);
 }
 
-/** Suggest up to 3 follow-ups, role-aware and lightly grounded in the report. */
+/** Suggest up to 3 follow-ups, role-aware and grounded in the report's evidence. */
 function buildFollowUps(mode: ViewerRole, report: ANSReport, asked: string[]): string[] {
   const derived: string[] = [];
-  // CAN and Critical rest on genuine LFa/RFa spectral data. When those metrics
-  // were never assessed (zero-filled), suppress follow-up chips that would steer
-  // the conversation toward a classification the data can't support.
+  // The therapy gate is the single evidence boundary: diagnosis/therapy/dosing
+  // follow-ups are only offered when a supported indication AND a real therapy
+  // recommendation exist. When it is closed (e.g. spectral/BP unavailable), we
+  // fall back to the "what was measured / what to ask" gated pools and surface
+  // no score/tier-derived chips.
+  const gateOpen = isTherapyGateOpen(report);
+  const wellnessOk = isWellnessAssessable(report);
   const spectralAssessed = lfaRfaAssessed(report);
   const topIndication = report.indications?.[0];
   const top = topIndication?.name;
-  if (top && !(isCanIndication(topIndication) && !spectralAssessed)) {
+  if (gateOpen && top && !(isCanIndication(topIndication) && !spectralAssessed)) {
     derived.push(mode === "clinician" ? `Management approach for ${top}?` : `Tell me more about ${top}.`);
   }
-  if (mode === "patient" && report.wellnessTier && !(report.wellnessTier === "Critical" && !spectralAssessed)) {
+  // Only reference the score/tier when it was genuinely assessable.
+  if (mode === "patient" && wellnessOk && report.wellnessTier && !(report.wellnessTier === "Critical" && !spectralAssessed)) {
     derived.push(`Why is my score "${report.wellnessTier}"?`);
   }
-  const pool = mode === "clinician" ? CLINICIAN_FOLLOWUPS : PATIENT_FOLLOWUPS;
+  const pool = gateOpen
+    ? (mode === "clinician" ? CLINICIAN_FOLLOWUPS : PATIENT_FOLLOWUPS)
+    : (mode === "clinician" ? CLINICIAN_FOLLOWUPS_GATED : PATIENT_FOLLOWUPS_GATED);
   const seen = new Set(asked.map(a => a.trim().toLowerCase()));
   const out: string[] = [];
   for (const q of [...derived, ...pool]) {
@@ -174,7 +193,10 @@ export function AskAtom({ report, viewerRole }: AskAtomProps) {
   });
 
   const nextId = () => `m${idRef.current++}`;
-  const prompts = mode === "clinician" ? CLINICIAN_PROMPTS : PATIENT_PROMPTS;
+  // Evidence-aware starter prompts (never diagnosis/dosing unless the therapy
+  // gate is open) and the wellness-score gate for the header chip.
+  const prompts = useMemo(() => suggestedPrompts(report, mode), [report, mode]);
+  const wellnessAssessable = useMemo(() => isWellnessAssessable(report), [report]);
 
   // Follow the externally-selected role, while still allowing an in-panel override afterwards.
   useEffect(() => {
@@ -375,8 +397,12 @@ export function AskAtom({ report, viewerRole }: AskAtomProps) {
         onClick={() => setOpen(o => !o)}
         whileHover={{ scale: 1.08 }}
         whileTap={{ scale: 0.95 }}
-        className="fixed bottom-6 right-6 w-14 h-14 rounded-full flex items-center justify-center shadow-xl z-50 group"
+        className="fixed right-4 sm:right-6 w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center shadow-xl z-50 group"
         style={{
+          // Safe-area-aware bottom offset so the button never overlaps the
+          // lower-right report metrics (e.g. the parasympathetic gauge) at
+          // mobile widths. Report containers reserve matching bottom padding.
+          bottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
           background: "linear-gradient(135deg, hsl(185 85% 35%), hsl(185 85% 48%))",
           boxShadow: "0 0 24px hsl(185 85% 42% / 0.45), 0 4px 16px hsl(0 0% 0% / 0.4)",
         }}
@@ -403,9 +429,10 @@ export function AskAtom({ report, viewerRole }: AskAtomProps) {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             transition={{ type: "spring", stiffness: 360, damping: 30 }}
-            className="fixed bottom-24 right-6 w-[340px] sm:w-[380px] rounded-2xl flex flex-col overflow-hidden z-50"
+            className="fixed right-3 sm:right-6 w-[min(340px,calc(100vw-1.5rem))] sm:w-[380px] rounded-2xl flex flex-col overflow-hidden z-50"
             style={{
-              height: "min(560px, calc(100vh - 120px))",
+              bottom: "calc(env(safe-area-inset-bottom, 0px) + 5rem)",
+              height: "min(560px, calc(100vh - 140px))",
               background: "hsl(210 20% 8%)",
               border: "1px solid hsl(210 15% 16%)",
               boxShadow: "0 24px 64px hsl(0 0% 0% / 0.6), 0 0 0 1px hsl(185 85% 42% / 0.1)",
@@ -480,20 +507,36 @@ export function AskAtom({ report, viewerRole }: AskAtomProps) {
                   </button>
                 ))}
               </div>
-              <div
-                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md flex-shrink-0"
-                style={{
-                  background: "hsl(185 85% 42% / 0.1)",
-                  border: "1px solid hsl(185 85% 42% / 0.2)",
-                  color: "hsl(185 85% 65%)",
-                }}
-                title="Wellness score"
-                data-testid="atom-score-chip"
-              >
-                <AtomLogo size={11} color="hsl(185 85% 60%)" />
-                <span className="font-semibold">{Math.round(report.wellnessScore)}</span>
-                <span className="opacity-70">{report.wellnessTier}</span>
-              </div>
+              {wellnessAssessable ? (
+                <div
+                  className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md flex-shrink-0"
+                  style={{
+                    background: "hsl(185 85% 42% / 0.1)",
+                    border: "1px solid hsl(185 85% 42% / 0.2)",
+                    color: "hsl(185 85% 65%)",
+                  }}
+                  title="Wellness score"
+                  data-testid="atom-score-chip"
+                >
+                  <AtomLogo size={11} color="hsl(185 85% 60%)" />
+                  <span className="font-semibold">{Math.round(report.wellnessScore)}</span>
+                  <span className="opacity-70">{report.wellnessTier}</span>
+                </div>
+              ) : (
+                <div
+                  className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md flex-shrink-0"
+                  style={{
+                    background: "hsl(210 12% 20% / 0.6)",
+                    border: "1px solid hsl(210 12% 30% / 0.6)",
+                    color: "hsl(210 10% 68%)",
+                  }}
+                  title="Wellness score depends on spectral/balance data, which was not assessed for this recording."
+                  data-testid="atom-score-chip-unavailable"
+                >
+                  <AtomLogo size={11} color="hsl(210 10% 62%)" />
+                  <span className="font-medium">Not assessed</span>
+                </div>
+              )}
             </div>
 
             {/* Message area */}

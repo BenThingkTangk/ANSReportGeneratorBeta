@@ -66,7 +66,11 @@ export function ClinicianPortalLive({ report, ansStudy }: ClinicianPortalProps) 
   }, []);
 
   return (
-    <div className="space-y-4 pb-16" data-testid="clinician-portal">
+    <div
+      className="space-y-4"
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 7rem)" }}
+      data-testid="clinician-portal"
+    >
       <ClinicianHeader report={report} />
 
       <ClinicianSynopsis

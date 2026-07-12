@@ -91,7 +91,11 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
     : "Date on file";
 
   return (
-    <div className="space-y-6 pb-24" data-testid="patient-portal">
+    <div
+      className="space-y-6"
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 7rem)" }}
+      data-testid="patient-portal"
+    >
       {/* Patient header strip */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
