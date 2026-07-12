@@ -43,10 +43,14 @@ export function ClinicianPortalLive({ report, ansStudy }: ClinicianPortalProps) 
   const [synopsis, setSynopsis] = useState<string>(
     () => report.clinicianSynopsis ?? buildClinicianSynopsis(report),
   );
+  // Non-blocking flag: the deterministic synopsis is already on screen; this
+  // only drives a small "Enhancing with AI…" badge while the fetch runs.
+  const [enhancing, setEnhancing] = useState(false);
 
   // Best-effort AI enrichment. Failures are swallowed so the deterministic
   // synopsis is never replaced by a "Connection error".
   const enrichSynopsis = async () => {
+    setEnhancing(true);
     try {
       const res = await apiRequest("POST", "/api/synopsis", { report });
       const data = await res.json();
@@ -55,6 +59,8 @@ export function ClinicianPortalLive({ report, ansStudy }: ClinicianPortalProps) 
       }
     } catch {
       // Keep the deterministic synopsis on any failure.
+    } finally {
+      setEnhancing(false);
     }
   };
 
@@ -78,6 +84,7 @@ export function ClinicianPortalLive({ report, ansStudy }: ClinicianPortalProps) 
         loading={false}
         error={null}
         onRetry={enrichSynopsis}
+        enhancing={enhancing}
       />
 
       {/* PR2 — Data Quality & Confidence panel slots in above clinical content. */}

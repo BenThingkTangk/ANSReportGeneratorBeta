@@ -35,15 +35,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ success: false, error: "Not found" });
       }
 
-      // chunk summary
+      // chunk summary + a browseable preview of the actual chunks (bounded).
       const { count: chunkCount } = await supabase
         .from("ans_knowledge_chunks")
         .select("id", { count: "exact", head: true })
         .eq("source_id", id);
 
+      const { data: chunkRows } = await supabase
+        .from("ans_knowledge_chunks")
+        .select("id, chunk_index, tokens, content")
+        .eq("source_id", id)
+        .order("chunk_index", { ascending: true })
+        .limit(200);
+
+      const chunks = (chunkRows ?? []).map((c: any) => ({
+        id: c.id,
+        chunkIndex: c.chunk_index,
+        tokens: c.tokens ?? null,
+        // Preview only — keeps payloads small while making chunks browseable.
+        preview: typeof c.content === "string" ? c.content.slice(0, 600) : "",
+        length: typeof c.content === "string" ? c.content.length : 0,
+      }));
+
       return res.status(200).json({
         success: true,
-        data: { ...data, chunkCount: chunkCount ?? 0 },
+        data: { ...data, chunkCount: chunkCount ?? 0, chunks },
       });
     }
 

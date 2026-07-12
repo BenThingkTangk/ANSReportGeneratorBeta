@@ -36,6 +36,8 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
   const [synopsis, setSynopsis] = useState<string>(
     () => report.patientSynopsis ?? buildPatientSynopsis(report),
   );
+  // Non-blocking enrichment indicator; deterministic synopsis is already shown.
+  const [enhancing, setEnhancing] = useState(false);
 
   const p = report.patientData;
   const ab = report.autonomicBalance;
@@ -70,6 +72,7 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
   // text on success; any failure is swallowed so the deterministic synopsis stays
   // on screen. It must never surface a "Connection error" in place of real content.
   const enrichSynopsis = async () => {
+    setEnhancing(true);
     try {
       const res = await apiRequest("POST", "/api/synopsis", { report });
       const data = await res.json();
@@ -78,6 +81,8 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
       }
     } catch {
       // AI enrichment is best-effort; keep the deterministic synopsis.
+    } finally {
+      setEnhancing(false);
     }
   };
 
@@ -230,6 +235,7 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
           loading={false}
           error={null}
           onRetry={enrichSynopsis}
+          enhancing={enhancing}
         />
       </motion.div>
 

@@ -21,6 +21,52 @@ import {
 
 const SONAR_URL = "https://api.perplexity.ai/chat/completions";
 
+/**
+ * Bounded in-memory response cache. Repeated identical questions about the
+ * same report (same viewer role + conversation prefix) return instantly
+ * without re-billing/re-latency of a Sonar call. Keyed on a hash of the full
+ * grounded request so a different report or a different conversation never
+ * collides. TTL-bounded and LRU-evicted; process-local (safe for serverless —
+ * a cold start simply starts empty).
+ *
+ * PHI note: keys are non-reversible FNV-1a hashes and values are the model's
+ * already-de-identified answer text; no raw report is stored.
+ */
+const CACHE_TTL_MS = 10 * 60_000; // 10 minutes
+const CACHE_MAX = 200;
+type CachedAnswer = { message: string; webCitations: any[]; expires: number };
+const answerCache = new Map<string, CachedAnswer>();
+
+function fnv1a(str: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(16);
+}
+
+function cacheGet(key: string): CachedAnswer | null {
+  const hit = answerCache.get(key);
+  if (!hit) return null;
+  if (hit.expires < Date.now()) {
+    answerCache.delete(key);
+    return null;
+  }
+  // Refresh recency for LRU.
+  answerCache.delete(key);
+  answerCache.set(key, hit);
+  return hit;
+}
+
+function cacheSet(key: string, value: Omit<CachedAnswer, "expires">): void {
+  if (answerCache.size >= CACHE_MAX) {
+    const oldest = answerCache.keys().next().value;
+    if (oldest !== undefined) answerCache.delete(oldest);
+  }
+  answerCache.set(key, { ...value, expires: Date.now() + CACHE_TTL_MS });
+}
+
 export const SYSTEM_PROMPT = `You are Atom, a Colombo-grounded autonomic-health assistant powered by Perplexity Sonar.
 Your reasoning follows the Colombo P&S methodology (Physio PS / ANS Element / DynaCardia Rx) and the published treatment protocol below.
 
@@ -351,6 +397,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .join("\n\n");
     const conversation = [{ role: "system", content: systemContent }, ...messages];
 
+    // Response cache: identical grounded conversation → instant replay. The key
+    // folds in the full system context (report + role + knowledge) and the
+    // message history, so any change busts the entry.
+    const cacheKey = fnv1a(JSON.stringify(conversation));
+    const cached = cacheGet(cacheKey);
+    if (cached) {
+      return res.status(200).json({
+        success: true,
+        message: cached.message,
+        webCitations: cached.webCitations,
+        citations: knowledgeCitations,
+        cached: true,
+      });
+    }
+
     const r = await fetch(SONAR_URL, {
       method: "POST",
       headers: {
@@ -374,11 +435,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Perplexity web citations renamed to webCitations to disambiguate from internal knowledge citations
     const webCitations = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean) || [];
 
+    // Only cache non-empty answers so a transient blank never sticks.
+    if (message) cacheSet(cacheKey, { message, webCitations });
+
     return res.status(200).json({
       success: true,
       message,
       webCitations,
       citations: knowledgeCitations,
+      cached: false,
     });
   } catch (err: any) {
     console.error("Ask Atom error:", err);
