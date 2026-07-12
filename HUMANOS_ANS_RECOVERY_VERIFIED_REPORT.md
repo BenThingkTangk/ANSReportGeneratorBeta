@@ -3,10 +3,14 @@
 **Branch:** `recovery/humanos-ans-world-class`
 **PR:** [#4](https://github.com/BenThingkTangk/ANSReportGeneratorBeta/pull/4) → base `main` (OPEN; not approved — subagents may not approve PRs)
 **Base lineage:** `feat/ans-report-ui-upgrade` @ `6f5f7d1` (tip of the six FINAL-QA safety fixes)
-**Head:** `2067d62`
+**Head:** `b7f23ec`
 **Date:** 2026-07-12
 **Environment:** Full existing repo at `/home/user/workspace/humanos-ans` (the managed clone was sparse). Root-owned artifact dirs were repaired with `chown` so the stock toolchain runs unmodified.
 **Production deploy:** NOT performed (per instruction).
+
+> This file is the post-implementation report copied from recovery commit
+> `b28ecaa` (it supersedes the earlier pre-repair "HARD BLOCK" draft that
+> previously occupied this path).
 
 ---
 
@@ -21,7 +25,7 @@ visualization, responsive layout) already existed on the base lineage and was
 verified working; the deltas below fill the remaining gaps and harden the
 whole.
 
-**Recovery commits on this branch (`6f5f7d1..2067d62`):**
+**Recovery commits on this branch (`6f5f7d1..b7f23ec`) — seven total:**
 
 | Commit | What |
 |--------|------|
@@ -30,6 +34,8 @@ whole.
 | `c2917d5` | Paired vendor-PDF ingestion (`vendor_reported`); PWA + vendor docs |
 | `c174abe` | SDNN / LF-HF label clip fix; admin-gateway tests; extended E2E harness |
 | `2067d62` | TTS contract tests; Ask ATOM mic/mode tests; PWA cache headers |
+| `b28ecaa` | Verification report (truthful acceptance matrix) |
+| `b7f23ec` | **CI fix:** defer PHI-fixture reads to `beforeAll` so the parser suite skips cleanly on CI (see §9) |
 
 ---
 
@@ -89,10 +95,6 @@ honest not-assessed gating · SDNN+LF/HF labels render · **PWA manifest
 standalone+icons** · **service worker served** · **vendor endpoint contract** ·
 **admin gateway status**.
 
-Screenshots were captured to `/tmp` for layout inspection (side-by-side desktop
-layout; LF/HF label now inside the gauge; mobile stacking). **No PHI screenshots
-are committed** (`qa/jill-fidelity/*` stays untracked).
-
 ### Known non-defects
 - `POST /api/synopsis 400` / TTS 501 in the harness — no LLM/ElevenLabs key
   configured; the app renders fully via the deterministic path and browser-voice
@@ -102,7 +104,35 @@ are committed** (`qa/jill-fidelity/*` stays untracked).
 
 ---
 
-## 4. Safety & provenance integrity
+## 4. Screenshots (safe, deidentified layout captures)
+
+Captured to `/tmp` for layout inspection. **No PHI screenshots are committed**;
+`qa/jill-fidelity/*` remains untracked and excluded from every commit. The
+captures below are session-local under `/tmp` by design — they must never enter
+git. Re-generate anytime with the preview + `qa/shoot.mjs` steps in §6.
+
+Latest final-build captures (`qa/shoot.mjs`, viewports 1280×900 and 390×844):
+
+| Path | View |
+|------|------|
+| `/tmp/vlog2/shot-desktop-review.png` | Desktop — parse-review |
+| `/tmp/vlog2/shot-desktop-patient.png` | Desktop — patient (side-by-side nervous-system ‖ metrics; LF/HF label now inside the gauge) |
+| `/tmp/vlog2/shot-desktop-clinician.png` | Desktop — clinician (evidence-by-certainty) |
+| `/tmp/vlog2/shot-mobile-review.png` | Mobile 390×844 — parse-review |
+| `/tmp/vlog2/shot-mobile-patient.png` | Mobile 390×844 — patient (stacked) |
+| `/tmp/vlog2/shot-mobile-clinician.png` | Mobile 390×844 — clinician |
+
+Reference set from the E2E run (`qa/e2e-verify.mjs`, `E2E_OUT=/tmp/vlog`):
+
+| Path | View |
+|------|------|
+| `/tmp/vlog/e2e-desktop-clinician.png` | Desktop clinician (E2E) |
+| `/tmp/vlog/e2e-mobile-clinician.png` | Mobile clinician (E2E) |
+| `/tmp/vlog/shot-desktop-patient.png` | Pre-fix desktop patient (shows the LF/HF clipping that `c174abe` fixed) |
+
+---
+
+## 5. Safety & provenance integrity
 
 - Dr. Colombo methodology and the treatment framework are preserved for grounded
   metrics; the Ask ATOM prompt qualifies without diluting substance (no timid
@@ -115,20 +145,133 @@ are committed** (`qa/jill-fidelity/*` stays untracked).
 
 ---
 
-## 5. External activations still pending (interfaces complete & tested)
+## 6. Preview / start instructions
+
+All commands run from `/home/user/workspace/humanos-ans`.
+
+### A. Production preview (built client + real Vercel `api/*` handlers)
+This is the faithful path used for verification (the legacy Express server does
+not expose `/api/parse`).
+
+```bash
+# 1) Build the client + server bundle (dist/ is now user-owned)
+npm run build
+
+# 2) Serve the built client AND mount the real api/*.ts handlers
+E2E_PORT=8090 E2E_DIST="$PWD/dist/public" npx tsx qa/e2e-server.mjs
+#   → open http://127.0.0.1:8090   (avoid port 5060: Chrome blocks it as unsafe)
+```
+
+Optional env for full AI/voice/admin activation (see §7):
+`PPLX_API_KEY`, `ELEVENLABS_API_KEY`, `ADMIN_GATEWAY_USERNAME`,
+`ADMIN_GATEWAY_PASSWORD_HASH`, `ADMIN_SESSION_SECRET`.
+
+### B. Dev server (Vite HMR)
+```bash
+npm run dev          # NODE_ENV=development tsx server/index.ts (default PORT 5000)
+```
+
+### C. Re-run the automated E2E + screenshots
+```bash
+# with the preview host from step A running on 8090:
+NODE_PATH=/home/user/node_modules \
+  E2E_BASE=http://127.0.0.1:8090 E2E_OUT=/tmp/vlog \
+  E2E_ANS="$PWD/fixtures/Pare-Alex-Thu-Jul-11-2024.ans" \
+  node qa/e2e-verify.mjs           # 21/21 checks
+
+NODE_PATH=/home/user/node_modules \
+  E2E_BASE=http://127.0.0.1:8090 E2E_OUT=/tmp/vlog2 \
+  E2E_ANS="$PWD/fixtures/Pare-Alex-Thu-Jul-11-2024.ans" \
+  node qa/shoot.mjs                # writes shot-*.png to /tmp/vlog2
+```
+
+### D. Test / eval gates
+```bash
+npm run audit:esm
+npx tsc --noEmit --incremental false
+npm run test:ans        # 157 server tests
+npm run test:client     # 29 client tests
+npm run eval:ci         # 15/15, gate PASSED, 0 unsafe overclaims
+```
+
+### E. Installable PWA
+After building and serving (step A), open the app in Chrome/Edge → install icon
+in the address bar (or iOS Safari → Share → Add to Home Screen). See
+`docs/PWA_AND_PACKAGING.md` for store-wrapper packaging (PWABuilder/Capacitor).
+
+---
+
+## 7. External activations still pending (interfaces complete & tested)
 
 | Item | What's done | Pending external step |
 |------|-------------|-----------------------|
 | ElevenLabs voice | Endpoint pins voice `gs0tAILXbY5DNrJrsM6F`, 501-fallback, PHI guards, tests | set `ELEVENLABS_API_KEY` |
 | Ask ATOM / synopsis LLM | Grounded prompt, cache, grounding tests | set `PPLX_API_KEY` |
-| Admin gateway | scrypt/HMAC verified in tests | set `ADMIN_GATEWAY_USERNAME` / `_PASSWORD_HASH` / `ADMIN_SESSION_SECRET` |
+| Admin gateway | scrypt/HMAC verified in tests | set `ADMIN_GATEWAY_USERNAME` / `ADMIN_GATEWAY_PASSWORD_HASH` / `ADMIN_SESSION_SECRET` |
 | Vendor PDF (scanned) | Full ingestion contract + parser verified on text PDFs | OCR pre-step for image-only PDFs |
 | Admin live data | RLS-safe endpoints/pages built | Supabase project env for live rows |
 
 ---
 
-## 6. Push / PR
+## 8. Push / PR
 
-All five recovery commits are pushed to `recovery/humanos-ans-world-class` and
-attached to **PR #4** (OPEN, base `main`). PHI screenshots are intentionally
-excluded from every commit. No production deploy was performed.
+All seven recovery commits (head `b7f23ec`) are pushed to
+`recovery/humanos-ans-world-class` and attached to **PR #4** (OPEN, base
+`main`). PHI screenshots are intentionally excluded from every commit. No
+production deploy was performed.
+
+---
+
+## 9. CI failure → root cause → fix → green re-run
+
+**Symptom.** After the initial push, the GitHub check **"Parser + scoring
+regression"** failed (run
+[29192385727](https://github.com/BenThingkTangk/ANSReportGeneratorBeta/actions/runs/29192385727/job/86649178327))
+at the `npm run test:ans` step:
+
+```
+FAIL api/_ans/__tests__/parseStudy.spec.ts [ ... ]
+Error: ENOENT: no such file or directory, open
+  '/home/runner/work/.../fixtures/Pare-Alex-Thu-Jul-11-2024.ans'
+ ❯ api/_ans/__tests__/parseStudy.spec.ts:39:15
+Test Files  1 failed | 17 passed (18)
+```
+
+Local runs were green because the two real-patient `.ans` fixtures exist in
+this environment; they are **`.gitignore`'d for PHI compliance**, so they are
+absent on a clean CI checkout. CI is the source of truth.
+
+**Root cause.** `parseStudy.spec.ts` called `readFileSync(FIXTURE_PARE)` /
+`readFileSync(FIXTURE_FRANCEY)` **in the body of a `describe()` block**. Vitest
+executes a describe callback during *collection* even when it is
+`describe.skip`, so the top-level read threw `ENOENT` before the skip could take
+effect. The `existsSync`-gated `describe.skip` was therefore ineffective.
+
+**Fix (no assertion weakened, no test skipped that shouldn't be).** Moved the
+fixture read + `parseStudy()` into `beforeAll()` in both real-binary suites.
+`beforeAll` runs only when the suite actually executes, so `describe.skip` now
+truly no-ops on a clean checkout. Commit `b7f23ec`, one file changed.
+
+- With fixtures **present** (local): `parseStudy.spec.ts` runs **all 21 tests**
+  (0 skipped) — assertions fully intact.
+- With fixtures **absent** (CI): the 11 real-binary tests **skip**, the 10
+  synthetic/confidence tests still run — no collection error.
+
+**Reproduction & verification.** Hid the fixtures (mirroring CI) → reproduced
+the exact `ENOENT`. Applied the fix → `10 passed | 11 skipped`, no error.
+Restored fixtures → `21 passed`. Full CI-equivalent gates locally: `npm run
+check` (tsc 0), `npm run test:ans` (157/157 present · 146+11-skip absent),
+`eval:ci` (15/15, gate PASSED, 0 unsafe overclaims).
+
+**Green re-run.** Workflow run
+[29192726694](https://github.com/BenThingkTangk/ANSReportGeneratorBeta/actions/runs/29192726694)
+completed **success**. All required PR #4 checks green:
+
+| Check | Result |
+|-------|--------|
+| Parser + scoring regression | ✅ pass |
+| Vercel Preview Comments | ✅ pass |
+| Vercel – ans-report-generator-beta | ✅ pass |
+| Vercel – humanos-ans-diagnostic | ✅ pass |
+
+PR #4 remains OPEN (not merged, not deployed).
