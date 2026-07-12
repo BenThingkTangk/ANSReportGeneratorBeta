@@ -1,17 +1,30 @@
 /**
- * FIFTH FINAL-QA (mobile layout): the fixed Ask ATOM floating button previously
- * used a hard-coded `bottom-6 right-6` offset and overlapped the lower-right
- * report metrics (e.g. the parasympathetic gauge) at 390x844.
+ * FIFTH FINAL-QA (mobile layout) + SIXTH follow-up (mobile launcher overlap):
  *
- * jsdom cannot measure real geometry, so we assert the structural contract that
- * prevents the overlap:
- *   1. the floating button uses a safe-area-aware bottom offset (env(safe-area-…))
- *      rather than a static Tailwind `bottom-6`; and
- *   2. the report portals reserve safe-area-aware bottom padding so their last
- *      row clears the button footprint.
- * A real pixel screenshot at 390x844 is captured separately during QA.
+ * A production screenshot at 390x844 showed the FIXED Ask ATOM launcher
+ * (bbox 326,780,48,48) still overlaying the lower-right parasympathetic
+ * "Not assessed" metric while scrolled to the nervous-system card. Safe-area
+ * bottom padding cannot prevent this because a viewport-fixed launcher follows
+ * the scroll position, not the document flow.
+ *
+ * Fix: on mobile the launcher is NON-overlaying — it lives in the sticky top bar
+ * (a header icon) instead of floating over content. The fixed floating launcher
+ * is retained for tablet/desktop (`sm`+). We assert the structural contract that
+ * guarantees no overlay at mobile widths:
+ *   1. when AskAtom is controlled (dashboard usage) its fixed launcher is
+ *      `hidden` below `sm` (so nothing floats over content on mobile);
+ *   2. the dashboard renders a header trigger (`ask-atom-button-mobile`) that is
+ *      `sm:hidden` and lives inside the sticky top bar (never over content);
+ *   3. clicking the header trigger opens the reachable drawer.
+ * The standalone launcher still uses a safe-area-aware bottom offset for the
+ * tablet/desktop float. A real pixel screenshot at 390x844 is captured in QA.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
+import { readFileSync, existsSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { cleanup as rtlCleanup } from "@testing-library/react";
 
 vi.mock("@react-three/fiber", async () => {
   const React = await import("react");
@@ -64,10 +77,53 @@ const minimalReport: any = {
   },
   phaseEvents: [{ LFa: null, RFa: null }],
   patientData: { firstName: "T", lastName: "P", age: 40 },
+  generatedAt: new Date().toISOString(),
 };
 
-describe("Ask ATOM mobile layout contract (FIFTH FINAL-QA)", () => {
-  it("floating button uses a safe-area-aware bottom offset, not static bottom-6", async () => {
+// --- real upload (for the dashboard integration test) ----------------------
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FIXTURE = path.resolve(
+  __dirname,
+  "../../../api/_ans/__tests__/fixtures/deidentified_waveform.ans",
+);
+const REAL_JILL =
+  "/home/user/workspace/uploaded_attachments/8e89e1202a664b3089d4ba662bc0c265/Shah-Jill-Fri-Sep-26-2025-2.ans";
+function pickFile(): { bytes: Buffer; name: string } {
+  if (existsSync(REAL_JILL)) return { bytes: readFileSync(REAL_JILL), name: "Shah-Jill.ans" };
+  return { bytes: readFileSync(FIXTURE), name: "deidentified_waveform.ans" };
+}
+async function realUploadReport(): Promise<any> {
+  const handler = (await import("../../../api/upload.ts")).default;
+  const { bytes, name } = pickFile();
+  const boundary = "----mobileLayoutBoundary";
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="ansFile"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+    ),
+    bytes,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+  const req = new EventEmitter() as any;
+  req.method = "POST";
+  req.headers = { "content-type": `multipart/form-data; boundary=${boundary}` };
+  const { json } = await new Promise<any>((resolve, reject) => {
+    const res: any = {
+      _s: 200,
+      status(c: number) { this._s = c; return this; },
+      setHeader() { return this; },
+      json(p: any) { resolve({ status: this._s, json: p }); return this; },
+      end() { resolve({ status: this._s, json: null }); return this; },
+    };
+    handler(req, res).catch(reject);
+    setImmediate(() => { req.emit("data", body); req.emit("end"); });
+  });
+  return json;
+}
+
+describe("Ask ATOM mobile layout contract (FIFTH/SIXTH FINAL-QA)", () => {
+  afterEach(() => rtlCleanup());
+
+  it("standalone floating button uses a safe-area-aware bottom offset, not static bottom-6", async () => {
     const { render, within } = await import("@testing-library/react");
     const { AskAtom } = await import("../components/AskAtom");
     const { container } = render(<AskAtom report={minimalReport} viewerRole="patient" />);
@@ -76,5 +132,54 @@ describe("Ask ATOM mobile layout contract (FIFTH FINAL-QA)", () => {
     // Inline safe-area-aware bottom, no legacy Tailwind static offset.
     expect(btn.getAttribute("style") || "").toMatch(/safe-area-inset-bottom/);
     expect(btn.className).not.toMatch(/\bbottom-6\b/);
+    // Uncontrolled: launcher is visible at all widths (no forced mobile hide).
+    expect(btn.className).not.toMatch(/\bhidden\b/);
+  });
+
+  it("controlled floating launcher is hidden below sm so nothing floats over mobile content", async () => {
+    const { render, within } = await import("@testing-library/react");
+    const { AskAtom } = await import("../components/AskAtom");
+    const { container } = render(
+      <AskAtom report={minimalReport} viewerRole="patient" open={false} onOpenChange={() => {}} />,
+    );
+    const btn = within(container).getByTestId("ask-atom-button");
+    // Fixed launcher only appears from `sm` up when controlled by a host.
+    expect(btn.className).toMatch(/\bhidden\b/);
+    expect(btn.className).toMatch(/\bsm:flex\b/);
+  });
+
+  describe("dashboard mobile launcher lives in the sticky top bar (never over content)", () => {
+    let report: any;
+    beforeAll(async () => {
+      report = (await realUploadReport()).report;
+    });
+
+    it("renders a sm:hidden header trigger and opens the reachable drawer", async () => {
+      const { render, within, fireEvent } = await import("@testing-library/react");
+      const { ReportDashboard } = await import("../components/ReportDashboard");
+      const { container } = render(
+        <ReportDashboard report={report} onReset={() => {}} />,
+      );
+      const scoped = within(container);
+
+      // Mobile header trigger exists and is a mobile-only control.
+      const mobileTrigger = scoped.getByTestId("ask-atom-button-mobile");
+      expect(mobileTrigger.className).toMatch(/\bsm:hidden\b/);
+
+      // The trigger sits inside the sticky top bar, not over report content.
+      const stickyBar = container.querySelector(".sticky.top-0");
+      expect(stickyBar).toBeTruthy();
+      expect(stickyBar!.contains(mobileTrigger)).toBe(true);
+
+      // Drawer is closed initially, reachable on click.
+      expect(scoped.queryByTestId("ask-atom-panel")).toBeNull();
+      fireEvent.click(mobileTrigger);
+      expect(scoped.getByTestId("ask-atom-panel")).toBeTruthy();
+
+      // The dashboard's fixed launcher is hidden below sm (no mobile float).
+      const fixedBtn = scoped.getByTestId("ask-atom-button");
+      expect(fixedBtn.className).toMatch(/\bhidden\b/);
+      expect(fixedBtn.className).toMatch(/\bsm:flex\b/);
+    });
   });
 });

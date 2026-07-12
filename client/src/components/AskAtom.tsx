@@ -16,6 +16,14 @@ import type { ANSReport } from "@shared/schema";
 interface AskAtomProps {
   report: ANSReport;
   viewerRole: "patient" | "clinician";
+  /**
+   * Optional controlled open state. When provided, AskAtom becomes controlled
+   * and its built-in floating launcher is hidden on mobile — the host renders a
+   * non-overlaying trigger (e.g. a header icon) instead. On desktop/tablet the
+   * floating launcher is still shown so behavior is unchanged there.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 type ViewerRole = "patient" | "clinician";
@@ -168,8 +176,15 @@ function buildFollowUps(mode: ViewerRole, report: ANSReport, asked: string[]): s
   return out;
 }
 
-export function AskAtom({ report, viewerRole }: AskAtomProps) {
-  const [open, setOpen] = useState(false);
+export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: AskAtomProps) {
+  const controlled = openProp !== undefined;
+  const [openState, setOpenState] = useState(false);
+  const open = controlled ? (openProp as boolean) : openState;
+  const setOpen = (next: boolean | ((o: boolean) => boolean)) => {
+    const value = typeof next === "function" ? (next as (o: boolean) => boolean)(open) : next;
+    if (!controlled) setOpenState(value);
+    onOpenChange?.(value);
+  };
   const [mode, setMode] = useState<ViewerRole>(viewerRole);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -392,16 +407,23 @@ export function AskAtom({ report, viewerRole }: AskAtomProps) {
 
   return (
     <>
-      {/* Floating button */}
+      {/* Floating launcher.
+          On mobile the fixed launcher overlaid lower-right report metrics (e.g.
+          the parasympathetic "Not assessed" gauge) regardless of bottom padding,
+          because it is viewport-fixed and follows the scroll position. When the
+          host controls `open` it renders a non-overlaying mobile trigger (header
+          icon), so here we hide this fixed launcher below `sm` and keep it only
+          for tablet/desktop widths where there is ample right-margin. When
+          uncontrolled (standalone usage) the launcher shows at all widths. */}
       <motion.button
         onClick={() => setOpen(o => !o)}
         whileHover={{ scale: 1.08 }}
         whileTap={{ scale: 0.95 }}
-        className="fixed right-4 sm:right-6 w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center shadow-xl z-50 group"
+        className={`fixed right-4 sm:right-6 w-12 h-12 sm:w-14 sm:h-14 rounded-full ${
+          controlled ? "hidden sm:flex" : "flex"
+        } items-center justify-center shadow-xl z-50 group`}
         style={{
-          // Safe-area-aware bottom offset so the button never overlaps the
-          // lower-right report metrics (e.g. the parasympathetic gauge) at
-          // mobile widths. Report containers reserve matching bottom padding.
+          // Safe-area-aware bottom offset for the tablet/desktop floating button.
           bottom: "calc(env(safe-area-inset-bottom, 0px) + 1rem)",
           background: "linear-gradient(135deg, hsl(185 85% 35%), hsl(185 85% 48%))",
           boxShadow: "0 0 24px hsl(185 85% 42% / 0.45), 0 4px 16px hsl(0 0% 0% / 0.4)",
