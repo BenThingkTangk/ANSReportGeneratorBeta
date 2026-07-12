@@ -9,12 +9,14 @@ import { motion, useReducedMotion } from "framer-motion";
 import { useMemo } from "react";
 
 interface AutonomicBalanceGaugeProps {
-  sympathetic: number;         // 0..100 (% of total)
-  parasympathetic: number;     // 0..100 (% of total)
+  sympathetic: number | null;         // 0..100 (% of total); null = not assessed
+  parasympathetic: number | null;     // 0..100 (% of total); null = not assessed
   hrvRmssdMs: number;          // RMSSD in milliseconds (vagal HRV)
   hrvSdnnMs: number;           // SDNN in milliseconds (total HRV)
-  lfHfRatio: number;           // LF/HF ratio (sympathovagal balance, ~0.5–2.0 normal)
+  lfHfRatio: number | null;           // LF/HF ratio (sympathovagal balance, ~0.5–2.0 normal); null = not assessed
   balanceLabel?: string;       // tier label
+  /** When false, spectral split is not available — render "Not assessed". */
+  available?: boolean;
 }
 
 /**
@@ -39,22 +41,27 @@ export function AutonomicBalanceGauge({
   hrvSdnnMs,
   lfHfRatio,
   balanceLabel,
+  available = true,
 }: AutonomicBalanceGaugeProps) {
   const reduce = useReducedMotion();
 
-  // When an upload lacks usable beat-to-beat data the pipeline emits
-  // LFa/RFa/HRV = 0, so sympathetic + parasympathetic collapses to 0. In that
-  // case the balance is NOT assessed: render "Not assessed / insufficient data"
-  // rather than a fabricated 0% split or the score-derived tier label.
+  // Balance is NOT assessed when spectral is unavailable OR the split is null /
+  // collapses to 0. Render "Not assessed" rather than a fabricated 0% split or
+  // score-derived tier label — and never coerce null to a number.
   const balanceAssessed =
+    available &&
+    typeof sympathetic === "number" &&
+    typeof parasympathetic === "number" &&
     Number.isFinite(sympathetic) &&
     Number.isFinite(parasympathetic) &&
     sympathetic + parasympathetic > 0;
 
-  const total = sympathetic + parasympathetic || 1;
-  const sPct = Math.round((sympathetic / total) * 100);
+  const sympN = typeof sympathetic === "number" ? sympathetic : 0;
+  const paraN = typeof parasympathetic === "number" ? parasympathetic : 0;
+  const total = sympN + paraN || 1;
+  const sPct = Math.round((sympN / total) * 100);
   const pPct = 100 - sPct;
-  const skew = Math.abs(sPct - 50) / 50;
+  const skew = balanceAssessed ? Math.abs(sPct - 50) / 50 : 0;
 
   // ECG-like flowing waveform for the bottom strip
   const wavePath = useMemo(() => buildEcgPath(900, 90, 5), []);
@@ -387,7 +394,7 @@ export function AutonomicBalanceGauge({
             }}
             data-testid="abg-symp"
           >
-            {balanceAssessed ? `${sPct}%` : "—"}
+            {balanceAssessed ? `${sPct}%` : "Not assessed"}
           </div>
         </div>
 
@@ -427,7 +434,7 @@ export function AutonomicBalanceGauge({
             }}
             data-testid="abg-parasym"
           >
-            {balanceAssessed ? `${pPct}%` : "—"}
+            {balanceAssessed ? `${pPct}%` : "Not assessed"}
           </div>
         </div>
 
@@ -474,7 +481,7 @@ export function AutonomicBalanceGauge({
             }}
             data-testid="abg-lfhf"
           >
-            {fmt1(lfHfRatio)}
+            {balanceAssessed && typeof lfHfRatio === "number" ? fmt1(lfHfRatio) : "—"}
           </div>
         </div>
       </div>

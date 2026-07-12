@@ -100,8 +100,8 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
           </p>
         </div>
         <div className="text-[10px] text-muted-foreground/70 tabular-nums text-right">
-          <div>HR {Math.round(report.autonomicBalance.balance) || "—"} · RR cnt {report.rPeakCount}</div>
-          <div>SR {report.samplingRate} Hz · FRF {report.respiratoryFrequency.toFixed(2)} Hz</div>
+          <div>HR {report.autonomicBalance.balance != null ? (Math.round(report.autonomicBalance.balance) || "—") : "—"} · RR cnt {report.rPeakCount}</div>
+          <div>SR {report.samplingRate} Hz · FRF {report.respiratoryFrequency != null ? `${report.respiratoryFrequency.toFixed(2)} Hz` : "not assessed"}</div>
         </div>
       </div>
 

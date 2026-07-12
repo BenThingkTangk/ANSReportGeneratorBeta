@@ -159,8 +159,10 @@ export function buildPatientSynopsis(report: Partial<ANSReport>): string {
     // (RFa / LFa in bpm²), NOT percentages. Presenting the rounded raw values as
     // "%" produced the garbled "about 5% vs 1%" copy (S2-4). Normalize to a
     // share-of-total the same way the hero Venn does so both agree.
-    const rawPara = ab!.parasympathetic;
-    const rawSymp = ab!.sympathetic;
+    // Guaranteed non-null here (hasAutonomicBalance gate above), but coalesce
+    // for the type-checker — null spectral must never reach this branch.
+    const rawPara = ab!.parasympathetic ?? 0;
+    const rawSymp = ab!.sympathetic ?? 0;
     const total = rawPara + rawSymp || 1;
     const para = Math.round((rawPara / total) * 100);
     const symp = Math.max(0, Math.min(100, 100 - para));

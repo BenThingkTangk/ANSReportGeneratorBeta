@@ -28,9 +28,10 @@ import type { ProvField } from "../../shared/ansStudy.js";
 /** Minimal shape of the phase metrics we read off the computed report. */
 interface PhaseLike {
   phase: string;
-  LFa?: number;
-  RFa?: number;
-  SB?: number;
+  // number | null: spectral aggregates are null when not clinically available.
+  LFa?: number | null;
+  RFa?: number | null;
+  SB?: number | null;
 }
 
 interface ReportLike {

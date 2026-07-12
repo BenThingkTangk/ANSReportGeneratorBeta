@@ -137,9 +137,17 @@ export interface TherapyRecommendation {
 
 export interface BodySystemImpact {
   system: "cardiovascular" | "respiratory" | "digestive" | "nervous" | "endocrine" | "musculoskeletal" | "immune";
+  /**
+   * Numeric magnitude retained for the heatmap gradient. When `assessed` is
+   * false this is 0 (neutral) and MUST NOT be rendered as a score — the domain
+   * was not measured on this recording, so the UI shows a qualitative
+   * "Not assessed" state instead of a number.
+   */
   impact: number;
   label: string;
   description: string;
+  /** False when this domain depends on measures not available in the file. */
+  assessed?: boolean;
 }
 
 export type WellnessTier = "Optimal" | "Resilient" | "Balanced" | "Stressed" | "Depleted" | "Critical";
@@ -222,10 +230,21 @@ export interface ANSReport {
   wellnessBreakdown: WellnessBreakdown;
   riskLevel: string;
   energyLevel: "Low" | "Moderate" | "High";
+  /**
+   * True only when the proprietary spectral aggregates (LFa/RFa/SB) are
+   * available at a clinically-usable provenance tier. False for raw ECG-only
+   * .ans files — every spectral/adrenergic/neuropathy interpretation is then
+   * gated OFF, and the UI must render "Not assessed".
+   */
+  spectralAvailable?: boolean;
+  bpAvailable?: boolean;
   autonomicBalance: {
-    parasympathetic: number;
-    sympathetic: number;
-    balance: number;
+    // null when spectral aggregates are unavailable — the UI must render
+    // "Not assessed", never coerce to 0 or a 0/100 percentage split.
+    parasympathetic: number | null;
+    sympathetic: number | null;
+    balance: number | null;
+    available?: boolean;
     interpretation: string;
   };
   phaseEvents: PhaseMetrics[];
@@ -243,7 +262,7 @@ export interface ANSReport {
   clinicalFlags: string[];
   overallImpression: string;
   samplingRate: number;
-  respiratoryFrequency: number;
+  respiratoryFrequency: number | null;
   rPeakCount: number;
   generatedAt: string;
   patientSynopsis?: string;

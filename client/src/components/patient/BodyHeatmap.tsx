@@ -242,9 +242,7 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   role="button"
                   tabIndex={0}
                   aria-pressed={isSelected}
-                  aria-label={`${imp.label}: impact ${sign(imp.impact)}${imp.impact}, ${impactLabel(
-                    imp.impact,
-                  )}. ${isSelected ? "Selected. Activate to hide details." : "Activate for details."}`}
+                  aria-label={`${imp.label}: ${imp.assessed === false ? "not assessed" : `impact ${sign(imp.impact)}${imp.impact}, ${impactLabel(imp.impact)}`}. ${isSelected ? "Selected. Activate to hide details." : "Activate for details."}`}
                   onClick={() => toggle(system)}
                   onKeyDown={(e) => onRegionKey(e, system)}
                   onFocus={() => setActive(system)}
@@ -255,7 +253,7 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   style={{ filter: `drop-shadow(0 0 6px ${impactGlow(imp.impact)})` }}
                   data-testid={`body-region-${system}`}
                 >
-                  <title>{`${imp.label} — ${impactLabel(imp.impact)} (${sign(imp.impact)}${imp.impact})`}</title>
+                  <title>{imp.assessed === false ? `${imp.label} — Not assessed` : `${imp.label} — ${impactLabel(imp.impact)} (${sign(imp.impact)}${imp.impact})`}</title>
                   {def.organs(color)}
                   {/* Transparent hit area + focus/selection ring */}
                   <g
@@ -302,9 +300,13 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                 </p>
                 <div className="flex items-center justify-between text-[10px]">
                   <span className="text-muted-foreground">Impact</span>
-                  <span className="font-medium tabular-nums" style={{ color: impactColor(selectedImp.impact) }}>
-                    {sign(selectedImp.impact)}{selectedImp.impact} — {impactLabel(selectedImp.impact)}
-                  </span>
+                  {selectedImp.assessed === false ? (
+                    <span className="font-medium text-muted-foreground">Not assessed</span>
+                  ) : (
+                    <span className="font-medium tabular-nums" style={{ color: impactColor(selectedImp.impact) }}>
+                      {sign(selectedImp.impact)}{selectedImp.impact} — {impactLabel(selectedImp.impact)}
+                    </span>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -338,20 +340,28 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   data-testid={`body-row-${sys.system}`}
                 >
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground capitalize">{sys.label}</span>
-                    <span className="font-medium tabular-nums text-[11px]" style={{ color: impactColor(sys.impact) }}>
-                      {sign(sys.impact)}{sys.impact}
-                    </span>
+                    <span className="text-muted-foreground capitalize">{sys.system}</span>
+                    {sys.assessed === false ? (
+                      <span className="font-medium text-[11px] text-muted-foreground">Not assessed</span>
+                    ) : (
+                      <span className="font-medium tabular-nums text-[11px]" style={{ color: impactColor(sys.impact) }}>
+                        {sign(sys.impact)}{sys.impact}
+                      </span>
+                    )}
                   </div>
-                  <div className="w-full h-1.5 rounded-full bg-[hsl(210_12%_15%)] overflow-hidden">
-                    <motion.div
-                      initial={prefersReducedMotion ? false : { width: 0 }}
-                      animate={{ width: `${Math.min(100, Math.abs(sys.impact))}%` }}
-                      transition={{ delay: prefersReducedMotion ? 0 : 0.2 + 0.05 * i, duration: prefersReducedMotion ? 0 : 0.8, ease: "easeOut" }}
-                      className="h-full rounded-full"
-                      style={{ background: impactColor(sys.impact) }}
-                    />
-                  </div>
+                  {sys.assessed === false ? (
+                    <div className="w-full h-1.5 rounded-full bg-[hsl(210_12%_15%)] overflow-hidden opacity-40" />
+                  ) : (
+                    <div className="w-full h-1.5 rounded-full bg-[hsl(210_12%_15%)] overflow-hidden">
+                      <motion.div
+                        initial={prefersReducedMotion ? false : { width: 0 }}
+                        animate={{ width: `${Math.min(100, Math.abs(sys.impact))}%` }}
+                        transition={{ delay: prefersReducedMotion ? 0 : 0.2 + 0.05 * i, duration: prefersReducedMotion ? 0 : 0.8, ease: "easeOut" }}
+                        className="h-full rounded-full"
+                        style={{ background: impactColor(sys.impact) }}
+                      />
+                    </div>
+                  )}
                 </button>
               </motion.div>
             );

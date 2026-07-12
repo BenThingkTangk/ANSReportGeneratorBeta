@@ -54,10 +54,17 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
     phases[0];
   const rmssd = baselinePhase?.HRV_RMSSD ?? 0;
   const sdnn = baselinePhase?.HRV_SDNN ?? 0;
-  // LF/HF uses Colombo's LFa/RFa ratio (SB) — physiologically equivalent here.
-  const lfHf =
-    baselinePhase?.SB ??
-    (baselinePhase && baselinePhase.RFa > 0 ? baselinePhase.LFa / baselinePhase.RFa : 0);
+  const spectralAvailable = (report.spectralAvailable ?? ab.available ?? true) && balanceAssessed;
+  // LF/HF uses Colombo's LFa/RFa ratio (SB) — only meaningful when available.
+  const lfHf: number | null =
+    !spectralAvailable
+      ? null
+      : (baselinePhase?.SB ??
+        (baselinePhase && (baselinePhase.RFa ?? 0) > 0 ? (baselinePhase.LFa as number) / (baselinePhase.RFa as number) : 0));
+  // Decorative components animate on a numeric split; feed neutral 50/50 when
+  // unavailable. The visible % is NEVER shown (gauge shows "Not assessed").
+  const visSymp = spectralAvailable ? (ab.sympathetic ?? 50) : 50;
+  const visPara = spectralAvailable ? (ab.parasympathetic ?? 50) : 50;
 
   // Optional AI enrichment. Runs in the background and only ever UPGRADES the
   // text on success; any failure is swallowed so the deterministic synopsis stays
@@ -163,18 +170,19 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 items-center">
             <div className="flex flex-col items-center justify-center">
               <NervousSystemBody
-                parasympathetic={ab.parasympathetic}
-                sympathetic={ab.sympathetic}
+                parasympathetic={visPara}
+                sympathetic={visSymp}
               />
             </div>
             <div className="w-full">
               <AutonomicBalanceGauge
-                sympathetic={ab.sympathetic}
-                parasympathetic={ab.parasympathetic}
+                sympathetic={spectralAvailable ? ab.sympathetic : null}
+                parasympathetic={spectralAvailable ? ab.parasympathetic : null}
                 hrvRmssdMs={rmssd}
                 hrvSdnnMs={sdnn}
                 lfHfRatio={lfHf}
-                balanceLabel={tier}
+                balanceLabel={spectralAvailable ? tier : "Not assessed"}
+                available={spectralAvailable}
               />
               {balanceAssessed ? (
                 ab.interpretation && (
@@ -202,7 +210,7 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.15 }}
       >
-        <CinematicEcg parasympathetic={ab.parasympathetic} sympathetic={ab.sympathetic} />
+        <CinematicEcg parasympathetic={visPara} sympathetic={visSymp} />
       </motion.div>
 
       {/* Plain English synopsis */}

@@ -184,3 +184,23 @@ export function vendorReportedProvenance(
 export function mayClassify(p: MetricProvenance): boolean {
   return p.method !== "unavailable";
 }
+
+/**
+ * True when a value may DRIVE a clinical interpretation / diagnostic finding /
+ * treatment recommendation (as opposed to merely being displayed with a
+ * caveat). Proprietary ([P]) and contested ([X]) values that were only
+ * *estimated* by our open pipeline (never reproduced against the vendor or a
+ * golden reference) are NOT clinically actionable: an estimated LFa/RFa/SB that
+ * collapses toward 0 must never trigger "parasympathetic/sympathetic",
+ * "autonomic neuropathy", or a treatment/supplement recommendation. Only
+ * consensus-backed computed metrics, vendor-reported values, or values we
+ * validated against a reference may gate clinical logic.
+ */
+export function mayInterpretClinically(p: MetricProvenance): boolean {
+  if (p.method === "unavailable") return false;
+  if (p.method === "vendor_reported" || p.method === "measured") return true;
+  // method === "computed": consensus metrics OK; proprietary/contested only if
+  // explicitly validated against a reference.
+  if (p.tier === "C") return true;
+  return p.validation === "validated";
+}

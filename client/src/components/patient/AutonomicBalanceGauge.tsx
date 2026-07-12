@@ -2,12 +2,19 @@ import { motion, useReducedMotion } from "framer-motion";
 import { useMemo } from "react";
 
 interface AutonomicBalanceGaugeProps {
-  sympathetic: number;         // 0..100 (% of total)
-  parasympathetic: number;     // 0..100 (% of total)
+  sympathetic: number | null;         // 0..100 (% of total); null = not assessed
+  parasympathetic: number | null;     // 0..100 (% of total); null = not assessed
   hrvRmssdMs: number;          // RMSSD in milliseconds (vagal HRV)
   hrvSdnnMs: number;           // SDNN in milliseconds (total HRV)
-  lfHfRatio: number;           // LF/HF ratio (sympathovagal balance, ~0.5–2.0 normal)
+  lfHfRatio: number | null;           // LF/HF ratio (sympathovagal balance, ~0.5–2.0 normal); null = not assessed
   balanceLabel?: string;       // tier label
+  /**
+   * When false, the sympathetic/parasympathetic spectral split is NOT available
+   * (e.g. raw ECG-only .ans). The gauge must render "Not assessed" instead of
+   * fabricating a 0/100 percentage split. HR-derived HRV (RMSSD/SDNN) is still
+   * shown because it is measured from the ECG.
+   */
+  available?: boolean;
 }
 
 /**
@@ -32,13 +39,18 @@ export function AutonomicBalanceGauge({
   hrvSdnnMs,
   lfHfRatio,
   balanceLabel,
+  available = true,
 }: AutonomicBalanceGaugeProps) {
   const reduce = useReducedMotion();
 
-  const total = sympathetic + parasympathetic || 1;
-  const sPct = Math.round((sympathetic / total) * 100);
-  const pPct = 100 - sPct;
-  const skew = Math.abs(sPct - 50) / 50;
+  // Spectral split is only meaningful when available AND both inputs are real
+  // numbers. Otherwise the gauge shows "Not assessed" — never a coerced 0/100.
+  const spectralOk =
+    available && typeof sympathetic === "number" && typeof parasympathetic === "number";
+  const total = spectralOk ? ((sympathetic as number) + (parasympathetic as number) || 1) : 1;
+  const sPct = spectralOk ? Math.round(((sympathetic as number) / total) * 100) : 50;
+  const pPct = spectralOk ? 100 - sPct : 50;
+  const skew = spectralOk ? Math.abs(sPct - 50) / 50 : 0;
 
   // ECG-like flowing waveform for the bottom strip
   const wavePath = useMemo(() => buildEcgPath(900, 90, 5), []);
@@ -348,7 +360,7 @@ export function AutonomicBalanceGauge({
             }}
             data-testid="abg-symp"
           >
-            {sPct}%
+            {spectralOk ? `${sPct}%` : <span style={{ fontSize: 13 }}>Not assessed</span>}
           </div>
         </div>
 
@@ -367,7 +379,7 @@ export function AutonomicBalanceGauge({
             className="text-[11px] font-semibold mt-0.5"
             style={{ color: "hsl(195 85% 92%)", textShadow: "0 0 12px hsl(195 70% 70% / 0.4)" }}
           >
-            {balanceLabel ?? "Zone"}
+            {spectralOk ? (balanceLabel ?? "Zone") : "Not assessed"}
           </div>
         </div>
 
@@ -388,7 +400,7 @@ export function AutonomicBalanceGauge({
             }}
             data-testid="abg-parasym"
           >
-            {pPct}%
+            {spectralOk ? `${pPct}%` : <span style={{ fontSize: 13 }}>Not assessed</span>}
           </div>
         </div>
 
@@ -433,7 +445,7 @@ export function AutonomicBalanceGauge({
             }}
             data-testid="abg-lfhf"
           >
-            {fmt1(lfHfRatio)}
+            {spectralOk && typeof lfHfRatio === "number" ? fmt1(lfHfRatio) : "—"}
           </div>
         </div>
       </div>
