@@ -63,6 +63,9 @@ export default function AdminGatewayLoginPage() {
   const [gwPassword, setGwPassword] = useState("");
   const [gwLoading, setGwLoading] = useState(false);
   const [gwError, setGwError] = useState<string | null>(null);
+  // null = probe not finished / unreachable; true/false = server-reported.
+  const [gatewayConfigured, setGatewayConfigured] = useState<boolean | null>(null);
+  const [probeFailed, setProbeFailed] = useState(false);
 
   // Magic-link step state.
   const [email, setEmail] = useState("");
@@ -82,12 +85,17 @@ export default function AdminGatewayLoginPage() {
         if (!res.ok) throw new Error("probe failed");
         const json = await res.json();
         if (cancelled) return;
+        setGatewayConfigured(Boolean(json?.configured));
         // Show the gateway step only when it is configured AND not yet passed.
         setPhase(json?.configured && !json?.authenticated ? "gateway" : "magiclink");
       } catch {
-        // Opt-in: if the probe fails or the gateway is unconfigured, fall back to
-        // the existing magic-link-only flow.
-        if (!cancelled) setPhase("magiclink");
+        // Probe unreachable — surface that explicitly rather than pretending the
+        // username/password gateway feature does not exist.
+        if (!cancelled) {
+          setProbeFailed(true);
+          setGatewayConfigured(null);
+          setPhase("magiclink");
+        }
       }
     })();
     return () => {
@@ -247,6 +255,58 @@ export default function AdminGatewayLoginPage() {
               {gwLoading ? "Verifying…" : "Continue"}
             </button>
           </form>
+        )}
+
+        {/* Config diagnostic — the username/password gateway is a real feature.
+            When ADMIN_GATEWAY_* env vars are absent (or the probe is unreachable)
+            say so explicitly instead of silently presenting magic-link as if the
+            gateway did not exist. */}
+        {phase === "magiclink" && !sent && gatewayConfigured === false && (
+          <div
+            data-testid="gateway-not-configured"
+            style={{
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: "var(--color-text-secondary)",
+              background: "rgba(234,179,8,0.08)",
+              border: "1px solid rgba(234,179,8,0.28)",
+              borderRadius: 8,
+              padding: "10px 12px",
+              marginBottom: 16,
+            }}
+          >
+            <strong style={{ color: "hsl(45 90% 65%)" }}>
+              Username/password gateway not configured.
+            </strong>{" "}
+            The perimeter gateway is inactive because its server environment
+            variables are unset, so sign-in is falling back to magic-link only. To
+            activate it, set{" "}
+            <code>ADMIN_GATEWAY_USERNAME</code>, <code>ADMIN_GATEWAY_PASSWORD_HASH</code>,
+            and <code>ADMIN_SESSION_SECRET</code> in the Vercel project (see
+            docs/ADMIN_GATEWAY_SETUP.md), then redeploy.
+          </div>
+        )}
+        {phase === "magiclink" && !sent && probeFailed && (
+          <div
+            data-testid="gateway-probe-failed"
+            style={{
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: "var(--color-text-secondary)",
+              background: "rgba(239,68,68,0.08)",
+              border: "1px solid rgba(239,68,68,0.28)",
+              borderRadius: 8,
+              padding: "10px 12px",
+              marginBottom: 16,
+            }}
+          >
+            <strong style={{ color: "var(--color-status-critical)" }}>
+              Gateway status unavailable.
+            </strong>{" "}
+            Could not reach <code>/api/admin/gateway</code> to confirm whether the
+            username/password gateway is active. Proceeding with magic-link;
+            verify the deployment if you expected the gateway step.
+          </div>
         )}
 
         {/* Step 2 — Supabase magic link */}

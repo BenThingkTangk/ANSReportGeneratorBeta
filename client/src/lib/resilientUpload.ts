@@ -43,6 +43,8 @@ export interface UploadOptions {
   onTelemetry?: (event: UploadAttempt) => void;
   /** Optional progress sink — fired on upload progress when available */
   onProgress?: (pct: number) => void;
+  /** Extra request headers (e.g. x-vendor-metrics for paired vendor-PDF values). */
+  headers?: Record<string, string>;
 }
 
 const DEFAULT_TIMEOUT = 60_000;
@@ -51,7 +53,7 @@ async function singleAttempt<T>(
   endpoint: string,
   file: File,
   attempt: number,
-  opts: Required<Pick<UploadOptions, "fieldName" | "timeoutMs" | "onTelemetry">>,
+  opts: Required<Pick<UploadOptions, "fieldName" | "timeoutMs" | "onTelemetry">> & { headers?: Record<string, string> },
 ): Promise<{ result: UploadResult<T>; canRetry: boolean }> {
   const startedAt = performance.now();
   const fd = new FormData();
@@ -73,6 +75,7 @@ async function singleAttempt<T>(
       body: fd,
       signal: controller.signal,
       credentials: "same-origin",
+      headers: opts.headers,
     });
     status = res.status;
     vercelId = res.headers.get("x-vercel-id");
@@ -135,6 +138,7 @@ export async function resilientUpload<T = unknown>(
         // eslint-disable-next-line no-console
         console.info("[upload]", JSON.stringify(evt));
       }),
+    headers: options.headers,
   };
 
   const start = performance.now();

@@ -197,13 +197,14 @@ export function DiagnosisExplainer({ report }: DiagnosisExplainerProps) {
           <ShieldCheck className="w-6 h-6" style={{ color: "hsl(140 60% 65%)" }} />
         </div>
         <h3 className="text-base font-semibold mb-1">
-          No abnormalities detected among measured signals; other domains were not assessed
+          Measured signals are within normal ranges
         </h3>
         <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-          The signals this recording could measure were within normal ranges.
-          Some autonomic domains depend on measures not captured by this file and
-          were not assessed — this is not a statement of full normality. A
-          clinician can review the signed vendor report for a complete picture.
+          Your ECG/time-domain metrics and cardiovagal (Ewing) reflex ratios were
+          measured and fell within normal limits. The sympathovagal branch-balance
+          (vendor spectral aggregates) is not contained in the raw .ans export and
+          is shown separately as “Not assessed”; supplying the paired vendor PDF
+          completes that view.
         </p>
       </motion.div>
     );

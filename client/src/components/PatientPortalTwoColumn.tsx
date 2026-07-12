@@ -18,6 +18,7 @@ import { AutonomicBalanceGauge } from "./AutonomicBalanceGaugeFixed";
 import { CinematicEcg } from "./patient/CinematicEcg";
 import { DiagnosisExplainer } from "./patient/DiagnosisExplainer";
 import { PlainEnglishSynopsis } from "./patient/PlainEnglishSynopsis";
+import { MeasuredResultsCards } from "./patient/MeasuredResultsCards";
 import { BodyHeatmap } from "./patient/BodyHeatmap";
 import { SupplementsPanel } from "./patient/SupplementsPanel";
 import { TreatmentsPanel } from "./patient/TreatmentsPanel";
@@ -205,8 +206,11 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
                   className="text-sm text-white/60 leading-relaxed mt-4 text-center max-w-xl mx-auto"
                   data-testid="patient-balance-not-assessed"
                 >
-                  Autonomic balance was not assessed — this recording didn’t include enough
-                  heart-rhythm data. The values above are shown as “Not assessed / insufficient data.”
+                  The sympathetic-vs-parasympathetic branch balance comes from the vendor's
+                  proprietary spectral aggregates (LFa/RFa), which are not contained in the raw
+                  .ans export — so it shows as “Not assessed.” Your measured ECG results and
+                  cardiovagal (Ewing) reflex ratios are shown below. Supplying the paired vendor
+                  PDF unlocks the branch-balance split.
                 </p>
               )}
             </div>
@@ -238,6 +242,9 @@ export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
           enhancing={enhancing}
         />
       </motion.div>
+
+      {/* Measured cardiovagal (Ewing) ratios — always-measured ECG results */}
+      <MeasuredResultsCards report={report} />
 
       {/* What we found — diagnosis cards */}
       <DiagnosisExplainer report={report} />

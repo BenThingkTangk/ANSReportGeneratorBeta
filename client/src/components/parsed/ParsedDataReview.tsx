@@ -37,6 +37,8 @@ interface Props {
   onBack: () => void;
   onReparse: () => void;
   onGenerate: () => void;
+  /** Receives verbatim vendor-reported metrics keyed by metric (LFa/RFa/SB/…). */
+  onVendorMetrics?: (metrics: Record<string, number> | null) => void;
 }
 
 export function ParsedDataReview({
@@ -47,6 +49,7 @@ export function ParsedDataReview({
   onBack,
   onReparse,
   onGenerate,
+  onVendorMetrics,
 }: Props) {
   const canGenerate = !!ansStudy && !!file;
 
@@ -228,10 +231,14 @@ export function ParsedDataReview({
       <div className="mb-5 md:mb-6">
         <VendorPdfCard
           onIngested={(metrics) => {
-            // Vendor values are read verbatim and tagged vendor_reported by the
-            // server; expose them on the window for the report pipeline / QA to
-            // pick up. (Report generation reads these when present.)
-            (window as unknown as { __vendorReported?: unknown }).__vendorReported = metrics;
+            // Fold the verbatim vendor metric list into a keyed map and lift it
+            // to the dashboard, which forwards it to /api/upload so report
+            // generation unlocks the full Colombo spectral pathway.
+            const map: Record<string, number> = {};
+            for (const m of metrics) {
+              if (typeof m.value === "number" && Number.isFinite(m.value)) map[m.key] = m.value;
+            }
+            onVendorMetrics?.(Object.keys(map).length > 0 ? map : null);
           }}
         />
       </div>
