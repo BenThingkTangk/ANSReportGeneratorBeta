@@ -2143,6 +2143,21 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
   } else {
     dbFindings.push("Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed — not reproducible from this recording.");
   }
+  // The E/I ratio is the cardiovagal Ewing measure of the Deep-Breathing phase —
+  // ECG-derived and always computed, so it is a SUPPORTED observation reported
+  // here regardless of spectral availability (never suppressed with the spectral
+  // aggregates). The Valsalva ratio is likewise the Ewing measure of the Valsalva
+  // phase.
+  {
+    const ei = ratios.eiRatio;
+    const val = ratios.valsalvaRatio;
+    dbFindings.push(
+      `${ei.classification.severity === "Normal" ? "Normal" : ei.classification.label} E/I ratio (deep-breathing cardiovagal response) = ${ei.value.toFixed(2)} (normal ${ei.normal})`,
+    );
+    dbFindings.push(
+      `${val.classification.severity === "Normal" ? "Normal" : val.classification.label} Valsalva ratio (cardiovagal response) = ${val.value.toFixed(2)} (normal ${val.normal})`,
+    );
+  }
   phaseFindings.push({ phase: "DEEP BREATHING (DB) AND VALSALVA RESPONSES", indication: "Detection of early signs of autonomic dysfunction and chronic disease", findings: dbFindings });
 
   const standFindings: string[] = [];
