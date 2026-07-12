@@ -29,6 +29,17 @@ function fmt(v: number | undefined, digits = 2): string {
   return v.toFixed(digits);
 }
 
+/**
+ * True if this phase's proprietary spectral aggregates (LFa/RFa/SB and the
+ * respiratory-frequency estimate reported alongside them) are not reproducible
+ * from this recording. Kept identical to the Numerical Summary's gate so the
+ * two tables never disagree — a raw-ECG .ans shows "—" for every spectral cell
+ * here, exactly as the Numerical Summary shows "unavailable".
+ */
+function spectralUnavailable(m: PhaseMetrics | undefined): boolean {
+  return m?.provenance?.LFa?.method === "unavailable";
+}
+
 export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
   // Build a lookup map phase → metrics
   const phaseMap = new Map<string, PhaseMetrics>();
@@ -65,18 +76,29 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
                 <td className="py-2.5 pr-4 tabular-nums">
                   {m ? `${Math.round(m.meanHR)} ± ${Math.round(m.rangeHR)}` : "—"}
                 </td>
-                <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.FRF, NORMS.FRF) : "inherit" }}>
-                  {fmt(m?.FRF)}
-                </td>
-                <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.LFa, NORMS.LFa) : "inherit" }}>
-                  {fmt(m?.LFa)}
-                </td>
-                <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.RFa, NORMS.RFa) : "inherit" }}>
-                  {fmt(m?.RFa)}
-                </td>
-                <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.SB, NORMS.SB) : "inherit" }}>
-                  {fmt(m?.SB)}
-                </td>
+                {spectralUnavailable(m) ? (
+                  <>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
+                  </>
+                ) : (
+                  <>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.FRF, NORMS.FRF) : "inherit" }}>
+                      {fmt(m?.FRF)}
+                    </td>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.LFa, NORMS.LFa) : "inherit" }}>
+                      {fmt(m?.LFa)}
+                    </td>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.RFa, NORMS.RFa) : "inherit" }}>
+                      {fmt(m?.RFa)}
+                    </td>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.SB, NORMS.SB) : "inherit" }}>
+                      {fmt(m?.SB)}
+                    </td>
+                  </>
+                )}
                 <td className="py-2.5 pr-4 tabular-nums text-muted-foreground">
                   {m?.SBP && m?.DBP ? `${Math.round(m.SBP)}/${Math.round(m.DBP)}` : "—"}
                 </td>

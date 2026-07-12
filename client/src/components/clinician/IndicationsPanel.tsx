@@ -27,7 +27,7 @@ export function IndicationsPanel({ report }: IndicationsPanelProps) {
           Colombo P&amp;S Indications
         </h3>
         <p className="text-sm text-muted-foreground">
-          No abnormal indications detected by automated rules. All resting and dynamic measurements fall within normal Colombo thresholds.
+          No automated abnormalities among assessed measurements; spectral and BP domains not assessed.
         </p>
       </section>
     );

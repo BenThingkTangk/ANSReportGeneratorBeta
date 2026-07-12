@@ -8,39 +8,25 @@ import {
   ResponsiveContainer,
   Tooltip,
   ReferenceArea,
+  ReferenceLine,
   Cell,
 } from "recharts";
-import type { ANSReport } from "@shared/schema";
+import type { ANSReport, Classification } from "@shared/schema";
 import { ColomboExplainer } from "../ColomboExplainer";
 
 /**
  * Time-Domain Ratios — mirrors page 5 of the PhysioPS graphical report.
- * Three small-multiples:  E/I · Valsalva · 30:15  each plotted against age
- * with the age-normal band overlaid.
+ * Three small-multiples:  E/I · Valsalva · 30:15.
+ *
+ * The cardiovagal Ewing ratios are LOWER-BOUND-ONLY: a value ABOVE the source
+ * threshold is NORMAL (stronger vagal response), never abnormal. Earlier this
+ * panel drew a synthetic age-declining upper band and flagged anything above it
+ * as "above normal", which wrongly marked Jill's healthy ratios abnormal. We now
+ * take the pass/fail state directly from the report's own classification
+ * (severity + threshold `lo`) using the exact source cutoffs
+ * (E/I > 1.094, Valsalva > 1.200, 30:15 > 1.092) and render only a single
+ * "normal at or above threshold" region — no arbitrary upper bound.
  */
-
-// --- Age-normal bands (Colombo reference) ---------------------------------
-
-function eiBand(age: number) {
-  // 20yo ~ (1.20, 1.80); 70yo ~ (1.04, 1.25)
-  const lo = Math.max(1.00, 1.20 - 0.0035 * (age - 20));
-  const hi = Math.max(1.15, 1.80 - 0.012  * (age - 20));
-  return { lo, hi };
-}
-
-function valsalvaBand(age: number) {
-  // 20yo ~ (1.45, 2.10); 70yo ~ (1.10, 1.60)
-  const lo = Math.max(1.00, 1.45 - 0.007 * (age - 20));
-  const hi = Math.max(1.30, 2.10 - 0.010 * (age - 20));
-  return { lo, hi };
-}
-
-function thirtyFifteenBand(age: number) {
-  // 20yo ~ (1.05, 1.35); 70yo ~ (1.00, 1.15)
-  const lo = Math.max(0.98, 1.05 - 0.0015 * (age - 20));
-  const hi = Math.max(1.10, 1.35 - 0.004  * (age - 20));
-  return { lo, hi };
-}
 
 interface RatiosPanelProps {
   ratios: ANSReport["ratios"];
@@ -69,8 +55,9 @@ export function RatiosPanel({ ratios, patientAge }: RatiosPanelProps) {
         <RatioTile
           title="E/I Ratio (Deep Breathing)"
           value={ratios.eiRatio.value}
+          cls={ratios.eiRatio.classification}
+          normalText={ratios.eiRatio.normal}
           age={patientAge}
-          bandFn={eiBand}
           yDomain={[0.8, 2.2]}
           chartKey="eiRatio"
           testId="ratio-tile-ei"
@@ -78,8 +65,9 @@ export function RatiosPanel({ ratios, patientAge }: RatiosPanelProps) {
         <RatioTile
           title="Valsalva Ratio"
           value={ratios.valsalvaRatio.value}
+          cls={ratios.valsalvaRatio.classification}
+          normalText={ratios.valsalvaRatio.normal}
           age={patientAge}
-          bandFn={valsalvaBand}
           yDomain={[0.8, 2.6]}
           chartKey="valsalvaRatio"
           testId="ratio-tile-valsalva"
@@ -87,8 +75,9 @@ export function RatiosPanel({ ratios, patientAge }: RatiosPanelProps) {
         <RatioTile
           title="30:15 Ratio (Stand)"
           value={ratios.thirtyFifteenRatio.value}
+          cls={ratios.thirtyFifteenRatio.classification}
+          normalText={ratios.thirtyFifteenRatio.normal}
           age={patientAge}
-          bandFn={thirtyFifteenBand}
           yDomain={[0.85, 1.5]}
           chartKey="thirtyFifteenRatio"
           testId="ratio-tile-3015"
@@ -101,35 +90,38 @@ export function RatiosPanel({ ratios, patientAge }: RatiosPanelProps) {
 function RatioTile({
   title,
   value,
+  cls,
+  normalText,
   age,
-  bandFn,
   yDomain,
   chartKey,
   testId,
 }: {
   title: string;
   value: number;
+  cls: Classification;
+  normalText: string;
   age: number;
-  bandFn: (age: number) => { lo: number; hi: number };
   yDomain: [number, number];
   chartKey: string;
   testId: string;
 }) {
-  const ages = Array.from({ length: 11 }, (_, i) => 20 + i * 5);
-  const band = bandFn(age);
-  const inBand = value >= band.lo && value <= band.hi;
-  const color = inBand
-    ? "hsl(140 60% 55%)"
-    : value < band.lo
-    ? "hsl(0 72% 62%)"
-    : "hsl(17 100% 60%)";
+  // Source of truth: the report's own classification. Ewing ratios are
+  // lower-bound-only — normal means value >= threshold (cls.lo). Higher is
+  // healthier and must never be flagged as "above normal".
+  const threshold = cls.lo;
+  const isNormal = cls.severity === "Normal";
+  const color = isNormal ? "hsl(140 60% 55%)" : "hsl(0 72% 62%)";
+  const statusLabel = isNormal ? "Normal" : cls.label;
 
   return (
     <div className="rounded-xl bg-background/40 border border-border/20 p-4" data-testid={testId}>
       <div className="mb-2">
         <div className="text-[12px] font-semibold text-foreground/90">{title}</div>
         <div className="text-[10px] text-muted-foreground/80 tabular-nums mt-0.5">
-          You: <span style={{ color }} className="font-semibold">{value.toFixed(2)}</span> · band: {band.lo.toFixed(2)}–{band.hi.toFixed(2)}
+          You: <span style={{ color }} className="font-semibold">{value.toFixed(2)}</span>{" "}
+          <span data-testid={`${testId}-status`} style={{ color }} className="font-semibold">({statusLabel})</span>{" "}
+          · normal {normalText}
         </div>
       </div>
 
@@ -153,20 +145,25 @@ function RatioTile({
             width={40}
             label={{ value: "Ratio", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
           />
-          {ages.map((a) => {
-            const b = bandFn(a);
-            return (
-              <ReferenceArea
-                key={a}
-                x1={a - 2.5}
-                x2={a + 2.5}
-                y1={b.lo}
-                y2={b.hi}
-                fill="hsl(140 60% 55% / 0.12)"
-                stroke="hsl(140 60% 55% / 0.25)"
-              />
-            );
-          })}
+          {/* Normal region = at or above the source threshold (no upper bound). */}
+          <ReferenceArea
+            y1={threshold}
+            y2={yDomain[1]}
+            fill="hsl(140 60% 55% / 0.12)"
+            stroke="hsl(140 60% 55% / 0.25)"
+          />
+          {/* Abnormal region = below the threshold. */}
+          <ReferenceArea
+            y1={yDomain[0]}
+            y2={threshold}
+            fill="hsl(0 72% 62% / 0.08)"
+          />
+          <ReferenceLine
+            y={threshold}
+            stroke="hsl(140 60% 55% / 0.7)"
+            strokeDasharray="4 4"
+            label={{ value: `≥ ${threshold.toFixed(3)} normal`, position: "insideTopLeft", fill: "hsl(140 60% 55%)", fontSize: 9 }}
+          />
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
             contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}

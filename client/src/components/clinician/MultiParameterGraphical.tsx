@@ -32,6 +32,10 @@ interface MultiParameterGraphicalProps {
  */
 export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps) {
   const mpg = report.multiParameter;
+  // Vendor spectral aggregates (LFa/RFa/SB and their derived changes) are only
+  // reproducible when spectralAvailable is explicitly true. Anything that plots
+  // those values must be gated OFF for raw-ECG exports.
+  const spectralAvailable = report.spectralAvailable === true;
 
   return (
     <section
@@ -51,12 +55,16 @@ export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps
       ) : (
         <>
           {mpg.ecgAvailable ? (
-            <TrendPanel mpg={mpg} />
+            <TrendPanel mpg={mpg} spectralAvailable={spectralAvailable} />
           ) : (
             <EcgUnavailableNotice />
           )}
 
-          <ScatterPanel mpg={mpg} patientAge={report.patientData.age} />
+          <ScatterPanel
+            mpg={mpg}
+            patientAge={report.patientData.age}
+            spectralAvailable={spectralAvailable}
+          />
 
           {mpg.ecgAvailable && (
             <CollapsibleSection
@@ -121,7 +129,7 @@ function EcgUnavailableNotice() {
             Raw ECG waveform not present in this .ans file
           </div>
           <p className="text-[11px] text-amber-200/80 leading-relaxed max-w-2xl">
-            The uploaded file contains the numerical summary (per-phase LFa, RFa, E/I, Valsalva and 30:15 ratios) but does not include the beat-to-beat ECG samples needed for the HR, Breathing, LFa/RFa trend, and Cardio-Respiratory Coupling charts. The scatter, ratio-vs-age, and numerical summary panels below are fully populated from the header metrics.
+            The uploaded file contains the time-domain cardiovagal ratios (E/I, Valsalva and 30:15) but does not include the beat-to-beat ECG samples needed for the HR, Breathing, LFa/RFa trend, and Cardio-Respiratory Coupling charts. Vendor spectral output (LFa/RFa/sympathovagal balance) is only present in the signed vendor PDF and is shown as “not assessed” where it cannot be reproduced from this recording.
           </p>
           <p className="text-[11px] text-amber-200/60 leading-relaxed">
             To generate the trend charts, re-export the test from the PhysioPS system with the raw ECG waveform included.
