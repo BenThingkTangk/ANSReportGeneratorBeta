@@ -21,6 +21,10 @@ export default function Dashboard() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisStage, setAnalysisStage] = useState("");
+  // Paired vendor-PDF metrics (LFa/RFa/SB/BP), parsed verbatim by
+  // /api/upload-vendor. When present they are forwarded to /api/upload so the
+  // report unlocks the full Colombo spectral pathway (vendor_reported).
+  const [vendorMetrics, setVendorMetrics] = useState<Record<string, number> | null>(null);
 
   /** Step 1: parse-only — give the user a chance to review extraction. */
   const parseFile = useCallback(async (file: File) => {
@@ -123,7 +127,10 @@ export default function Dashboard() {
         ansStudy?: AnsStudy;
         error?: string;
         stage?: string;
-      }>("/api/upload", pendingFile, { timeoutMs: 90_000 });
+      }>("/api/upload", pendingFile, {
+        timeoutMs: 90_000,
+        headers: vendorMetrics ? { "x-vendor-metrics": JSON.stringify(vendorMetrics) } : undefined,
+      });
       cancelled = true;
 
       if (result.ok && result.data?.success && result.data.report) {
@@ -146,7 +153,7 @@ export default function Dashboard() {
       await new Promise(r => setTimeout(r, 3000));
       setAppState("review");
     }
-  }, [pendingFile]);
+  }, [pendingFile, vendorMetrics]);
 
   const handleReparse = useCallback(() => {
     if (pendingFile) {
@@ -199,6 +206,7 @@ export default function Dashboard() {
             onBack={handleBackToUpload}
             onReparse={handleReparse}
             onGenerate={generateReport}
+            onVendorMetrics={setVendorMetrics}
           />
         )}
         {appState === "report" && report && (

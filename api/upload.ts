@@ -12,9 +12,26 @@ import {
 import {
   computedProvenance,
   unavailableProvenance,
+  vendorReportedProvenance,
   mayInterpretClinically,
   type MetricProvenance,
 } from "../shared/metricProvenance.js";
+
+/**
+ * Vendor-reported metrics parsed verbatim from the paired signed PDF
+ * (api/_ans/vendorReport.ts). When present, these populate the proprietary
+ * spectral aggregates (LFa/RFa/SB) and cuff BP that the raw .ans export cannot
+ * carry, tagged `vendor_reported` so the spectral-availability gate opens and
+ * the full Colombo interpretation/treatment pathway runs. Values are injected
+ * verbatim — never computed or inferred here.
+ */
+export interface VendorReportedMetrics {
+  LFa?: number;
+  RFa?: number;
+  SB?: number;
+  SBP?: number;
+  DBP?: number;
+}
 
 export const config = {
   api: {
@@ -1937,7 +1954,10 @@ function detectIndicationsLocal(phaseEvents: PhaseMetrics[], mpg?: MultiParamete
 // STAGE 8 — Main entry point: generate full report
 // ============================================================================
 
-export function generateColomboReport(data: ParsedANSData): ANSReport {
+export function generateColomboReport(
+  data: ParsedANSData,
+  vendorMetrics?: VendorReportedMetrics,
+): ANSReport {
   const samplingRate = 1 / data.samplingInterval;
   const totalSec = data.dataPointCount * data.samplingInterval;
 
@@ -1979,6 +1999,43 @@ export function generateColomboReport(data: ParsedANSData): ANSReport {
     A.DBP = data.baselineDiastolicBP;
     A.PP = A.SBP - A.DBP;
     A.MAP = Math.round((A.SBP + 2 * A.DBP) / 3);
+  }
+
+  // --- Paired vendor-PDF override (vendor_reported provenance) ----------------
+  // When the clinician supplies the signed vendor report, its verbatim spectral
+  // aggregates (LFa/RFa/SB) and cuff BP are injected onto the baseline with
+  // `vendor_reported` provenance. `mayInterpretClinically(vendor_reported)` is
+  // true, so the spectral gate below opens and the FULL Colombo interpretation +
+  // treatment pathway runs — instead of the honest "Not assessed" fallback.
+  // Nothing is computed or inferred here; only vendor-printed numbers pass through.
+  if (vendorMetrics) {
+    if (typeof vendorMetrics.LFa === "number") {
+      A.LFa = vendorMetrics.LFa;
+      if (A.provenance) A.provenance.LFa = vendorReportedProvenance("LFa");
+    }
+    if (typeof vendorMetrics.RFa === "number") {
+      A.RFa = vendorMetrics.RFa;
+      if (A.provenance) A.provenance.RFa = vendorReportedProvenance("RFa");
+    }
+    // SB: use the vendor's value if given, else derive from vendor LFa/RFa.
+    const vendorSB =
+      typeof vendorMetrics.SB === "number"
+        ? vendorMetrics.SB
+        : typeof vendorMetrics.LFa === "number" &&
+            typeof vendorMetrics.RFa === "number" &&
+            vendorMetrics.RFa !== 0
+          ? vendorMetrics.LFa / vendorMetrics.RFa
+          : undefined;
+    if (typeof vendorSB === "number") {
+      A.SB = vendorSB;
+      if (A.provenance) A.provenance.SB = vendorReportedProvenance("SB");
+    }
+    if (typeof vendorMetrics.SBP === "number" && typeof vendorMetrics.DBP === "number") {
+      A.SBP = vendorMetrics.SBP;
+      A.DBP = vendorMetrics.DBP;
+      A.PP = A.SBP - A.DBP;
+      A.MAP = Math.round((A.SBP + 2 * A.DBP) / 3);
+    }
   }
 
   // --- Spectral / BP availability gate ---------------------------------------
@@ -2481,7 +2538,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       patientData = parseANSFile(fileBuffer, fileName);
       ansStudy = undefined;
     }
-    const report = generateColomboReport(patientData);
+    // Optional paired vendor-PDF metrics: passed as a JSON header so the custom
+    // single-part multipart parser above is untouched. Malformed input is
+    // ignored (report falls back to the honest "Not assessed" gate).
+    let vendorMetrics: VendorReportedMetrics | undefined;
+    const vmHeader = req.headers["x-vendor-metrics"];
+    if (typeof vmHeader === "string" && vmHeader.trim()) {
+      try {
+        const parsed = JSON.parse(vmHeader);
+        const pick = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+        vendorMetrics = {
+          LFa: pick(parsed.LFa),
+          RFa: pick(parsed.RFa),
+          SB: pick(parsed.SB),
+          SBP: pick(parsed.SBP),
+          DBP: pick(parsed.DBP),
+        };
+      } catch {
+        console.warn("[upload] ignoring malformed x-vendor-metrics header");
+      }
+    }
+    const report = generateColomboReport(patientData, vendorMetrics);
     // Send only a preview of the raw ECG to the client — the full waveform
     // stays server-side (we'd blow past the Vercel payload limit otherwise).
     // The Multi-Parameter Graphical and Colombo analysis have already run

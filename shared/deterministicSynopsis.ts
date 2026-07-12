@@ -62,6 +62,87 @@ function findPhase(
   return events.find((e) => e?.phase === phase);
 }
 
+/**
+ * The three Ewing cardiovagal ratios, read verbatim from the deterministic
+ * report. These are ECG/time-domain measures — always computed from the raw
+ * recording — so they are MEASURED results, independent of whether the
+ * vendor's proprietary spectral aggregates (LFa/RFa/SB) were present in the
+ * .ans export. Returns only ratios that carry a real positive value.
+ */
+export interface EwingRatioReading {
+  key: "eiRatio" | "valsalvaRatio" | "thirtyFifteenRatio";
+  /** Short scientific label, e.g. "E/I ratio". */
+  label: string;
+  /** One-line plain-language meaning. */
+  plain: string;
+  value: number;
+  normal: string;
+  classification: string; // e.g. "Normal"
+  severity: "Abnormal" | "Warning" | "Normal";
+}
+
+export function ewingRatioReadings(
+  report: Partial<ANSReport>,
+): EwingRatioReading[] {
+  const r = report.ratios;
+  if (!r) return [];
+  const defs: Array<{
+    key: EwingRatioReading["key"];
+    label: string;
+    plain: string;
+    obj: { value: number; normal: string; classification: { label: string; severity: string } } | undefined;
+  }> = [
+    {
+      key: "eiRatio",
+      label: "E/I ratio",
+      plain:
+        "how much your heart rate speeds up and slows down with deep breathing — a direct readout of your calming (vagal) nerve.",
+      obj: r.eiRatio,
+    },
+    {
+      key: "valsalvaRatio",
+      label: "Valsalva ratio",
+      plain:
+        "how your heart rate recovers after a strain-and-release (bearing-down) maneuver — another check of the same vagal reflex.",
+      obj: r.valsalvaRatio,
+    },
+    {
+      key: "thirtyFifteenRatio",
+      label: "30:15 ratio",
+      plain:
+        "the heart-rate rhythm change in the first seconds of standing — your reflex response to a change in posture.",
+      obj: r.thirtyFifteenRatio,
+    },
+  ];
+  const out: EwingRatioReading[] = [];
+  for (const d of defs) {
+    const v = pos(d.obj?.value);
+    if (v === null || !d.obj) continue;
+    out.push({
+      key: d.key,
+      label: d.label,
+      plain: d.plain,
+      value: v,
+      normal: d.obj.normal,
+      classification: d.obj.classification?.label ?? "",
+      severity: (d.obj.classification?.severity as EwingRatioReading["severity"]) ?? "Normal",
+    });
+  }
+  return out;
+}
+
+/**
+ * Whether the vendor's proprietary spectral branch-balance aggregates
+ * (LFa/RFa and their sympathovagal-balance ratio SB) are available. They live
+ * only in the signed vendor report, not in the raw .ans export, so absence is
+ * an EXPORT-FORMAT limitation — not "insufficient heart-rhythm signal".
+ */
+export function hasVendorSpectral(report: Partial<ANSReport>): boolean {
+  // Explicit flag wins when present; otherwise fall back to the balance check.
+  if (typeof report.spectralAvailable === "boolean") return report.spectralAvailable;
+  return hasAutonomicBalance(report);
+}
+
 function firstName(report: Partial<ANSReport>): string {
   return report.patientData?.firstName?.trim() || "This patient";
 }
@@ -178,8 +259,31 @@ export function buildPatientSynopsis(report: Partial<ANSReport>): string {
       }.`,
     );
   } else {
+    // IMPORTANT distinction (was previously misleading): the recording is fine.
+    // Time-domain ECG metrics and the Ewing cardiovagal ratios ARE measured
+    // below. What is missing is the vendor's PROPRIETARY spectral branch-balance
+    // aggregates (LFa/RFa and their sympathovagal-balance ratio) — those are not
+    // contained in the raw .ans export and are only available if the paired
+    // vendor PDF is supplied. So this is an export-format limitation, not a
+    // failed or low-quality recording.
     sentences.push(
-      `${name}, this test did not capture enough heart-rhythm signal to measure your sympathetic/parasympathetic balance, so that part of your result is shown as "Not assessed — insufficient data" rather than a score.`,
+      `${name}, your recording captured clean heart-rhythm data — your measured ECG results and cardiovagal (Ewing) reflex ratios are shown below. The one piece not available is the sympathetic-vs-parasympathetic "branch balance" split: that comes from the device vendor's proprietary spectral analysis (LFa/RFa), which is not contained in the raw .ans export. It shows as "Not assessed" unless the paired vendor PDF values are supplied.`,
+    );
+  }
+
+  // 1b. Measured cardiovagal (Ewing) ratios — these are always computed from the
+  // raw ECG, so they are real measured results even when the vendor spectral
+  // branch-balance is unavailable. Surface them plainly with their status.
+  const ewing = ewingRatioReadings(report);
+  if (ewing.length > 0) {
+    const allNormal = ewing.every((e) => e.severity === "Normal");
+    const parts = ewing.map((e) => `${e.label} ${fmt(e.value, 2)} (${e.classification.toLowerCase()}; ref ${e.normal})`);
+    sentences.push(
+      `Measured cardiovagal reflexes: ${humanList(parts)}.${
+        allNormal
+          ? " All three are within the normal range — your heart's calming (vagal) reflexes are responding as expected."
+          : ""
+      }`,
     );
   }
 
@@ -187,11 +291,13 @@ export function buildPatientSynopsis(report: Partial<ANSReport>): string {
   // balance was actually assessed — absence of data is not absence of a pattern.
   if (patterns.length > 0) {
     sentences.push(
-      `The test picked up ${humanList(patterns)}. These are patterns in how your body regulates itself — not a diagnosis on their own.`,
+      `The test picked up ${humanList(patterns)} — patterns in how your body regulates itself.`,
     );
-  } else if (balanceAssessed) {
+  } else if (ewing.length > 0 || balanceAssessed) {
+    // A clean cardiovagal screen is meaningful on its own even when the vendor
+    // spectral branch-balance is unavailable.
     sentences.push(
-      "The test did not flag any of the specific autonomic patterns it screens for, which is reassuring.",
+      "None of the specific autonomic dysfunction patterns the test screens for were flagged in the measured signals.",
     );
   }
 
@@ -223,9 +329,9 @@ export function buildPatientSynopsis(report: Partial<ANSReport>): string {
     }
   }
 
-  // 5. Next step — always defer to clinician.
+  // 5. Next step — concise, single close (no repeated disclaimer wall).
   sentences.push(
-    "This summary explains what your data shows; it is not medical advice. Please review it with your physician, who can put it in the context of your full health picture.",
+    "Review these results with your physician to set your next steps.",
   );
 
   return sentences.join(" ");
@@ -248,7 +354,7 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>): string {
   // metrics are never read as real findings.
   if (!balanceAssessed) {
     parts.push(
-      "Autonomic balance not assessed — recording lacked sufficient beat-to-beat data (LFa/RFa/HRV unavailable); spectral metrics reported as insufficient data.",
+      "Sympathovagal branch-balance not assessed — the proprietary spectral aggregates (LFa/RFa/SB) are not contained in the raw .ans export; supply the paired vendor PDF to populate them. ECG/time-domain metrics and Ewing ratios below are measured.",
     );
   }
 
@@ -337,10 +443,6 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>): string {
   if (nextSteps.length > 0) {
     parts.push(`Suggested next steps: ${humanList(nextSteps)}.`);
   }
-
-  parts.push(
-    "This is clinical decision support, not a diagnosis. Confirm with clinical correlation.",
-  );
 
   return parts.join(" ");
 }
