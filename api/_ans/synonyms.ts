@@ -51,17 +51,21 @@ export const SECTION_HEADINGS: Record<AnsSectionId, RegExp[]> = {
     /\bPre[\-\s]?Test\b/i,
   ],
   deep_breathing: [
-    /\bDeep\s+Breathing\b/i,
+    // Negative lookahead for "Ratio" so the E/I ratio prose line
+    // ("E/I Ratio = 1.21") is never mistaken for a phase heading.
+    /\bDeep\s+Breathing\b(?!\s+Ratio)/i,
     /\bDB\s+Phase\b/i,
     /\bParasympathetic\s+Challenge\b/i,
     /\bE[:\/]I\s+Test\b/i,
   ],
   valsalva: [
-    /\bValsalva(?:\s+Maneuver)?\b/i,
+    // Negative lookahead for "Ratio": the Ewing summary line
+    // "Valsalva Ratio = 1.43" is prose, NOT a Valsalva phase table.
+    /\bValsalva(?:\s+Maneuver)?\b(?!\s+Ratio)/i,
     /\bForced\s+Expiratory\s+Strain\b/i,
   ],
   stand: [
-    /\bStand(?:ing)?\b/i,
+    /\bStand(?:ing)?\b(?!\s+Ratio)/i,
     /\bOrthostatic\b/i,
     /\bPostural\s+Challenge\b/i,
   ],

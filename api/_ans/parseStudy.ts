@@ -46,6 +46,7 @@ import {
   readEcgInt16,
 } from "./parseBinary.js";
 import { asciiView, sectionize, findSection } from "./sectionizer.js";
+import { deriveEcgPhases } from "./ecgPhases.js";
 import {
   FIELD_SYNONYMS,
   buildFieldRegex,
@@ -1157,14 +1158,54 @@ export function parseStudy({ buffer, fileName }: ParseStudyOptions): AnsStudy {
   const ecg = buildEcgSignal(buffer, bin, warnings);
 
   // 7) Phase blocks
-  const baseline = buildPhase(sections, "baseline", warnings, "baseline");
-  const deepBreathing = buildPhase(sections, "deep_breathing", warnings, "deepBreathing");
-  const valsalva = buildPhase(sections, "valsalva", warnings, "valsalva");
+  //
+  // ASCII phase tables take precedence WHEN THEY EXIST. But Colombo/PhysioPS
+  // `.ans` files are raw ECG waveform exports with NO per-phase ASCII tables
+  // (only demographics + Ewing ratios + ectopy note). For those files the
+  // sectionizer legitimately finds no phase headings, so we DERIVE the six
+  // protocol phases generically from the raw ECG signal (same physiology as
+  // the /api/upload report path). This closes the "SECTIONS DETECTED: 1 /
+  // missing 51" defect without any patient/hash/fingerprint-specific logic.
+  let baseline = buildPhase(sections, "baseline", warnings, "baseline");
+  let deepBreathing = buildPhase(sections, "deep_breathing", warnings, "deepBreathing");
+  let valsalva = buildPhase(sections, "valsalva", warnings, "valsalva");
   // standOrTilt: pick whichever section was found
   const hasStand = !!findSection(sections, "stand");
-  const standOrTilt = hasStand
+  let standOrTilt = hasStand
     ? buildPhase(sections, "stand", warnings, "stand")
     : buildPhase(sections, "tilt", warnings, "tilt");
+
+  const asciiPhasesFound =
+    baseline.present || deepBreathing.present || valsalva.present || standOrTilt.present;
+
+  if (bin.sampling && !asciiPhasesFound) {
+    // No ASCII phase tables anywhere -> derive from raw ECG.
+    try {
+      const ecgSamples = readEcgInt16(buffer, bin.sampling);
+      const derived = deriveEcgPhases(ecgSamples, bin.sampling);
+      if (!baseline.present) baseline = derived.baseline;
+      if (!deepBreathing.present) deepBreathing = derived.deepBreathing;
+      if (!valsalva.present) valsalva = derived.valsalva;
+      if (!standOrTilt.present) standOrTilt = derived.stand;
+      warnings.push({
+        code: "PHASES_ECG_DERIVED",
+        message:
+          "No per-phase ASCII tables in file; phases and per-phase heart rate " +
+          "were derived generically from the raw ECG via the standard 6-phase " +
+          "protocol. Proprietary spectral aggregates (LFa/RFa/SB) and per-phase " +
+          "BP remain unavailable — not reproducible from the .ans alone.",
+        severity: "warn",
+        field: "phases",
+      });
+    } catch (err) {
+      warnings.push({
+        code: "PHASE_ECG_DERIVATION_FAILED",
+        message: `ECG phase derivation failed: ${(err as Error).message}`,
+        severity: "warn",
+        field: "phases",
+      });
+    }
+  }
 
   // 8) Ratios + sympathetic/parasympathetic summary
   const ratios = buildRatios(sections, asciiHead, asciiHeadStart, warnings);
