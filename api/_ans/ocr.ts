@@ -239,6 +239,172 @@ async function recognizeWith(
 }
 
 /**
+ * Precision cell-crop re-OCR of the page-2 "Numerical Summary" grid.
+ *
+ * The coarse full-page OCR resolves this dense grid poorly (decimals collapse,
+ * digits drop). Here we use the detected grid geometry to CROP each cell from
+ * the high-DPI raster, upscale + grayscale + contrast-stretch it, and re-OCR the
+ * tiny image with a per-column numeric whitelist and single-line PSM. Each
+ * refined value becomes a high-confidence OcrWord placed at the cell's expected
+ * box, which the geometry parser then picks up. Purely generic (driven by the
+ * detected header/anchor geometry — no patient/value hardcoding). Best-effort:
+ * returns the original words plus any refined cells; never throws.
+ */
+async function refineSummaryCells(
+  worker: any,
+  canvasMod: any,
+  parseMod: any,
+  raster: { png: Buffer; width: number; height: number },
+  coarse: { text: string; confidence: number; words: OcrWord[] },
+): Promise<OcrWord[]> {
+  const page: OcrPage = {
+    page: 2,
+    text: coarse.text,
+    confidence: coarse.confidence,
+    words: coarse.words,
+    width: raster.width,
+    height: raster.height,
+  };
+  const grid = parseMod.computePhaseGrid(page);
+  if (!grid) return coarse.words;
+
+  const { colX, rowYs, pitch } = grid as {
+    colX: Record<string, number>;
+    rowYs: Array<{ L: string; y: number }>;
+    pitch: number;
+  };
+
+  // Load the raster once into an Image for repeated cropping.
+  let srcImg: any;
+  try {
+    srcImg = await canvasMod.loadImage(raster.png);
+  } catch {
+    return coarse.words;
+  }
+
+  // Per-column crop half-width (px) and OCR whitelist. Numeric columns use a
+  // digits+dot whitelist; BP adds "/"; duration adds ":".
+  // Tight per-column crop half-widths (fraction of page width). Columns are ~0.09
+  // apart; crops MUST stay narrow so a neighboring column's value is never pulled
+  // into the cell (that produced merged reads like "30.1892" = 0.18+92). A narrow
+  // crop that clips → the cell simply stays not-read (honest) rather than wrong.
+  const NUM_WL = "0123456789.";
+  const cols: Array<{ key: string; halfW: number; whitelist: string; kind: "num" | "bp" | "dur" }> = [
+    { key: "duration", halfW: 0.05, whitelist: "0123456789:.", kind: "dur" },
+    { key: "meanHR", halfW: 0.042, whitelist: NUM_WL, kind: "num" },
+    { key: "rangeHR", halfW: 0.042, whitelist: NUM_WL, kind: "num" },
+    { key: "FRF", halfW: 0.042, whitelist: NUM_WL, kind: "num" },
+    { key: "LFa", halfW: 0.05, whitelist: NUM_WL, kind: "num" },
+    { key: "RFa", halfW: 0.05, whitelist: NUM_WL, kind: "num" },
+    { key: "SB", halfW: 0.05, whitelist: NUM_WL, kind: "num" },
+    { key: "BP", halfW: 0.055, whitelist: "0123456789/", kind: "bp" },
+    { key: "PP", halfW: 0.035, whitelist: NUM_WL, kind: "num" },
+    { key: "MAP", halfW: 0.035, whitelist: NUM_WL, kind: "num" },
+  ];
+
+  const refined: OcrWord[] = [];
+  const rowH = Math.max(18, Math.round(pitch * 0.7));
+  const SCALE = 3; // upscale small crops for the OCR engine
+
+  for (const { L, y } of rowYs) {
+    for (const c of cols) {
+      const cxCenter = colX[c.key];
+      if (cxCenter == null) continue;
+      const halfWpx = Math.round(raster.width * c.halfW);
+      const left = Math.max(0, Math.round(cxCenter - halfWpx));
+      const top = Math.max(0, Math.round(y - rowH / 2));
+      const cw = Math.min(raster.width - left, halfWpx * 2);
+      const ch = Math.min(raster.height - top, rowH);
+      if (cw < 8 || ch < 8) continue;
+
+      // Render the crop (upscaled, grayscale, hard-threshold) at a given
+      // binarization threshold → PNG. Returns null on failure.
+      const renderCrop = (thresh: number): Buffer | null => {
+        try {
+          const cv = canvasMod.createCanvas(cw * SCALE, ch * SCALE);
+          const ctx = cv.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, cw * SCALE, ch * SCALE);
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(srcImg, left, top, cw, ch, 0, 0, cw * SCALE, ch * SCALE);
+          const img = ctx.getImageData(0, 0, cw * SCALE, ch * SCALE);
+          const d = img.data;
+          for (let i = 0; i < d.length; i += 4) {
+            const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            const v = lum < thresh ? 0 : 255;
+            d[i] = d[i + 1] = d[i + 2] = v;
+          }
+          ctx.putImageData(img, 0, 0);
+          return cv.toBuffer("image/png");
+        } catch {
+          return null;
+        }
+      };
+
+      // Shape validator: a genuine cell is a single number / one N.NN decimal /
+      // one NN/NN BP / one MM:SS duration. Rejects merged neighbor reads.
+      const shapeOk = (raw: string): boolean => {
+        const dots = (raw.match(/\./g) || []).length;
+        if (c.kind === "num") {
+          if (dots > 1) return false;
+          if (dots === 1) {
+            const [ip, fp] = raw.split(".");
+            return fp.length <= 2 && ip.length <= 3;
+          }
+          return raw.length <= 3;
+        }
+        if (c.kind === "bp") return /^\d{2,3}\/\d{2,3}$/.test(raw);
+        const dg = raw.replace(/\D/g, "");
+        return /^\d{1,2}[:.]\d{2}$/.test(raw) || dg.length === 4;
+      };
+
+      const readAt = async (thresh: number): Promise<{ raw: string; conf: number } | null> => {
+        const png = renderCrop(thresh);
+        if (!png) return null;
+        try {
+          await worker.setParameters({
+            tessedit_char_whitelist: c.whitelist,
+            tessedit_pageseg_mode: "7", // single line — robust for tiny crops
+          });
+          const { data } = await worker.recognize(png, {}, { text: true });
+          const raw = String(data?.text ?? "").trim().replace(/\s+/g, "");
+          const conf = typeof data?.confidence === "number" ? data.confidence : 0;
+          return raw ? { raw, conf } : null;
+        } catch {
+          return null;
+        }
+      };
+
+      // DUAL-THRESHOLD CORROBORATION: read the cell at two binarization
+      // thresholds and accept ONLY if both agree. A single-source misread (which
+      // is threshold-sensitive) won't reproduce, so this removes wrong values at
+      // the cost of some yield — exactly the tradeoff the truth constraint wants.
+      const r1 = await readAt(135);
+      if (!r1 || !shapeOk(r1.raw)) continue;
+      const r2 = await readAt(160);
+      if (!r2 || r2.raw !== r1.raw) continue;
+
+      refined.push({
+        text: r1.raw,
+        confidence: Math.max(r1.conf, r2.conf),
+        bbox: { x0: cxCenter - 10, y0: y - 8, x1: cxCenter + 10, y1: y + 8 },
+      });
+    }
+  }
+
+  // Reset PSM/whitelist so any later full-page recognize is unaffected.
+  try {
+    await worker.setParameters({ tessedit_char_whitelist: "", tessedit_pageseg_mode: "3" });
+  } catch {
+    /* ignore */
+  }
+
+  // Refined cell words take PRIORITY: place them first so the parser's
+  // nearest-x / confidence selection prefers them over the coarse tokens.
+  return [...refined, ...coarse.words];
+}
+
+/**
  * OCR a single rasterized page image. Spins up its own worker; for multi-page
  * work prefer ocrPdf(), which reuses one worker across all pages. Returns null
  * (never throws) if the OCR engine is unavailable.
@@ -323,11 +489,21 @@ export async function ocrPdf(
           if (hiRaster) {
             const hiRes = await recognizeWith(worker, hiRaster.png);
             if ((hiRes.words?.length ?? 0) > 0 && /Numerical\s*Summary/i.test(hiRes.text ?? "")) {
+              // Precision cell-crop re-OCR of the grid (best-effort). Needs the
+              // canvas module (for cropping) and the geometry helper.
+              let words = hiRes.words;
+              try {
+                const canvasMod = await externalImport("@napi-rs/canvas");
+                const parseMod = await import("./vendorOcrParse.js");
+                words = await refineSummaryCells(worker, canvasMod, parseMod, hiRaster, hiRes);
+              } catch {
+                /* fall back to coarse high-DPI words */
+              }
               pages.push({
                 page: pageNo,
                 text: hiRes.text,
                 confidence: hiRes.confidence,
-                words: hiRes.words,
+                words,
                 width: hiRaster.width,
                 height: hiRaster.height,
               });

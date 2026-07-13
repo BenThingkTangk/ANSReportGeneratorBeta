@@ -355,6 +355,103 @@ const emptyRow = (key: VendorPhaseRow["key"], label: string): VendorPhaseRow => 
   MAP: { value: null, provenance: null },
 });
 
+const PHASE_KEYS: VendorPhaseRow["key"][] = ["A", "B", "C", "D", "E", "F"];
+const PHASE_CANON: Record<string, string> = {
+  A: "Baseline", B: "Deep Breathing", C: "Baseline", D: "Valsalva", E: "Baseline", F: "Stand",
+};
+
+export interface PhaseGrid {
+  /** Detected column x-centers (page px). */
+  colX: Partial<Record<PhaseCol, number>>;
+  /** Row centers with canonical A–F keys (page px). */
+  rowYs: Array<{ L: VendorPhaseRow["key"]; y: number }>;
+  /** Uniform row pitch (page px). */
+  pitch: number;
+  /** Column tolerance (page px), resolution-scaled. */
+  colTol: number;
+}
+
+/**
+ * Reconstruct the page-2 "Numerical Summary" grid geometry from OCR word boxes:
+ * the header row gives each column's x-center; the A–F phase-label/event anchors
+ * give a uniform 6-row layout. Shared by the table parser and the cell-crop
+ * refiner in ocr.ts. Returns null when the grid can't be located.
+ */
+export function computePhaseGrid(page: OcrPage): PhaseGrid | null {
+  const words = page.words ?? [];
+  const anchor = words.find((w) => /Numerical/i.test(w.text));
+  if (!anchor) return null;
+  const yTop = anchor.bbox.y1;
+
+  // Header row: the band just below the anchor with the column labels.
+  const headerBand = words.filter((w) => w.bbox.y0 > yTop && w.bbox.y0 < yTop + 130);
+  const colX: Partial<Record<PhaseCol, number>> = {};
+  for (const { col, re } of PHASE_COL_HEADERS) {
+    const cand = headerBand
+      .filter((w) => re.test(w.text.replace(/[^A-Za-z/()*~-]/g, "")))
+      .sort((a, b) => a.bbox.y0 - b.bbox.y0)[0];
+    if (cand) colX[col] = cx(cand);
+  }
+  if (Object.keys(colX).length < 4) return null;
+
+  const headerBottom = Math.max(yTop + 130, ...headerBand.map((w) => w.bbox.y1));
+  const labelRightX = (colX.duration ?? Infinity) - 30;
+  const EVENT_KEY: Array<{ re: RegExp; key: VendorPhaseRow["key"] }> = [
+    { re: /deep\s*brea|despbrea|deepbrea/i, key: "B" },
+    { re: /valsalva|vasava|vakava|vesava/i, key: "D" },
+    { re: /stand|sand|fosens/i, key: "F" },
+  ];
+  type Anchor = { key: VendorPhaseRow["key"] | null; y: number };
+  const anchors: Anchor[] = [];
+  for (const w of words) {
+    if (w.bbox.y0 <= headerBottom || w.bbox.y0 > headerBottom + 900) continue;
+    if (cx(w) >= labelRightX) continue;
+    const t = w.text.trim();
+    let key: VendorPhaseRow["key"] | null = null;
+    const letter = t.match(/^([A-F])[-_.|]?$/);
+    if (letter) key = letter[1] as VendorPhaseRow["key"];
+    else {
+      const ev = EVENT_KEY.find((e) => e.re.test(t));
+      if (ev) key = ev.key;
+      else if (!/baseline|baseine|bessie/i.test(t)) continue;
+    }
+    anchors.push({ key, y: cy(w) });
+  }
+  if (anchors.length === 0) return null;
+  anchors.sort((a, b) => a.y - b.y);
+
+  const keyIdx = (k: VendorPhaseRow["key"]) => PHASE_KEYS.indexOf(k);
+  const keyed = anchors.filter((a) => a.key) as Array<{ key: VendorPhaseRow["key"]; y: number }>;
+  let pitch = 0, pitchN = 0;
+  for (let i = 0; i < keyed.length; i++) {
+    for (let j = i + 1; j < keyed.length; j++) {
+      const di = keyIdx(keyed[j].key) - keyIdx(keyed[i].key);
+      if (di > 0) { pitch += (keyed[j].y - keyed[i].y) / di; pitchN++; }
+    }
+  }
+  if (pitchN === 0) {
+    const gaps: number[] = [];
+    for (let i = 1; i < anchors.length; i++) {
+      const g = anchors[i].y - anchors[i - 1].y;
+      if (g > 30 && g < 200) gaps.push(g);
+    }
+    if (gaps.length) { pitch = gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)]; pitchN = 1; }
+  }
+  if (pitchN === 0 || pitch <= 0) return null;
+  pitch = pitch / pitchN;
+
+  let aY = 0, aN = 0;
+  for (const a of keyed) { aY += a.y - keyIdx(a.key) * pitch; aN++; }
+  if (aN === 0) { aY = anchors[0].y; aN = 1; }
+  aY = aY / aN;
+
+  const rowYs = PHASE_KEYS.map((L, i) => ({ L, y: aY + i * pitch })).filter(
+    (r) => r.y > headerBottom - pitch && r.y < headerBottom + 900,
+  );
+  const colTol = Math.round(95 * (page.width / 2860));
+  return { colX, rowYs, pitch, colTol };
+}
+
 /**
  * Parse the page-2 "Numerical Summary" A–F table using WORD GEOMETRY.
  *
@@ -377,98 +474,9 @@ function parsePhaseTable(pages: OcrPage[]): VendorPhaseTable {
   if (!page) return empty;
   const words = page.words;
 
-  const anchor = words.find((w) => /Numerical/i.test(w.text));
-  if (!anchor) return empty;
-  const yTop = anchor.bbox.y1;
-
-  // --- Header row: the band just below the anchor with the column labels. -----
-  const headerBand = words.filter((w) => w.bbox.y0 > yTop && w.bbox.y0 < yTop + 130);
-  const colX: Partial<Record<PhaseCol, number>> = {};
-  for (const { col, re } of PHASE_COL_HEADERS) {
-    // Prefer a header token matching the column label; take the closest to yTop.
-    const cand = headerBand
-      .filter((w) => re.test(w.text.replace(/[^A-Za-z/()*~-]/g, "")))
-      .sort((a, b) => a.bbox.y0 - b.bbox.y0)[0];
-    if (cand) colX[col] = cx(cand);
-  }
-  // Need at least the spectral columns + BP to be worth building a table.
-  const haveCols = Object.keys(colX).length;
-  if (haveCols < 4) return empty;
-
-  // --- Row bands: anchor each A–F row on its phase LETTER or its EVENT LABEL. --
-  // OCR frequently mangles the isolated A–F letters and drops row A (merged into
-  // the header). So we collect row anchors from BOTH the letter column and the
-  // recognizable event-label words, dedupe by y, then assign canonical A–F keys
-  // by vertical order. The vendor always prints exactly six rows in the fixed
-  // sequence A(Baseline) B(Deep Breathing) C(Baseline) D(Valsalva) E(Baseline)
-  // F(Stand); we label by position, not by trusting the mangled letter.
-  const headerBottom = Math.max(yTop + 130, ...headerBand.map((w) => w.bbox.y1));
-  const labelRightX = (colX.duration ?? Infinity) - 30;
-  const KEYS: VendorPhaseRow["key"][] = ["A", "B", "C", "D", "E", "F"];
-  const CANON: Record<string, string> = {
-    A: "Baseline", B: "Deep Breathing", C: "Baseline", D: "Valsalva", E: "Baseline", F: "Stand",
-  };
-  // Event-label recognizers keyed to the phase they identify (used to anchor the
-  // uniform 6-row grid even when the isolated A–F letters OCR poorly).
-  const EVENT_KEY: Array<{ re: RegExp; key: VendorPhaseRow["key"] }> = [
-    { re: /deep\s*brea|despbrea|deepbrea/i, key: "B" },
-    { re: /valsalva|vasava|vakava|vesava/i, key: "D" },
-    { re: /stand|sand|fosens/i, key: "F" },
-  ];
-  // Collect anchor observations: (keyGuess|null, y). Letters give a key directly;
-  // event labels map via EVENT_KEY. A/C/E "Baseline" labels are ambiguous, so we
-  // only use them as generic row markers (key null).
-  type Anchor = { key: VendorPhaseRow["key"] | null; y: number };
-  const anchors: Anchor[] = [];
-  for (const w of words) {
-    if (w.bbox.y0 <= headerBottom || w.bbox.y0 > headerBottom + 900) continue;
-    if (cx(w) >= labelRightX) continue;
-    const t = w.text.trim();
-    let key: VendorPhaseRow["key"] | null = null;
-    const letter = t.match(/^([A-F])[-_.|]?$/);
-    if (letter) key = letter[1] as VendorPhaseRow["key"];
-    else {
-      const ev = EVENT_KEY.find((e) => e.re.test(t));
-      if (ev) key = ev.key;
-      else if (!/baseline|baseine|bessie/i.test(t)) continue; // not a row anchor
-    }
-    anchors.push({ key, y: cy(w) });
-  }
-  if (anchors.length === 0) return empty;
-  anchors.sort((a, b) => a.y - b.y);
-
-  // Estimate a uniform row pitch from keyed anchors that are N rows apart.
-  const keyIdx = (k: VendorPhaseRow["key"]) => KEYS.indexOf(k);
-  const keyed = anchors.filter((a) => a.key) as Array<{ key: VendorPhaseRow["key"]; y: number }>;
-  let pitch = 0, pitchN = 0;
-  for (let i = 0; i < keyed.length; i++) {
-    for (let j = i + 1; j < keyed.length; j++) {
-      const di = keyIdx(keyed[j].key) - keyIdx(keyed[i].key);
-      if (di > 0) { pitch += (keyed[j].y - keyed[i].y) / di; pitchN++; }
-    }
-  }
-  // Fall back to consecutive generic-anchor spacing if no keyed pair exists.
-  if (pitchN === 0) {
-    const gaps: number[] = [];
-    for (let i = 1; i < anchors.length; i++) {
-      const g = anchors[i].y - anchors[i - 1].y;
-      if (g > 30 && g < 200) gaps.push(g);
-    }
-    if (gaps.length) { pitch = gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)]; pitchN = 1; }
-  }
-  if (pitchN === 0 || pitch <= 0) return empty;
-  pitch = pitch / pitchN;
-
-  // Anchor the grid's row-A y from the best-keyed anchor, then lay out 6 rows at
-  // the uniform pitch. Row A center = anchor.y - keyIdx*pitch (averaged).
-  let aY = 0, aN = 0;
-  for (const a of keyed) { aY += a.y - keyIdx(a.key) * pitch; aN++; }
-  if (aN === 0) { aY = anchors[0].y; aN = 1; } // generic: first anchor ≈ row A
-  aY = aY / aN;
-
-  const rowYs = KEYS.map((L, i) => ({ L, y: aY + i * pitch }))
-    // Keep only rows that fall within the observed table span (guards over-reach).
-    .filter((r) => r.y > headerBottom - pitch && r.y < headerBottom + 900);
+  const grid = computePhaseGrid(page);
+  if (!grid) return empty;
+  const { colX, rowYs, pitch, colTol } = grid;
   const halfPitch = pitch / 2;
   const rowBand = (i: number): [number, number] => {
     const y = rowYs[i].y;
@@ -479,17 +487,13 @@ function parsePhaseTable(pages: OcrPage[]): VendorPhaseTable {
     return [y - halfPitch * 0.6, y + halfPitch * 0.6];
   };
 
-  // Column tolerance scales with render resolution (page width). The grid is
-  // ~2860px wide at the 260-DPI base; tolerances were tuned there (~95px) and
-  // scale linearly for the high-DPI summary re-render (~6600px → ~220px).
-  const colTol = Math.round(95 * (page.width / 2860));
   const rows: VendorPhaseRow[] = [];
   let cellCount = 0;
 
   for (let i = 0; i < rowYs.length; i++) {
     const { L } = rowYs[i];
     const [y0, y1] = rowBand(i);
-    const row = emptyRow(L, CANON[L] ?? "");
+    const row = emptyRow(L, PHASE_CANON[L] ?? "");
     // candidate tokens for this row band, excluding the label column
     const inRow = words.filter(
       (w) => cy(w) >= y0 && cy(w) <= y1 && cx(w) > (colX.duration ?? 0) - 60,
@@ -515,21 +519,32 @@ function parsePhaseTable(pages: OcrPage[]): VendorPhaseTable {
     };
     for (const c of ["meanHR", "rangeHR", "FRF", "LFa", "RFa", "SB", "PP", "MAP"] as const) assignNum(c);
 
-    // Duration: mm:ss near the duration column (OCR often drops ":" → "0100").
+    // Duration near the duration column. Accept ONLY tokens with unambiguous
+    // mm:ss evidence:
+    //   • an explicit separator ("2:30", "02.30"), or
+    //   • a 4-digit run ("0230" → 02:30, "0100" → 01:00).
+    // A 3-digit run ("023") is AMBIGUOUS — it could be 0:23 or a digit-dropped
+    // 02:30 — so we do NOT guess (this is the E "023"→"00:23" live defect); it
+    // stays not-read. Seconds must be 00–59.
     if (colX.duration != null) {
-      const chosen = inRow
+      const durCands = inRow
         .filter((w) => Math.abs(cx(w) - colX.duration!) <= colTol)
-        .filter((w) => /^\d{1,2}[:.]?\d{2}$|^\d{3,4}$/.test(w.text.trim()))
-        .sort((a, b) => Math.abs(cx(a) - colX.duration!) - Math.abs(cx(b) - colX.duration!))[0];
-      if (chosen) {
-        const digits = chosen.text.replace(/\D/g, "");
-        if (digits.length === 3 || digits.length === 4) {
-          const mm = digits.slice(0, digits.length - 2);
-          const ss = digits.slice(-2);
-          if (parseInt(ss, 10) < 60) {
-            row.duration = mkField(`${mm.padStart(2, "0")}:${ss}`, chosen, page.page, `${L} duration: ${chosen.text}`) as VendorField<string>;
-            cellCount++;
-          }
+        .sort((a, b) => Math.abs(cx(a) - colX.duration!) - Math.abs(cx(b) - colX.duration!));
+      for (const chosen of durCands) {
+        const t = chosen.text.trim();
+        let mm: string | null = null, ss: string | null = null;
+        const sep = t.match(/^(\d{1,2})[:.](\d{2})$/);
+        if (sep) {
+          mm = sep[1]; ss = sep[2];
+        } else {
+          const digits = t.replace(/\D/g, "");
+          if (digits.length === 4) { mm = digits.slice(0, 2); ss = digits.slice(2); }
+          // 3-digit and shorter: insufficient evidence → skip (not-read).
+        }
+        if (mm != null && ss != null && parseInt(ss, 10) < 60) {
+          row.duration = mkField(`${mm.padStart(2, "0")}:${ss}`, chosen, page.page, `${L} duration: ${t}`) as VendorField<string>;
+          cellCount++;
+          break;
         }
       }
     }
