@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
 import type { DiagnosticSummary } from "@shared/diagnosticSummary";
+import type { VendorReportExtraction } from "@shared/vendorExtraction";
 import { UploadScreen } from "@/components/UploadScreen";
 import { AnalyzingScreen } from "@/components/AnalyzingScreen";
 import { ReportDashboard } from "@/components/ReportDashboard";
@@ -25,6 +26,11 @@ export default function Dashboard() {
   // /api/upload-vendor. When present they are forwarded to /api/upload so the
   // report unlocks the full Colombo spectral pathway (vendor_reported).
   const [vendorMetrics, setVendorMetrics] = useState<Record<string, number> | null>(null);
+  // Full structured vendor extraction (identity + baseline + ratios, each with
+  // provenance) from the paired report. Drives the "Vendor Familiar" clinician
+  // view. Held alongside vendorMetrics so the report can show exact vendor parity.
+  const [vendorExtraction, setVendorExtraction] = useState<VendorReportExtraction | null>(null);
+  const [vendorSource, setVendorSource] = useState<{ source?: "ocr" | "text"; ocrConfidence?: number; fileName?: string } | null>(null);
 
   /** Step 1: parse-only — give the user a chance to review extraction. */
   const parseFile = useCallback(async (file: File) => {
@@ -207,12 +213,18 @@ export default function Dashboard() {
             onReparse={handleReparse}
             onGenerate={generateReport}
             onVendorMetrics={setVendorMetrics}
+            onVendorExtraction={(x, meta) => {
+              setVendorExtraction(x);
+              setVendorSource(meta ?? null);
+            }}
           />
         )}
         {appState === "report" && report && (
           <ReportDashboard
             report={report}
             ansStudy={ansStudy ?? undefined}
+            vendorExtraction={vendorExtraction ?? undefined}
+            vendorSource={vendorSource ?? undefined}
             onReset={handleReset}
           />
         )}

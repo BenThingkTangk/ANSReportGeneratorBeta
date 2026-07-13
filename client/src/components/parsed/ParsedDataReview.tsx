@@ -39,6 +39,11 @@ interface Props {
   onGenerate: () => void;
   /** Receives verbatim vendor-reported metrics keyed by metric (LFa/RFa/SB/…). */
   onVendorMetrics?: (metrics: Record<string, number> | null) => void;
+  /** Receives the full structured vendor extraction (drives Vendor-Familiar view). */
+  onVendorExtraction?: (
+    extraction: import("@shared/vendorExtraction").VendorReportExtraction,
+    meta?: { source?: "ocr" | "text"; ocrConfidence?: number; fileName?: string },
+  ) => void;
 }
 
 export function ParsedDataReview({
@@ -50,6 +55,7 @@ export function ParsedDataReview({
   onReparse,
   onGenerate,
   onVendorMetrics,
+  onVendorExtraction,
 }: Props) {
   const canGenerate = !!ansStudy && !!file;
 
@@ -240,6 +246,7 @@ export function ParsedDataReview({
             }
             onVendorMetrics?.(Object.keys(map).length > 0 ? map : null);
           }}
+          onExtraction={(extraction, meta) => onVendorExtraction?.(extraction, meta)}
         />
       </div>
 
