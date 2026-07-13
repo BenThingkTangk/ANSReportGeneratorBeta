@@ -210,6 +210,33 @@ describe("VendorFamiliarReport — defect C: per-phase A–F table", () => {
     const { VendorFamiliarReport } = await import("../components/clinician/VendorFamiliarReport");
     render(<VendorFamiliarReport extraction={makeExtraction()} source="ocr" />);
     expect(screen.queryByTestId("vendor-phase-table")).toBeNull();
+    expect(screen.queryByTestId("vendor-phase-charts")).toBeNull();
+    cleanup();
+  });
+
+  it("renders per-phase LFa/RFa trend charts, plotting only read points (gaps for not-read)", async () => {
+    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { VendorFamiliarReport } = await import("../components/clinician/VendorFamiliarReport");
+    const ext = makeExtraction();
+    ext.phases = {
+      rows: [
+        makeRow("A", "Baseline", { LFa: phaseField(1.2), RFa: phaseField(4.4) }) as any,
+        makeRow("B", "Deep Breathing", { LFa: phaseField(8.1) }) as any, // RFa not read → gap
+        makeRow("F", "Stand", { LFa: phaseField(2.7), RFa: phaseField(6.1) }) as any,
+      ],
+      cellCount: 5,
+    };
+    render(<VendorFamiliarReport extraction={ext} source="ocr" />);
+    expect(screen.getByTestId("vendor-phase-charts")).toBeTruthy();
+    expect(screen.getByTestId("phase-chart-LFa")).toBeTruthy();
+    expect(screen.getByTestId("phase-chart-RFa")).toBeTruthy();
+    // LFa read for A,B,F → markers present for all three.
+    expect(screen.getByTestId("phase-chart-LFa-pt-A")).toBeTruthy();
+    expect(screen.getByTestId("phase-chart-LFa-pt-B")).toBeTruthy();
+    expect(screen.getByTestId("phase-chart-LFa-pt-F")).toBeTruthy();
+    // RFa NOT read for B → no marker (honest gap, never interpolated).
+    expect(screen.queryByTestId("phase-chart-RFa-pt-B")).toBeNull();
+    expect(screen.getByTestId("phase-chart-RFa-pt-A")).toBeTruthy();
     cleanup();
   });
 });

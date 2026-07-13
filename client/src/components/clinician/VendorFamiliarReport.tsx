@@ -328,7 +328,10 @@ export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileNa
 
       {/* Per-phase A–F Numerical Summary (page 2) — vendor's own table grammar */}
       {extraction.phases && extraction.phases.rows.length > 0 && (
-        <PhaseSummaryTable table={extraction.phases} />
+        <>
+          <PhaseSummaryTable table={extraction.phases} />
+          <PhaseTrendCharts table={extraction.phases} />
+        </>
       )}
 
       {/* Vendor legend / footnote grammar */}
@@ -416,6 +419,98 @@ function PhaseSummaryTable({ table }: { table: VendorPhaseTable }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Per-phase LFa* / RFa* trend charts across A–F, mirroring the vendor's page-2
+ * "LFA* Trend / RFA* Trend" panels. Plots ONLY the cells that were read (each
+ * marker carries a provenance tooltip); phases whose value is not-read leave a
+ * gap in the polyline — never an interpolated/fabricated point. Pure SVG (no
+ * chart dependency), log-safe linear scale over the read values.
+ */
+function PhaseTrendCharts({ table }: { table: VendorPhaseTable }) {
+  const series: Array<{ key: "LFa" | "RFa"; label: string; color: string }> = [
+    { key: "LFa", label: "LFa* (sympathetic)", color: EMBER },
+    { key: "RFa", label: "RFa* (parasympathetic)", color: CYAN },
+  ];
+  // Domain across ALL read LFa/RFa values so both series share a scale.
+  const allVals: number[] = [];
+  for (const r of table.rows) {
+    for (const k of ["LFa", "RFa"] as const) {
+      const v = (r[k] as VendorField<number>).value;
+      if (v != null) allVals.push(v);
+    }
+  }
+  if (allVals.length === 0) return null;
+  const vmax = Math.max(...allVals, 1);
+  const W = 460, H = 130, padL = 34, padR = 10, padT = 12, padB = 22;
+  const n = table.rows.length;
+  const xAt = (i: number) => padL + (n <= 1 ? 0 : (i * (W - padL - padR)) / (n - 1));
+  const yAt = (v: number) => padT + (1 - v / vmax) * (H - padT - padB);
+
+  const polyline = (key: "LFa" | "RFa") => {
+    // Build segments over consecutive READ points; gaps break the line.
+    const pts = table.rows.map((r, i) => {
+      const v = (r[key] as VendorField<number>).value;
+      return v == null ? null : { x: xAt(i), y: yAt(v), v, i, row: r };
+    });
+    const segments: string[] = [];
+    let run: Array<{ x: number; y: number }> = [];
+    for (const p of pts) {
+      if (p) run.push({ x: p.x, y: p.y });
+      else { if (run.length > 1) segments.push(run.map((q) => `${q.x},${q.y}`).join(" ")); run = []; }
+    }
+    if (run.length > 1) segments.push(run.map((q) => `${q.x},${q.y}`).join(" "));
+    return { pts, segments };
+  };
+
+  return (
+    <section className="rounded-2xl border border-border/30 bg-card/40 p-4" data-testid="vendor-phase-charts">
+      <h3 className="text-xs uppercase tracking-[0.15em] text-muted-foreground font-medium mb-1">
+        Per-phase spectral trend (A–F)
+      </h3>
+      <p className="text-[10px] text-muted-foreground/70 mb-3">
+        LFa* / RFa* across the vendor's phases, plotted only from read values; not-read phases
+        leave a gap (never interpolated).
+      </p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {series.map(({ key, label, color }) => {
+          const { pts, segments } = polyline(key);
+          const readCount = pts.filter(Boolean).length;
+          return (
+            <div key={key} data-testid={`phase-chart-${key}`}>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="inline-block w-3 h-1.5 rounded" style={{ background: color }} aria-hidden />
+                <span className="text-[11px] text-foreground/80">{label}</span>
+                <span className="text-[10px] text-muted-foreground/60 ml-auto">{readCount}/{n} read</span>
+              </div>
+              <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label={`${label} per-phase trend`}>
+                {/* y-axis max tick */}
+                <text x={4} y={yAt(vmax) + 4} fontSize={9} fill="hsl(var(--muted-foreground))">{vmax.toFixed(1)}</text>
+                <text x={4} y={yAt(0)} fontSize={9} fill="hsl(var(--muted-foreground))">0</text>
+                {/* phase x labels */}
+                {table.rows.map((r, i) => (
+                  <text key={r.key} x={xAt(i)} y={H - 6} fontSize={9} textAnchor="middle" fill="hsl(var(--muted-foreground))">{r.key}</text>
+                ))}
+                {/* line segments (gaps for not-read) */}
+                {segments.map((s, si) => (
+                  <polyline key={si} points={s} fill="none" stroke={color} strokeWidth={1.5} />
+                ))}
+                {/* markers for read points */}
+                {pts.map((p, i) =>
+                  p ? (
+                    <circle key={i} cx={p.x} cy={p.y} r={3} fill={color} data-testid={`phase-chart-${key}-pt-${p.row.key}`}>
+                      <title>{`${p.row.key} ${p.row.label}: ${key} ${p.v.toFixed(2)}`}</title>
+                    </circle>
+                  ) : null,
+                )}
+              </svg>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
