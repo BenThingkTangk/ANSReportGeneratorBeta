@@ -25,6 +25,8 @@
  * clear "ocrAvailable:false" signal instead of throwing at cold start.
  */
 
+import { ensureCanvasGlobals } from "./canvasPolyfill.js";
+
 export interface OcrWord {
   text: string;
   /** 0..100 tesseract confidence. */
@@ -69,10 +71,31 @@ const DEFAULT_DPI = 260;
  * never fails on these optional deps — if they're truly missing at runtime the
  * callers below degrade to "OCR unavailable".
  */
-function externalImport(spec: string): Promise<any> {
-  // The indirection through a variable defeats esbuild's import() analysis.
-  const load = new Function("s", "return import(s)") as (s: string) => Promise<any>;
-  return load(spec);
+async function externalImport(spec: string): Promise<any> {
+  // Primary: indirection through a variable defeats esbuild's import() analysis.
+  try {
+    const load = new Function("s", "return import(s)") as (s: string) => Promise<any>;
+    return await load(spec);
+  } catch (err: any) {
+    // Some runtimes (e.g. the vitest VM) reject the `new Function` import with
+    // "A dynamic import callback was not specified". Fall back to resolving the
+    // module's real path via createRequire (anchored on this module) and
+    // importing THAT — still opaque to esbuild's static analysis because the
+    // resolved specifier is computed at runtime.
+    try {
+      const { createRequire } = await import("node:module");
+      const { pathToFileURL } = await import("node:url");
+      const anchor =
+        typeof import.meta !== "undefined" && import.meta.url
+          ? import.meta.url
+          : pathToFileURL(`${process.cwd()}/index.js`).href;
+      const req = createRequire(anchor);
+      const resolved = req.resolve(spec);
+      return await import(pathToFileURL(resolved).href);
+    } catch {
+      throw err;
+    }
+  }
 }
 
 /**
@@ -89,6 +112,20 @@ export async function rasterizePdf(
   let pdfjs: any;
   let canvasMod: any;
   try {
+    // CRITICAL ORDERING: install DOMMatrix/ImageData/Path2D on globalThis from
+    // @napi-rs/canvas BEFORE importing pdfjs. pdfjs's legacy build uses these at
+    // TOP LEVEL during module evaluation (e.g. `const SCALE_MATRIX = new
+    // DOMMatrix()`), and its own self-polyfill only fires if its internal
+    // `require("@napi-rs/canvas")` resolves — which Vercel's file tracer often
+    // fails to bundle for our indirectly-imported optional dep. Without this the
+    // pdfjs import throws `ReferenceError: DOMMatrix is not defined` (the exact
+    // production regression). If canvas is unavailable we return [] and the
+    // caller degrades to "OCR unavailable" — we never import pdfjs with the
+    // globals missing, and never install a partial stub.
+    const poly = await ensureCanvasGlobals();
+    if (!poly.installed) {
+      return [];
+    }
     // legacy build is the Node-friendly entry (no DOM required). Loaded via
     // externalImport so the native canvas binary is never bundled (see above).
     pdfjs = await externalImport("pdfjs-dist/legacy/build/pdf.mjs");
