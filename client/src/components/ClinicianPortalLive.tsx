@@ -8,10 +8,13 @@
 // failure-swallowing AI enrichment) back into the original file and delete this
 // shim. The ONLY change vs. the original is synopsis sourcing — no other logic.
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
+import type { VendorReportExtraction } from "@shared/vendorExtraction";
 import { apiRequest } from "@/lib/queryClient";
 import { buildClinicianSynopsis } from "@shared/deterministicSynopsis";
+import { VendorFamiliarReport } from "./clinician/VendorFamiliarReport";
 import { ClinicianHeader } from "./clinician/ClinicianHeader";
 import { ClinicianSynopsis } from "./clinician/ClinicianSynopsis";
 import { DataQualityPanel } from "./clinician/DataQualityPanel";
@@ -34,9 +37,55 @@ import { ErrorBoundary } from "./ErrorBoundary";
 interface ClinicianPortalProps {
   report: ANSReport;
   ansStudy?: AnsStudy;
+  /** Structured paired-vendor extraction; when present the Vendor-Familiar view is offered. */
+  vendorExtraction?: VendorReportExtraction;
+  vendorSource?: { source?: "ocr" | "text"; ocrConfidence?: number; fileName?: string };
 }
 
-export function ClinicianPortalLive({ report, ansStudy }: ClinicianPortalProps) {
+type ClinicianView = "vendor" | "humanos";
+
+/** Vendor Familiar / HumanOS Advanced toggle (spring pill, matches ViewToggle). */
+function ClinicianViewToggle({
+  view,
+  onChange,
+}: {
+  view: ClinicianView;
+  onChange: (v: ClinicianView) => void;
+}) {
+  return (
+    <div
+      className="inline-flex rounded-xl p-1 gap-1"
+      style={{ background: "hsl(210 18% 10%)", border: "1px solid hsl(210 15% 18%)" }}
+      data-testid="clinician-view-toggle"
+    >
+      {(["vendor", "humanos"] as ClinicianView[]).map((v) => (
+        <button
+          key={v}
+          onClick={() => onChange(v)}
+          data-testid={`clinician-view-${v}`}
+          className="relative px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors"
+          style={{ color: view === v ? "white" : "hsl(210 10% 50%)", zIndex: 1 }}
+        >
+          {view === v && (
+            <motion.div
+              layoutId="clinician-view-pill"
+              className="absolute inset-0 rounded-lg"
+              style={{ background: "hsl(185 85% 42%)" }}
+              transition={{ type: "spring", stiffness: 380, damping: 34 }}
+            />
+          )}
+          <span className="relative z-10">{v === "vendor" ? "Vendor Familiar" : "HumanOS Advanced"}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendorSource }: ClinicianPortalProps) {
+  // When a paired vendor report was ingested, default to the familiar vendor
+  // view (what Dr. Colombo reads from); otherwise only the HumanOS view exists.
+  const hasVendor = !!vendorExtraction && vendorExtraction.fieldCount > 0;
+  const [view, setView] = useState<ClinicianView>(hasVendor ? "vendor" : "humanos");
   // Clinician synopsis is built deterministically from the report's phase metrics
   // and Colombo patterns, so it renders instantly with no network dependency.
   // Optional AI enrichment (below) only ever swaps in richer prose on success.
@@ -79,6 +128,27 @@ export function ClinicianPortalLive({ report, ansStudy }: ClinicianPortalProps) 
     >
       <ClinicianHeader report={report} />
 
+      {hasVendor && (
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-[11px] text-muted-foreground/80 max-w-md leading-relaxed">
+            A paired vendor report is attached. Switch between the vendor's familiar
+            P&amp;S layout (verbatim values) and the HumanOS analysis.
+          </div>
+          <ClinicianViewToggle view={view} onChange={setView} />
+        </div>
+      )}
+
+      {hasVendor && view === "vendor" && (
+        <VendorFamiliarReport
+          extraction={vendorExtraction!}
+          source={vendorSource?.source}
+          ocrConfidence={vendorSource?.ocrConfidence}
+          fileName={vendorSource?.fileName}
+        />
+      )}
+
+      {(!hasVendor || view === "humanos") && (
+      <>
       <ClinicianSynopsis
         synopsis={synopsis}
         loading={false}
@@ -147,6 +217,8 @@ export function ClinicianPortalLive({ report, ansStudy }: ClinicianPortalProps) 
       <FollowUpPanel followUp={report.followUp} />
 
       <ColomboReferences />
+      </>
+      )}
     </div>
   );
 }

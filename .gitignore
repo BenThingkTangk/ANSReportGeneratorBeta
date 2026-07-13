@@ -16,6 +16,9 @@ build_output/
 
 # .ans fixtures contain PHI — never commit
 fixtures/*.ans
+
+# tesseract.js OCR language model, downloaded at runtime (large, not source)
+*.traineddata
 api/_ans/__tests__/smoke.mjs
 api/_ans/__tests__/adapter_smoke.mjs
 api/parse.ts.full

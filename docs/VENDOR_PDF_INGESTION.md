@@ -1,16 +1,23 @@
 # Vendor PDF Ingestion (`vendor_reported` provenance)
 
 ## Why
-A raw `.ans` recording contains the ECG beat-to-beat series but **not** the
-vendor's proprietary spectral aggregates (LFa / RFa / sympathovagal balance) or
-the per-phase cuff blood pressures. Our pipeline therefore gates those metrics
-as *"not assessed"* — honestly, because they cannot be reproduced from the raw
-signal. Those numbers exist only in the signed **P&S vendor report PDF**.
+A raw `.ans` recording contains the ECG beat-to-beat series. The vendor's
+spectral aggregates (LFa / RFa / sympathovagal balance / FRF) and per-phase cuff
+blood pressures **do physically occur in the `.ans` binary as IEEE floats** (see
+`scripts/audit-ans-spectral.mts` and `HUMANOS_CLINICIAN_VENDOR_PARITY_REPORT.md`
+§1) — the earlier claim that they are "not present" was wrong — but there is **no
+stable-offset table / constant-stride record / array header** to extract them
+generically, and our open Morlet-CWT recomputation only *approximates* the
+undisclosed vendor wavelet. So our pipeline computes them as `estimated` (tier
+[P]) and gates them OFF clinically, rendering *"not assessed"* rather than a
+misleading estimate. The vendor's **exact** numbers come from the signed **P&S
+report PDF**.
 
-This feature lets a clinician optionally attach that PDF so its **verbatim**
-values enter the report tagged `vendor_reported` — an interpretable provenance
-tier (`mayInterpretClinically(vendor_reported) === true`) — instead of staying
-permanently gated.
+This feature lets a clinician attach that PDF so its **verbatim** values enter
+the report tagged `vendor_reported` — an interpretable provenance tier
+(`mayInterpretClinically(vendor_reported) === true`) — and drive the clinician
+**Vendor-Familiar** view. Scanned/image-only PDFs are read with on-device OCR
+(`api/_ans/ocr.ts` → `vendorOcrParse.ts`); text-layer PDFs use the fast path.
 
 ## Contract
 
@@ -44,10 +51,10 @@ permanently gated.
   vendor-reported measurement — distinct from our computed/estimated values.
 - **Report-type guard.** If the text doesn't look like a P&S/ANS report
   (`looksLikeVendorReport === false`), nothing is ingested.
-- **No fabrication on scanned PDFs.** Image-only PDFs (no text layer) return
-  `textExtracted: false` with an explanatory note. **OCR is the only pending
-  external step** for those; the ingestion contract itself is complete and
-  unit-tested.
+- **No fabrication on scanned PDFs.** Image-only PDFs (no text layer) are now
+  read with OCR (`source: "ocr"`); values the scan cannot resolve confidently are
+  returned **absent**, never zero-filled. If the OCR engine is unavailable the
+  endpoint says so honestly (`source: "none"`) and ingests nothing.
 
 ## Recognized metrics
 `LFa, RFa, SB (LFa/RFa), LF/HF, SDNN, RMSSD, SBP, DBP, E/I ratio, Valsalva ratio`
@@ -66,7 +73,16 @@ and exposed to the report pipeline.
 - Verified end-to-end against a synthetic text-layer PDF: extraction → parse →
   9 `vendor_reported` metrics.
 
+## OCR path (scanned PDFs)
+`api/_ans/ocr.ts` rasterizes pages with pdfjs-dist + @napi-rs/canvas and OCRs
+them with tesseract.js (all pure-JS / prebuilt — Vercel-safe).
+`api/_ans/vendorOcrParse.ts` extracts a typed `VendorReportExtraction` (identity,
+resting spectral+BP, Ewing ratios) with per-field page/region/confidence
+provenance. The sample Jill scans parse to **exact** vendor parity on
+LFa/RFa/SB + the three ratios (see the parity report and `qa/vendor-parity.mjs`).
+
 ## Known limitation
-The sample Jill PDFs in this environment are **scanned images** (no text layer),
-so they exercise the `textExtracted: false` path. A text-based vendor export
-(or an added OCR pre-step) ingests fully via the same contract.
+The vendor's dense per-phase numerical-summary grid (phases B–F spectral columns)
+OCRs unreliably and is not surfaced as parity values; the resting block + ratios
+parse exactly. Full per-phase spectral parity would require the vendor's own
+export or a higher-fidelity scan.

@@ -67,4 +67,26 @@ describe("offline oracle never enters the runtime", () => {
     });
     expect(offenders).toEqual([]);
   });
+
+  it("OCR / vendor extraction never hardcodes Jill's spectral values", () => {
+    // The OCR parser must read the vendor's printed numbers, not carry Jill's
+    // (0.91 LFa / 5.13 RFa / 0.18 SB / 1.21 E/I …) as literals. Guard the OCR +
+    // vendor modules against a memorized-scalar regression.
+    const OCR_MODULES = [
+      resolve(repoRoot, "api/_ans/ocr.ts"),
+      resolve(repoRoot, "api/_ans/vendorOcrParse.ts"),
+      resolve(repoRoot, "api/upload-vendor.ts"),
+      resolve(repoRoot, "client/src/components/clinician/VendorFamiliarReport.tsx"),
+    ];
+    const JILL_LITERALS = /\b(0\.91|5\.13|0\.18|21\.11|6\.55)\b/;
+    const offenders = OCR_MODULES.filter((f) => {
+      try {
+        const src = stripComments(readFileSync(f, "utf8"));
+        return JILL_LITERALS.test(src);
+      } catch {
+        return false;
+      }
+    });
+    expect(offenders).toEqual([]);
+  });
 });

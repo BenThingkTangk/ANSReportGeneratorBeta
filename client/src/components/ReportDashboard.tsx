@@ -23,6 +23,9 @@ interface ReportDashboardProps {
   report: ANSReport;
   /** Optional normalized study so portals can show extraction warnings. */
   ansStudy?: AnsStudy;
+  /** Structured paired-vendor extraction (drives the clinician Vendor-Familiar view). */
+  vendorExtraction?: import("@shared/vendorExtraction").VendorReportExtraction;
+  vendorSource?: { source?: "ocr" | "text"; ocrConfidence?: number; fileName?: string };
   onReset: () => void;
 }
 
@@ -32,7 +35,7 @@ type ViewerRole = "patient" | "clinician";
  * Dashboard with Patient ⇄ Clinician toggle. Atom chat (blue logo) follows
  * the active role and is always available.
  */
-export function ReportDashboard({ report, ansStudy, onReset }: ReportDashboardProps) {
+export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSource, onReset }: ReportDashboardProps) {
   const [role, setRole] = useState<ViewerRole>("patient");
   // Ask ATOM open state is lifted so a non-overlaying mobile trigger (header
   // icon) can open the drawer. The fixed floating launcher inside AskAtom is
@@ -120,7 +123,12 @@ export function ReportDashboard({ report, ansStudy, onReset }: ReportDashboardPr
                   {/* Evidence tiers: measured vs hypotheses vs missing vs
                       investigational — separated so certainty is never blurred. */}
                   <EvidenceStratification report={report} />
-                  <ClinicianPortalLive report={report} ansStudy={ansStudy} />
+                  <ClinicianPortalLive
+                    report={report}
+                    ansStudy={ansStudy}
+                    vendorExtraction={vendorExtraction}
+                    vendorSource={vendorSource}
+                  />
                 </div>
               </ErrorBoundary>
             )}

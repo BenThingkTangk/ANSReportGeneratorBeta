@@ -7,6 +7,10 @@
     "api/**/*.ts": {
       "memory": 256,
       "maxDuration": 30
+    },
+    "api/upload-vendor.ts": {
+      "memory": 1536,
+      "maxDuration": 120
     }
   },
   "rewrites": [
