@@ -7,6 +7,11 @@
     "api/**/*.ts": {
       "memory": 1024,
       "maxDuration": 120
+    },
+    "api/upload-vendor.ts": {
+      "memory": 1024,
+      "maxDuration": 120,
+      "includeFiles": "node_modules/{@napi-rs/canvas*/**,pdfjs-dist/legacy/**,pdfjs-dist/package.json,pdfjs-dist/build/pdf.worker*,tesseract.js/**,tesseract.js-core/**,pdf-parse/**}"
     }
   },
   "rewrites": [
