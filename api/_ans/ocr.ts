@@ -60,6 +60,22 @@ export interface OcrResult {
 const DEFAULT_DPI = 260;
 
 /**
+ * Dynamic import that a bundler CANNOT statically analyze, so esbuild/@vercel/node
+ * leaves the module external and resolves it from node_modules at runtime instead
+ * of trying to inline it. This is essential for the OCR stack: @napi-rs/canvas
+ * ships a `.node` native binary that esbuild has no loader for (it errors "No
+ * loader is configured for .node files"), and pdfjs-dist/tesseract.js are large.
+ * Keeping them external means the serverless bundle stays small and the deploy
+ * never fails on these optional deps — if they're truly missing at runtime the
+ * callers below degrade to "OCR unavailable".
+ */
+function externalImport(spec: string): Promise<any> {
+  // The indirection through a variable defeats esbuild's import() analysis.
+  const load = new Function("s", "return import(s)") as (s: string) => Promise<any>;
+  return load(spec);
+}
+
+/**
  * Rasterize every page of a PDF to a PNG buffer using pdfjs-dist + @napi-rs/canvas.
  * Returns [] (and never throws) if the render stack is unavailable.
  */
@@ -73,9 +89,10 @@ export async function rasterizePdf(
   let pdfjs: any;
   let canvasMod: any;
   try {
-    // legacy build is the Node-friendly entry (no DOM required).
-    pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    canvasMod = await import("@napi-rs/canvas");
+    // legacy build is the Node-friendly entry (no DOM required). Loaded via
+    // externalImport so the native canvas binary is never bundled (see above).
+    pdfjs = await externalImport("pdfjs-dist/legacy/build/pdf.mjs");
+    canvasMod = await externalImport("@napi-rs/canvas");
   } catch (err: any) {
     return [];
   }
@@ -133,7 +150,7 @@ export async function rasterizePdf(
 async function makeOcrWorker(): Promise<any | null> {
   let tesseract: any;
   try {
-    tesseract = await import("tesseract.js");
+    tesseract = await externalImport("tesseract.js");
   } catch {
     return null;
   }
