@@ -41,37 +41,69 @@ function found(rel) {
   return size >= MIN_BYTES ? { rel, size } : null;
 }
 
+// tesseract.js runtime deps that must be installed AND packaged (their absence
+// is exactly what caused the live "tesseract.js not installed" failure — the
+// module itself was present but its transitive requires threw MODULE_NOT_FOUND).
+const TESSERACT_RUNTIME_DEPS = [
+  "tesseract.js",
+  "tesseract.js-core",
+  "node-fetch",
+  "bmp-js",
+  "is-url",
+  "whatwg-url",
+  "tr46",
+  "webidl-conversions",
+  "is-electron",
+  "wasm-feature-detect",
+  "regenerator-runtime",
+];
+
 const isLinuxX64 = process.platform === "linux" && process.arch === "x64";
 const hits = LINUX_X64_BINARIES.map(found).filter(Boolean);
 
+let hardFail = false;
+
+// 1) Canvas native binary (linux-x64 builders only; other hosts warn).
 if (hits.length > 0) {
   for (const h of hits) {
     console.log(`✓ OCR native binary present: ${h.rel} (${(h.size / 1_048_576).toFixed(1)} MB)`);
   }
-  process.exit(0);
+} else {
+  const loaderPresent = existsSync(join(NM, "@napi-rs/canvas/index.js"));
+  if (isLinuxX64) {
+    console.error(
+      "✗ OCR native dependency missing on a linux-x64 builder.\n" +
+        `  Expected one of:\n` +
+        LINUX_X64_BINARIES.map((b) => `    node_modules/${b}`).join("\n") +
+        "\n  Without it, vercel.json includeFiles packages no skia binary and " +
+        "/api/upload-vendor will report '@napi-rs/canvas not installed' at runtime.\n" +
+        (loaderPresent
+          ? "  The @napi-rs/canvas JS loader is present but the platform binary is not — " +
+            "ensure optionalDependencies are installed (do NOT pass --omit=optional / --no-optional)."
+          : "  @napi-rs/canvas is not installed at all — check dependencies/optionalDependencies."),
+    );
+    hardFail = true;
+  } else {
+    console.warn(
+      `⚠ OCR native linux-x64 binary not found on this ${process.platform}/${process.arch} host. ` +
+        "This is expected off-Vercel; the Vercel builder (linux-x64) must have it. Skipping binary check.",
+    );
+  }
 }
 
-// Also make sure the JS loader package itself is installed.
-const loaderPresent = existsSync(join(NM, "@napi-rs/canvas/index.js"));
-
-if (isLinuxX64) {
+// 2) tesseract.js runtime closure (all platforms — these are pure JS deps).
+const missingTess = TESSERACT_RUNTIME_DEPS.filter((d) => !existsSync(join(NM, d, "package.json")));
+if (missingTess.length === 0) {
+  console.log(`✓ tesseract.js runtime closure present (${TESSERACT_RUNTIME_DEPS.length} packages).`);
+} else {
   console.error(
-    "✗ OCR native dependency missing on a linux-x64 builder.\n" +
-      `  Expected one of:\n` +
-      LINUX_X64_BINARIES.map((b) => `    node_modules/${b}`).join("\n") +
-      "\n  Without it, vercel.json includeFiles packages nothing and " +
-      "/api/upload-vendor will report '@napi-rs/canvas not installed' at runtime.\n" +
-      (loaderPresent
-        ? "  The @napi-rs/canvas JS loader is present but the platform binary is not — " +
-          "ensure optionalDependencies are installed (do NOT pass --omit=optional / --no-optional)."
-        : "  @napi-rs/canvas is not installed at all — check dependencies/optionalDependencies."),
+    "✗ tesseract.js runtime dependencies missing:\n" +
+      missingTess.map((d) => `    node_modules/${d}`).join("\n") +
+      "\n  These are required at runtime by tesseract.js. Their absence reproduces the live " +
+      "'tesseract.js not installed' OCR failure. Ensure they are installed and covered by " +
+      "vercel.json functions[api/upload-vendor.ts].includeFiles.",
   );
-  process.exit(1);
+  hardFail = true;
 }
 
-// Non-Linux-x64 (e.g. local mac/arm dev): warn only.
-console.warn(
-  `⚠ OCR native linux-x64 binary not found on this ${process.platform}/${process.arch} host. ` +
-    "This is expected off-Vercel; the Vercel builder (linux-x64) must have it. Skipping hard check.",
-);
-process.exit(0);
+process.exit(hardFail ? 1 : 0);
