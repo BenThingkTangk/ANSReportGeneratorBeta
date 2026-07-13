@@ -360,7 +360,7 @@ function readLPString(buffer: Buffer, offset: number): { value: string; nextOffs
  */
 function extractTestDate(
   buffer: Buffer,
-  isJillShah: boolean,
+  _isJillShah: boolean,
   _lastName: string,
   _firstName: string,
   fileName?: string,
@@ -399,10 +399,9 @@ function extractTestDate(
     }
   }
 
-  // 3) Jill Shah hard-coded fallback (verified from PDF)
-  if (isJillShah) return "9/26/2025";
-
-  // 4) Last resort
+  // 3) Last resort. No patient-specific hard-coding: the .ans timestamp and the
+  // filename date (both handled above) are the authoritative sources; anything
+  // else is unknown rather than guessed per-patient.
   return new Date().toLocaleDateString();
 }
 
@@ -1770,7 +1769,14 @@ function detectCheynesStokesLocal(breathing?: { t: number[]; v: number[] }): boo
   return peakCorr > 0.55;
 }
 
-function detectIndicationsLocal(phaseEvents: PhaseMetrics[], mpg?: MultiParameterGraphical): Indication[] {
+function detectIndicationsLocal(
+  phaseEvents: PhaseMetrics[],
+  mpg?: MultiParameterGraphical,
+  gates: { standSpectralAvailable: boolean; standBpAvailable: boolean } = {
+    standSpectralAvailable: true,
+    standBpAvailable: true,
+  },
+): Indication[] {
   if (!phaseEvents || phaseEvents.length === 0) return [];
   const A = phaseEvents[0];
   const D = phaseEvents[3] || null;
@@ -1785,11 +1791,16 @@ function detectIndicationsLocal(phaseEvents: PhaseMetrics[], mpg?: MultiParamete
   const valsalvaLfa = D?.LFa ?? null;
   const valsalvaRfa = D?.RFa ?? null;
   const valsalvaSbp = D?.SBP ?? null;
-  const standLfa = F?.LFa ?? null;
-  const standRfa = F?.RFa ?? null;
+  // Standing findings must use REAL standing data only. When the stand phase's
+  // spectral is a computed estimate (paired path supplies vendor values for the
+  // baseline only) or the standing cuff BP was never measured, these read null so
+  // no orthostatic/adrenergic/syncope indication can be fabricated. HR is always
+  // ECG-derived, so standHr stays available for HR-only findings (POTS/Pre-POTS).
+  const standLfa = gates.standSpectralAvailable ? (F?.LFa ?? null) : null;
+  const standRfa = gates.standSpectralAvailable ? (F?.RFa ?? null) : null;
   const standHr  = F?.meanHR ?? null;
-  const standSbp = F?.SBP ?? null;
-  const standDbp = F?.DBP ?? null;
+  const standSbp = gates.standBpAvailable ? (F?.SBP ?? null) : null;
+  const standDbp = gates.standBpAvailable ? (F?.DBP ?? null) : null;
 
   const out: Indication[] = [];
   const has = (code: string) => out.some(i => i.code === code);
@@ -2054,6 +2065,26 @@ export function generateColomboReport(
   );
   const bpAvailable = A.SBP != null && A.DBP != null;
 
+  // --- Standing-phase availability gates -------------------------------------
+  // Orthostatic / standing findings must be driven ONLY by real standing data.
+  // In the paired-report path only the BASELINE receives vendor_reported values;
+  // the Stand (F) phase spectral stays computed/estimated and its cuff BP is not
+  // present at all. Reading those estimates as a real standing response is what
+  // fabricated "a weakened fight-or-flight response on standing", "a
+  // blood-pressure drop when standing", "a tendency toward fainting spells", and
+  // "Orthostatic Dysfunction (High Risk)" while the clinician view correctly
+  // said Adrenergic/orthostatic were NOT assessed. We gate on the STAND phase's
+  // OWN provenance (spectral) and on the presence of BOTH baseline and standing
+  // cuff BP (orthostatic BP), so nothing standing-derived surfaces unless the
+  // standing measurement genuinely exists.
+  const standSpectralAvailable = !!(
+    F.provenance &&
+    mayInterpretClinically(F.provenance.LFa) &&
+    mayInterpretClinically(F.provenance.RFa)
+  );
+  const standBpAvailable = F.SBP != null && F.DBP != null;
+  const orthostaticBpAssessable = bpAvailable && standBpAvailable;
+
   // Snapshot the raw (estimated) spectral values BEFORE nulling. The internal
   // wellness index and the clinician trend charts operate on these numeric
   // estimates; the report-facing `phaseEvents` (and every clinical claim /
@@ -2131,7 +2162,12 @@ export function generateColomboReport(
   const A_SB = sSB(A), A_RFa = sRFa(A), A_LFa = sLFa(A);
   const B_RFa = sRFa(B);
   const D_LFa = sLFa(D);
-  const F_RFa = sRFa(F), F_LFa = sLFa(F);
+  // Standing (F) spectral is only usable when the STAND phase's OWN provenance is
+  // clinically interpretable — not when only the baseline was vendor-reported and
+  // the standing values are computed estimates. sF*() enforce that.
+  const sfLFa = (p: PhaseMetrics): number | null => (standSpectralAvailable ? (p.LFa as number) : null);
+  const sfRFa = (p: PhaseMetrics): number | null => (standSpectralAvailable ? (p.RFa as number) : null);
+  const F_RFa = sfRFa(F), F_LFa = sfLFa(F);
 
   const parasympatheticDominance = A_SB != null && A_SB > 0 && A_SB < SB_n.lo;
   const dbRFaLow = B_RFa != null && B_RFa < 19; // Jill's PDF DB norm 19.97-70.79
@@ -2145,9 +2181,14 @@ export function generateColomboReport(
   const maskedSW = parasympatheticExcess && sympatheticWithdrawal;
   const preSyncopeRisk =
     D_LFa != null && F_LFa != null && F_LFa > D_LFa * 0.9; // stand peak ≈ valsalva
-  // Orthostatic hypotension requires real BP — gated on bpAvailable.
+  // Orthostatic hypotension requires real BASELINE AND STANDING cuff BP, and a
+  // genuine drop between them. The prior formula compared baseline to a default
+  // (120) and never used standing BP, so it could both mis-fire and fire without
+  // any standing measurement. Now: assessable only when both arms are present.
   const orthostaticHypotension =
-    bpAvailable && (data.baselineSystolicBP ?? 120) - (A.SBP ?? 120) > 20;
+    orthostaticBpAssessable &&
+    (((A.SBP as number) - (F.SBP as number)) >= 20 ||
+      ((A.DBP as number) - (F.DBP as number)) >= 10);
   const vasovagalRisk = F_RFa != null && F_LFa != null && F_RFa > F_LFa;
   const advancedAutonomicDysfunction = parasympatheticWithdrawal && sympatheticWithdrawal;
   const CAN = advancedAutonomicDysfunction && ratios.eiRatio.classification.severity === "Abnormal";
@@ -2451,7 +2492,10 @@ export function generateColomboReport(
   }
 
   // -- Path B: Colombo indication detection -----------------------------
-  const indications = detectIndicationsLocal(phaseEvents, multiParameter);
+  const indications = detectIndicationsLocal(phaseEvents, multiParameter, {
+    standSpectralAvailable,
+    standBpAvailable,
+  });
 
   return {
     patientData: data,

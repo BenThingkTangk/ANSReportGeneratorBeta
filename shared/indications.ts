@@ -24,6 +24,15 @@ export interface Indication {
 
 interface DetectInput {
   phases: PhaseMetrics[];
+  /**
+   * Standing-phase availability gates. Orthostatic / standing findings must be
+   * driven ONLY by real standing data — a stand phase whose spectral is a
+   * computed estimate (e.g. paired path with baseline-only vendor values) or
+   * whose cuff BP was never measured must not fabricate a standing response.
+   * Default true preserves legacy behavior for fully-measured studies.
+   */
+  standSpectralAvailable?: boolean;
+  standBpAvailable?: boolean;
   /** Optional clinical history flags from patient bio. */
   knownDiabetes?: boolean;
   /** Optional baseline office BP (for white-coat detection). */
@@ -93,11 +102,14 @@ export function detectIndications(input: DetectInput): Indication[] {
   const valsalvaLfa = D?.LFa ?? null;
   const valsalvaRfa = D?.RFa ?? null;
   const valsalvaSbp = D?.SBP ?? null;
-  const standLfa = F?.LFa ?? null;
-  const standRfa = F?.RFa ?? null;
-  const standHr  = F?.meanHR ?? null;
-  const standSbp = F?.SBP ?? null;
-  const standDbp = F?.DBP ?? null;
+  // Gate standing spectral / BP to REAL standing measurements (see DetectInput).
+  const standSpectralOk = input.standSpectralAvailable !== false;
+  const standBpOk = input.standBpAvailable !== false;
+  const standLfa = standSpectralOk ? (F?.LFa ?? null) : null;
+  const standRfa = standSpectralOk ? (F?.RFa ?? null) : null;
+  const standHr  = F?.meanHR ?? null; // HR is ECG-derived, always available
+  const standSbp = standBpOk ? (F?.SBP ?? null) : null;
+  const standDbp = standBpOk ? (F?.DBP ?? null) : null;
 
   const out: Indication[] = [];
   const has = (code: string) => out.some(i => i.code === code);

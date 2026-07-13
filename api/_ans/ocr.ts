@@ -261,7 +261,7 @@ export async function ocrImage(
  */
 export async function ocrPdf(
   buffer: Buffer,
-  opts: { dpi?: number; maxPages?: number } = {},
+  opts: { dpi?: number; maxPages?: number; summaryDpi?: number } = {},
 ): Promise<OcrResult> {
   let rasters: Array<{ page: number; png: Buffer; width: number; height: number }>;
   try {
@@ -300,6 +300,43 @@ export async function ocrPdf(
         width: r.width,
         height: r.height,
       });
+    }
+
+    // --- Targeted high-DPI re-OCR of the "Numerical Summary" page --------------
+    // The dense A–F per-phase grid on the Multi-Parameter page reads unreliably at
+    // the default DPI (decimals collapse, rows collide). If a page looks like the
+    // summary page, re-render JUST that page at a higher DPI and APPEND it as an
+    // extra OcrPage (same page number). The geometry-based phase-table parser
+    // prefers the higher-resolution copy for the grid, while identity/baseline/
+    // ratios keep reading the default-DPI copy — high DPI can crop/miss the
+    // ratio header block, so we must NOT discard the default OCR. Best-effort:
+    // any failure simply leaves the default pages untouched.
+    const summaryDpi = opts.summaryDpi ?? 600;
+    const baseDpi = opts.dpi ?? DEFAULT_DPI;
+    if (summaryDpi > baseDpi) {
+      const summaryIdx = pages.findIndex((p) => /Numerical\s*Summary/i.test(p.text ?? ""));
+      if (summaryIdx >= 0) {
+        const pageNo = pages[summaryIdx].page;
+        try {
+          const hi = await rasterizePdf(buffer, { dpi: summaryDpi, maxPages: pageNo });
+          const hiRaster = hi.find((r) => r.page === pageNo);
+          if (hiRaster) {
+            const hiRes = await recognizeWith(worker, hiRaster.png);
+            if ((hiRes.words?.length ?? 0) > 0 && /Numerical\s*Summary/i.test(hiRes.text ?? "")) {
+              pages.push({
+                page: pageNo,
+                text: hiRes.text,
+                confidence: hiRes.confidence,
+                words: hiRes.words,
+                width: hiRaster.width,
+                height: hiRaster.height,
+              });
+            }
+          }
+        } catch {
+          /* keep default-DPI OCR only */
+        }
+      }
     }
   } finally {
     await worker.terminate();

@@ -141,3 +141,75 @@ describe("ClinicianPortalLive — Vendor Familiar / HumanOS Advanced toggle", ()
     cleanup();
   });
 });
+
+describe("VendorFamiliarReport — defect B: test-date cross-check", () => {
+  it("prefers the trusted .ans date and flags the OCR conflict, preserving raw OCR", async () => {
+    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { VendorFamiliarReport } = await import("../components/clinician/VendorFamiliarReport");
+    const ext = makeExtraction();
+    ext.identity.testDate = field("8/26/2025"); // OCR misread
+    render(<VendorFamiliarReport extraction={ext} source="ocr" trustedTestDate="9/26/2025" />);
+    const dateCell = screen.getByTestId("vendor-test-date");
+    expect(dateCell.textContent).toContain("9/26/2025"); // trusted shown
+    const conflict = screen.getByTestId("vendor-test-date-conflict");
+    expect(conflict.textContent).toContain("8/26/2025"); // raw OCR preserved/surfaced
+    cleanup();
+  });
+
+  it("shows the OCR date with no conflict badge when no trusted date is supplied", async () => {
+    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { VendorFamiliarReport } = await import("../components/clinician/VendorFamiliarReport");
+    const ext = makeExtraction();
+    ext.identity.testDate = field("9/26/2025");
+    render(<VendorFamiliarReport extraction={ext} source="ocr" />);
+    expect(screen.getByTestId("vendor-test-date").textContent).toContain("9/26/2025");
+    expect(screen.queryByTestId("vendor-test-date-conflict")).toBeNull();
+    cleanup();
+  });
+});
+
+describe("VendorFamiliarReport — defect C: per-phase A–F table", () => {
+  function phaseField<T>(value: T | null): any {
+    return { value, unit: null, provenance: value == null ? null : { page: 2, confidence: 0.8, sourceText: String(value), region: { x0: 0, y0: 0, x1: 1, y1: 1 } } };
+  }
+  function makeRow(key: string, label: string, vals: Partial<Record<string, any>>) {
+    const empty = () => phaseField(null);
+    return {
+      key, label,
+      duration: vals.duration ?? empty(), meanHR: vals.meanHR ?? empty(),
+      rangeHR: vals.rangeHR ?? empty(), FRF: vals.FRF ?? empty(),
+      LFa: vals.LFa ?? empty(), RFa: vals.RFa ?? empty(), SB: vals.SB ?? empty(),
+      SBP: vals.SBP ?? empty(), DBP: vals.DBP ?? empty(),
+      PP: vals.PP ?? empty(), MAP: vals.MAP ?? empty(),
+    };
+  }
+
+  it("renders each phase row with read cells and not-read (—) for absent cells", async () => {
+    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { VendorFamiliarReport } = await import("../components/clinician/VendorFamiliarReport");
+    const ext = makeExtraction();
+    ext.phases = {
+      rows: [
+        makeRow("A", "Baseline", { meanHR: phaseField(60), LFa: phaseField(1.2), SBP: phaseField(110), DBP: phaseField(70) }) as any,
+        makeRow("F", "Stand", { meanHR: phaseField(66), RFa: phaseField(6.1) }) as any, // no BP → not read
+      ],
+      cellCount: 6,
+    };
+    render(<VendorFamiliarReport extraction={ext} source="ocr" />);
+    expect(screen.getByTestId("vendor-phase-table")).toBeTruthy();
+    expect(screen.getByTestId("phase-row-A")).toBeTruthy();
+    expect(screen.getByTestId("phase-A-meanHR").textContent).toContain("60");
+    expect(screen.getByTestId("phase-A-SBP").textContent).toContain("110");
+    // F has no BP → not-read marker present.
+    expect(screen.getByTestId("phase-F-SBP-unread").textContent).toContain("—");
+    cleanup();
+  });
+
+  it("renders no phase table section when the extraction has none", async () => {
+    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { VendorFamiliarReport } = await import("../components/clinician/VendorFamiliarReport");
+    render(<VendorFamiliarReport extraction={makeExtraction()} source="ocr" />);
+    expect(screen.queryByTestId("vendor-phase-table")).toBeNull();
+    cleanup();
+  });
+});

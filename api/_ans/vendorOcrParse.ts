@@ -22,6 +22,7 @@
  */
 
 import type { OcrPage, OcrWord } from "./ocr.js";
+import { normalizeUsDate } from "../../shared/vendorExtraction.js";
 import type {
   VendorFieldProvenance as FieldProvenance,
   VendorField,
@@ -29,6 +30,8 @@ import type {
   VendorBaseline,
   VendorRatios,
   VendorReportExtraction,
+  VendorPhaseRow,
+  VendorPhaseTable,
 } from "../../shared/vendorExtraction.js";
 
 export type {
@@ -37,6 +40,8 @@ export type {
   VendorBaseline,
   VendorRatios,
   VendorReportExtraction,
+  VendorPhaseRow,
+  VendorPhaseTable,
 } from "../../shared/vendorExtraction.js";
 
 // --------------------------------------------------------------------------
@@ -146,6 +151,32 @@ function numField(
   return { value: null, unit, provenance: null };
 }
 
+/**
+ * Date field: match a date substring and NORMALIZE it to canonical M/D/YYYY so
+ * OCR spacing/2-digit-year noise (e.g. "8/ 26/25") doesn't leak into the UI.
+ * The verbatim OCR text is preserved in provenance.sourceText for audit; only a
+ * value that normalizes is accepted (else absent — never a fabricated date).
+ */
+function dateField(
+  pages: OcrPage[],
+  text: string,
+  re: RegExp,
+  defaultPage = 1,
+): VendorField<string> {
+  const m = re.exec(text);
+  if (!m || m[1] == null) return { value: null, provenance: null };
+  const normalized = normalizeUsDate(m[1]);
+  if (!normalized) return { value: null, provenance: null };
+  return {
+    value: normalized,
+    provenance: {
+      page: defaultPage,
+      confidence: pageConfidence(pages, defaultPage),
+      sourceText: m[0].trim().slice(0, 80),
+    },
+  };
+}
+
 function strField(
   pages: OcrPage[],
   text: string,
@@ -244,6 +275,298 @@ function clamp01(x: number): number {
 }
 
 // --------------------------------------------------------------------------
+// Page-2 "Numerical Summary" A–F phase table (geometry-based)
+// --------------------------------------------------------------------------
+
+/** Column keys of the vendor's Numerical Summary, in print order. */
+type PhaseCol =
+  | "duration" | "meanHR" | "rangeHR" | "FRF" | "LFa" | "RFa" | "SB" | "BP" | "PP" | "MAP";
+
+/** Header label recognizers (loose — OCR mangles punctuation/asterisks). */
+const PHASE_COL_HEADERS: Array<{ col: PhaseCol; re: RegExp }> = [
+  { col: "duration", re: /^Duration$/i },
+  { col: "meanHR", re: /mean\s*HR/i },
+  { col: "rangeHR", re: /max.?min|\(max/i },
+  { col: "FRF", re: /^FRF/i },
+  { col: "LFa", re: /^LFA\*?~?$|^LFA$/i },
+  { col: "RFa", re: /^RFA\*?~?$|^RFA$/i },
+  { col: "SB", re: /LFA\s*\/\s*RFA/i },
+  { col: "BP", re: /^BP$/i },
+  { col: "PP", re: /^PP$/i },
+  { col: "MAP", re: /^MAP$/i },
+];
+
+/** Per-column physiological sanity ranges (reject OCR digit-loss / merges). */
+const PHASE_COL_SANITY: Record<Exclude<PhaseCol, "duration" | "BP">, (v: number) => boolean> = {
+  meanHR: (v) => v >= 25 && v <= 220,
+  rangeHR: (v) => v >= 0 && v <= 200,
+  FRF: (v) => v >= 0 && v <= 2,
+  LFa: (v) => v >= 0 && v <= 500,
+  RFa: (v) => v >= 0 && v <= 500,
+  SB: (v) => v >= 0 && v <= 100,
+  PP: (v) => v >= 5 && v <= 150,
+  MAP: (v) => v >= 30 && v <= 200,
+};
+
+/**
+ * Columns the vendor ALWAYS prints with a decimal point (FRF 0.15, LFa 0.91,
+ * RFa 5.13, LFa/RFa 0.18). Requiring a decimal in the OCR token rejects the
+ * common flat-raster digit-loss failure ("3.89" → "389") — we emit ABSENT rather
+ * than a fabricated integer. Integer columns (HR/rangeHR/PP/MAP) are exempt.
+ */
+const PHASE_DECIMAL_COLS = new Set<PhaseCol>(["FRF", "LFa", "RFa", "SB"]);
+
+/**
+ * Minimum OCR word confidence (0..100) to accept a table cell. The Numerical
+ * Summary grid is dense and low-confidence tokens are usually mis-read; a floor
+ * keeps only cells we can stand behind, leaving the rest honestly "not read".
+ */
+const PHASE_CELL_MIN_CONF = 55;
+
+const cx = (w: OcrWord) => (w.bbox.x0 + w.bbox.x1) / 2;
+const cy = (w: OcrWord) => (w.bbox.y0 + w.bbox.y1) / 2;
+
+function mkField<T>(value: T | null, w: OcrWord | null, page: number, note: string): VendorField<number | string> {
+  if (value == null || !w) return { value: null, provenance: null } as VendorField<any>;
+  return {
+    value: value as any,
+    provenance: {
+      page,
+      region: w.bbox,
+      confidence: clamp01((w.confidence ?? 0) / 100),
+      sourceText: note,
+    },
+  } as VendorField<any>;
+}
+
+const emptyRow = (key: VendorPhaseRow["key"], label: string): VendorPhaseRow => ({
+  key,
+  label,
+  duration: { value: null, provenance: null },
+  meanHR: { value: null, provenance: null },
+  rangeHR: { value: null, provenance: null },
+  FRF: { value: null, provenance: null },
+  LFa: { value: null, provenance: null },
+  RFa: { value: null, provenance: null },
+  SB: { value: null, provenance: null },
+  SBP: { value: null, provenance: null },
+  DBP: { value: null, provenance: null },
+  PP: { value: null, provenance: null },
+  MAP: { value: null, provenance: null },
+});
+
+/**
+ * Parse the page-2 "Numerical Summary" A–F table using WORD GEOMETRY.
+ *
+ * Flat-raster OCR scrambles this dense grid when read as text, so we reconstruct
+ * it spatially: find the header row to learn each column's x-center, find the A–F
+ * phase-label rows to learn each row's y-band, then assign every numeric/BP token
+ * to the (row, column) whose bands it falls in — accepting a value only if it
+ * passes that column's sanity range. Cells with no confident token stay ABSENT
+ * (null) — never guessed. Requires word geometry; text-layer pages (no geometry)
+ * return no table.
+ */
+function parsePhaseTable(pages: OcrPage[]): VendorPhaseTable {
+  const empty: VendorPhaseTable = { rows: [], cellCount: 0 };
+  // Choose the summary page with word geometry. When ocr.ts appended a high-DPI
+  // re-render of the summary page (same page number, larger width), prefer the
+  // highest-resolution copy — the dense grid resolves best there.
+  const page = pages
+    .filter((p) => (p.words?.length ?? 0) > 0 && /Numerical\s*Summary/i.test(p.text ?? ""))
+    .sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0];
+  if (!page) return empty;
+  const words = page.words;
+
+  const anchor = words.find((w) => /Numerical/i.test(w.text));
+  if (!anchor) return empty;
+  const yTop = anchor.bbox.y1;
+
+  // --- Header row: the band just below the anchor with the column labels. -----
+  const headerBand = words.filter((w) => w.bbox.y0 > yTop && w.bbox.y0 < yTop + 130);
+  const colX: Partial<Record<PhaseCol, number>> = {};
+  for (const { col, re } of PHASE_COL_HEADERS) {
+    // Prefer a header token matching the column label; take the closest to yTop.
+    const cand = headerBand
+      .filter((w) => re.test(w.text.replace(/[^A-Za-z/()*~-]/g, "")))
+      .sort((a, b) => a.bbox.y0 - b.bbox.y0)[0];
+    if (cand) colX[col] = cx(cand);
+  }
+  // Need at least the spectral columns + BP to be worth building a table.
+  const haveCols = Object.keys(colX).length;
+  if (haveCols < 4) return empty;
+
+  // --- Row bands: anchor each A–F row on its phase LETTER or its EVENT LABEL. --
+  // OCR frequently mangles the isolated A–F letters and drops row A (merged into
+  // the header). So we collect row anchors from BOTH the letter column and the
+  // recognizable event-label words, dedupe by y, then assign canonical A–F keys
+  // by vertical order. The vendor always prints exactly six rows in the fixed
+  // sequence A(Baseline) B(Deep Breathing) C(Baseline) D(Valsalva) E(Baseline)
+  // F(Stand); we label by position, not by trusting the mangled letter.
+  const headerBottom = Math.max(yTop + 130, ...headerBand.map((w) => w.bbox.y1));
+  const labelRightX = (colX.duration ?? Infinity) - 30;
+  const KEYS: VendorPhaseRow["key"][] = ["A", "B", "C", "D", "E", "F"];
+  const CANON: Record<string, string> = {
+    A: "Baseline", B: "Deep Breathing", C: "Baseline", D: "Valsalva", E: "Baseline", F: "Stand",
+  };
+  // Event-label recognizers keyed to the phase they identify (used to anchor the
+  // uniform 6-row grid even when the isolated A–F letters OCR poorly).
+  const EVENT_KEY: Array<{ re: RegExp; key: VendorPhaseRow["key"] }> = [
+    { re: /deep\s*brea|despbrea|deepbrea/i, key: "B" },
+    { re: /valsalva|vasava|vakava|vesava/i, key: "D" },
+    { re: /stand|sand|fosens/i, key: "F" },
+  ];
+  // Collect anchor observations: (keyGuess|null, y). Letters give a key directly;
+  // event labels map via EVENT_KEY. A/C/E "Baseline" labels are ambiguous, so we
+  // only use them as generic row markers (key null).
+  type Anchor = { key: VendorPhaseRow["key"] | null; y: number };
+  const anchors: Anchor[] = [];
+  for (const w of words) {
+    if (w.bbox.y0 <= headerBottom || w.bbox.y0 > headerBottom + 900) continue;
+    if (cx(w) >= labelRightX) continue;
+    const t = w.text.trim();
+    let key: VendorPhaseRow["key"] | null = null;
+    const letter = t.match(/^([A-F])[-_.|]?$/);
+    if (letter) key = letter[1] as VendorPhaseRow["key"];
+    else {
+      const ev = EVENT_KEY.find((e) => e.re.test(t));
+      if (ev) key = ev.key;
+      else if (!/baseline|baseine|bessie/i.test(t)) continue; // not a row anchor
+    }
+    anchors.push({ key, y: cy(w) });
+  }
+  if (anchors.length === 0) return empty;
+  anchors.sort((a, b) => a.y - b.y);
+
+  // Estimate a uniform row pitch from keyed anchors that are N rows apart.
+  const keyIdx = (k: VendorPhaseRow["key"]) => KEYS.indexOf(k);
+  const keyed = anchors.filter((a) => a.key) as Array<{ key: VendorPhaseRow["key"]; y: number }>;
+  let pitch = 0, pitchN = 0;
+  for (let i = 0; i < keyed.length; i++) {
+    for (let j = i + 1; j < keyed.length; j++) {
+      const di = keyIdx(keyed[j].key) - keyIdx(keyed[i].key);
+      if (di > 0) { pitch += (keyed[j].y - keyed[i].y) / di; pitchN++; }
+    }
+  }
+  // Fall back to consecutive generic-anchor spacing if no keyed pair exists.
+  if (pitchN === 0) {
+    const gaps: number[] = [];
+    for (let i = 1; i < anchors.length; i++) {
+      const g = anchors[i].y - anchors[i - 1].y;
+      if (g > 30 && g < 200) gaps.push(g);
+    }
+    if (gaps.length) { pitch = gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)]; pitchN = 1; }
+  }
+  if (pitchN === 0 || pitch <= 0) return empty;
+  pitch = pitch / pitchN;
+
+  // Anchor the grid's row-A y from the best-keyed anchor, then lay out 6 rows at
+  // the uniform pitch. Row A center = anchor.y - keyIdx*pitch (averaged).
+  let aY = 0, aN = 0;
+  for (const a of keyed) { aY += a.y - keyIdx(a.key) * pitch; aN++; }
+  if (aN === 0) { aY = anchors[0].y; aN = 1; } // generic: first anchor ≈ row A
+  aY = aY / aN;
+
+  const rowYs = KEYS.map((L, i) => ({ L, y: aY + i * pitch }))
+    // Keep only rows that fall within the observed table span (guards over-reach).
+    .filter((r) => r.y > headerBottom - pitch && r.y < headerBottom + 900);
+  const halfPitch = pitch / 2;
+  const rowBand = (i: number): [number, number] => {
+    const y = rowYs[i].y;
+    // Tight bands (±0.6·halfPitch) so a token from an adjacent, closely-spaced
+    // row is NOT pulled into this one. Rows the vendor prints are ~1 line apart;
+    // a generous band cross-contaminates E/F values. Narrow → some cells stay
+    // "not read" (honest) rather than mis-assigned (wrong).
+    return [y - halfPitch * 0.6, y + halfPitch * 0.6];
+  };
+
+  // Column tolerance scales with render resolution (page width). The grid is
+  // ~2860px wide at the 260-DPI base; tolerances were tuned there (~95px) and
+  // scale linearly for the high-DPI summary re-render (~6600px → ~220px).
+  const colTol = Math.round(95 * (page.width / 2860));
+  const rows: VendorPhaseRow[] = [];
+  let cellCount = 0;
+
+  for (let i = 0; i < rowYs.length; i++) {
+    const { L } = rowYs[i];
+    const [y0, y1] = rowBand(i);
+    const row = emptyRow(L, CANON[L] ?? "");
+    // candidate tokens for this row band, excluding the label column
+    const inRow = words.filter(
+      (w) => cy(w) >= y0 && cy(w) <= y1 && cx(w) > (colX.duration ?? 0) - 60,
+    );
+
+    const assignNum = (col: Exclude<PhaseCol, "duration" | "BP">) => {
+      const center = colX[col];
+      if (center == null) return;
+      const needsDecimal = PHASE_DECIMAL_COLS.has(col);
+      const cands = inRow
+        .filter((w) => Math.abs(cx(w) - center) <= colTol)
+        .filter((w) => (w.confidence ?? 0) >= PHASE_CELL_MIN_CONF)
+        // Decimal columns must contain a decimal point in the raw token, else the
+        // token is an OCR digit-merge — reject rather than fabricate.
+        .filter((w) => !needsDecimal || /\d[.,]\d/.test(w.text))
+        .map((w) => ({ w, v: toNumber(w.text.replace(/[^0-9.,]/g, "")) }))
+        .filter((c) => c.v != null && PHASE_COL_SANITY[col](c.v as number))
+        .sort((a, b) => Math.abs(cx(a.w) - center) - Math.abs(cx(b.w) - center));
+      if (cands.length) {
+        (row as any)[col] = mkField(cands[0].v, cands[0].w, page.page, `${L} ${col}: ${cands[0].w.text}`);
+        cellCount++;
+      }
+    };
+    for (const c of ["meanHR", "rangeHR", "FRF", "LFa", "RFa", "SB", "PP", "MAP"] as const) assignNum(c);
+
+    // Duration: mm:ss near the duration column (OCR often drops ":" → "0100").
+    if (colX.duration != null) {
+      const chosen = inRow
+        .filter((w) => Math.abs(cx(w) - colX.duration!) <= colTol)
+        .filter((w) => /^\d{1,2}[:.]?\d{2}$|^\d{3,4}$/.test(w.text.trim()))
+        .sort((a, b) => Math.abs(cx(a) - colX.duration!) - Math.abs(cx(b) - colX.duration!))[0];
+      if (chosen) {
+        const digits = chosen.text.replace(/\D/g, "");
+        if (digits.length === 3 || digits.length === 4) {
+          const mm = digits.slice(0, digits.length - 2);
+          const ss = digits.slice(-2);
+          if (parseInt(ss, 10) < 60) {
+            row.duration = mkField(`${mm.padStart(2, "0")}:${ss}`, chosen, page.page, `${L} duration: ${chosen.text}`) as VendorField<string>;
+            cellCount++;
+          }
+        }
+      }
+    }
+
+    // BP: "NN/NN" token near the BP column → split into SBP/DBP.
+    if (colX.BP != null) {
+      const bpTol = colTol + Math.round(40 * (page.width / 2860));
+      const bpTok = inRow
+        .filter((w) => Math.abs(cx(w) - colX.BP!) <= bpTol && /\d{2,3}\s*\/\s*\d{2,3}|\d{4,6}/.test(w.text))
+        .sort((a, b) => Math.abs(cx(a) - colX.BP!) - Math.abs(cx(b) - colX.BP!))[0];
+      if (bpTok) {
+        const t = bpTok.text.replace(/\s/g, "");
+        let sbp: number | null = null, dbp: number | null = null;
+        const slash = t.match(/(\d{2,3})\/(\d{2,3})/);
+        if (slash) {
+          sbp = toNumber(slash[1]); dbp = toNumber(slash[2]);
+        } else {
+          // OCR merged "92/55" → "9255" or "95750" (95/50 w/ stray). Only split a
+          // clean 4-digit token 2+2; anything else stays absent (never guessed).
+          const d = t.replace(/\D/g, "");
+          if (d.length === 4) { sbp = toNumber(d.slice(0, 2)); dbp = toNumber(d.slice(2)); }
+        }
+        if (sbp != null && dbp != null && sbp >= 60 && sbp <= 260 && dbp >= 30 && dbp <= 160) {
+          row.SBP = mkField(sbp, bpTok, page.page, `${L} SBP: ${bpTok.text}`) as VendorField<number>;
+          row.DBP = mkField(dbp, bpTok, page.page, `${L} DBP: ${bpTok.text}`) as VendorField<number>;
+          cellCount += 2;
+        }
+      }
+    }
+
+    rows.push(row);
+  }
+
+  return { rows, cellCount };
+}
+
+// --------------------------------------------------------------------------
 // main
 // --------------------------------------------------------------------------
 
@@ -263,9 +586,9 @@ export function parseVendorOcrPages(pages: OcrPage[]): VendorReportExtraction {
   // ---- Identity (top banner, present on every page) ----
   const identity: VendorIdentity = {
     patientName: strField(pages, text, /Patient:\s*([A-Za-z][A-Za-z ,.'-]{1,40}?)\s+Test Date/i),
-    testDate: strField(pages, text, /Test Date:\s*([0-9]{1,2}\/[0-9]{1,2}\/[0-9]{2,4})/i),
+    testDate: dateField(pages, text, /Test Date:\s*([0-9]{1,2}\s*\/\s*[0-9]{1,2}\s*\/\s*[0-9]{2,4})/i),
     physician: strField(pages, text, /Physician:\s*(Dr\.?\s*[A-Za-z][A-Za-z .'-]{1,40}?)(?:\n|Gender|Height|$)/i),
-    dob: strField(pages, text, /DOB:\s*([0-9]{1,2}\/[0-9]{1,2}\/[0-9]{2,4})/i),
+    dob: dateField(pages, text, /DOB:\s*([0-9]{1,2}\s*\/\s*[0-9]{1,2}\s*\/\s*[0-9]{2,4})/i),
     age: numField(pages, text, new RegExp(String.raw`Age:\s*${NUM}`, "i")),
     sex: strField(pages, text, /Gender:\s*(Male|Female)/i),
     heightText: strField(pages, text, /Height:\s*([0-9]{1,2}\s*ft\s*[0-9]{1,2}\s*in)/i),
@@ -360,7 +683,15 @@ export function parseVendorOcrPages(pages: OcrPage[]): VendorReportExtraction {
     notes.push("Report recognized but no fields could be read confidently (low OCR quality).");
   }
 
-  return { looksLikeVendorReport, identity, baseline, ratios, meanConfidence, fieldCount, notes };
+  // Per-phase A–F numerical summary (page 2, geometry-based). Absent cells stay
+  // null. Only included when at least one cell was read.
+  const phaseTable = parsePhaseTable(pages);
+  const phases = phaseTable.cellCount > 0 ? phaseTable : undefined;
+  if (phases) {
+    notes.push(`Per-phase numerical summary: ${phases.cellCount} cell(s) read across ${phases.rows.length} phase row(s).`);
+  }
+
+  return { looksLikeVendorReport, identity, baseline, ratios, phases, meanConfidence, fieldCount, notes };
 }
 
 /**

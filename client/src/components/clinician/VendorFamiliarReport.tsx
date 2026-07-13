@@ -21,7 +21,8 @@
  *     familiar and traceable.
  */
 import { motion } from "framer-motion";
-import type { VendorReportExtraction, VendorField } from "@shared/vendorExtraction";
+import type { VendorReportExtraction, VendorField, VendorPhaseTable, VendorPhaseRow } from "@shared/vendorExtraction";
+import { crossCheckTestDate } from "@shared/vendorExtraction";
 import {
   COLOMBO_NORMS,
   EWING_THRESHOLDS,
@@ -38,6 +39,12 @@ interface Props {
   /** Mean OCR page confidence 0..100 (scanned only). */
   ocrConfidence?: number;
   fileName?: string;
+  /**
+   * Authoritative test date from the paired .ans recording (LabVIEW timestamp /
+   * filename). When supplied it is PREFERRED for the header and cross-checked
+   * against the OCR-read date; a conflict is surfaced, never silently resolved.
+   */
+  trustedTestDate?: string | null;
 }
 
 const CYAN = "hsl(187 100% 50%)";
@@ -165,8 +172,13 @@ function SpectralRow({
   );
 }
 
-export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileName }: Props) {
+export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileName, trustedTestDate }: Props) {
   const { identity, baseline, ratios } = extraction;
+
+  // Test-date cross-check: prefer the .ans recording date for the header, keep
+  // the raw OCR value for audit, and surface a conflict rather than silently
+  // overwriting (defect B: OCR read 8/26 vs the true 9/26).
+  const dateCheck = crossCheckTestDate(identity.testDate.value, trustedTestDate);
 
   // Low/Normal/High label for a spectral value against its Colombo band ("" when
   // the value wasn't read). Collapses the class→label chain used per row.
@@ -225,7 +237,20 @@ export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileNa
       {/* Identity banner (clinical grammar of the vendor header) */}
       <div className="rounded-2xl border border-border/30 bg-card/40 px-4 py-3 grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1.5 text-xs">
         <Meta label="Patient" v={identity.patientName.value} />
-        <Meta label="Test Date" v={identity.testDate.value} />
+        <div data-testid="vendor-test-date">
+          <span className="text-muted-foreground/70">Test Date: </span>
+          <span className="text-foreground/90">{dateCheck.display ?? "—"}</span>
+          {dateCheck.conflict && (
+            <span
+              className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] uppercase tracking-wide align-middle"
+              style={{ background: "hsl(38 92% 55% / 0.16)", color: AMBER }}
+              title={dateCheck.note ?? ""}
+              data-testid="vendor-test-date-conflict"
+            >
+              scan read {dateCheck.ocr}
+            </span>
+          )}
+        </div>
         <Meta label="Physician" v={identity.physician.value} />
         <Meta label="Gender" v={identity.sex.value} />
         <Meta label="DOB" v={identity.dob.value} />
@@ -301,6 +326,11 @@ export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileNa
         </div>
       </section>
 
+      {/* Per-phase A–F Numerical Summary (page 2) — vendor's own table grammar */}
+      {extraction.phases && extraction.phases.rows.length > 0 && (
+        <PhaseSummaryTable table={extraction.phases} />
+      )}
+
       {/* Vendor legend / footnote grammar */}
       <p className="text-[10px] text-muted-foreground/70 leading-relaxed px-1">
         * RFa is a measure of parasympathetic activity and LFa a measure of sympathetic activity
@@ -308,6 +338,86 @@ export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileNa
         Indications, Therapies, and Outcomes.</em> Springer, 2014). Normal ranges per Colombo P&amp;S 4.0.
       </p>
     </motion.div>
+  );
+}
+
+/**
+ * Per-phase A–F Numerical Summary table (page 2). Renders the vendor's own grid:
+ * one row per phase, one column per measure. Every cell shows the vendor-reported
+ * value with a provenance tooltip, or an em dash for cells the scan could not
+ * resolve (never a guessed number). Mirrors the vendor's column order/labels.
+ */
+function PhaseSummaryTable({ table }: { table: VendorPhaseTable }) {
+  const cols: Array<{ key: keyof VendorPhaseRow; label: string; digits?: number }> = [
+    { key: "duration", label: "Duration" },
+    { key: "meanHR", label: "meanHR", digits: 0 },
+    { key: "rangeHR", label: "(max−min)HR", digits: 0 },
+    { key: "FRF", label: "FRF", digits: 2 },
+    { key: "LFa", label: "LFa*", digits: 2 },
+    { key: "RFa", label: "RFa*", digits: 2 },
+    { key: "SB", label: "LFa/RFa", digits: 2 },
+    { key: "SBP", label: "SBP", digits: 0 },
+    { key: "DBP", label: "DBP", digits: 0 },
+    { key: "PP", label: "PP", digits: 0 },
+    { key: "MAP", label: "MAP", digits: 0 },
+  ];
+  const cell = (row: VendorPhaseRow, key: keyof VendorPhaseRow, digits?: number) => {
+    const f = row[key] as VendorField<number | string>;
+    const read = f && f.value != null && f.provenance != null;
+    if (!read) {
+      return (
+        <td key={String(key)} className="px-2 py-1.5 text-center text-muted-foreground/50 italic" data-testid={`phase-${row.key}-${String(key)}-unread`}>
+          —
+        </td>
+      );
+    }
+    const conf = f.provenance!.confidence;
+    const display =
+      typeof f.value === "number" && digits != null ? (f.value as number).toFixed(digits) : String(f.value);
+    return (
+      <td
+        key={String(key)}
+        className="px-2 py-1.5 text-center tabular-nums"
+        data-testid={`phase-${row.key}-${String(key)}`}
+        title={`Vendor-reported · page ${f.provenance!.page} · confidence ${(conf * 100).toFixed(0)}%\nsource: "${f.provenance!.sourceText}"`}
+      >
+        <span>{display}</span>
+        <span className="inline-block ml-1 w-1 h-1 rounded-full align-middle" style={{ background: confColor(conf) }} aria-hidden />
+      </td>
+    );
+  };
+  return (
+    <section className="rounded-2xl border border-border/30 bg-card/40 p-4" data-testid="vendor-phase-table">
+      <h3 className="text-xs uppercase tracking-[0.15em] text-muted-foreground font-medium mb-1">
+        Numerical Summary — per phase (A–F)
+      </h3>
+      <p className="text-[10px] text-muted-foreground/70 mb-3">
+        Vendor-reported values from the page-2 summary grid. Cells the scan could not resolve
+        are shown as <span className="italic">—</span> (not read), never guessed.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px] border-collapse">
+          <thead>
+            <tr className="text-muted-foreground/80 border-b border-border/30">
+              <th className="px-2 py-1.5 text-left font-medium">Phase</th>
+              <th className="px-2 py-1.5 text-left font-medium">Event</th>
+              {cols.map((c) => (
+                <th key={String(c.key)} className="px-2 py-1.5 text-center font-medium">{c.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {table.rows.map((row) => (
+              <tr key={row.key} className="border-b border-border/15 last:border-0" data-testid={`phase-row-${row.key}`}>
+                <td className="px-2 py-1.5 font-semibold text-foreground/90">{row.key}</td>
+                <td className="px-2 py-1.5 text-foreground/80">{row.label || "—"}</td>
+                {cols.map((c) => cell(row, c.key, c.digits))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
