@@ -5,11 +5,7 @@
   "framework": null,
   "functions": {
     "api/**/*.ts": {
-      "memory": 256,
-      "maxDuration": 30
-    },
-    "api/upload-vendor.ts": {
-      "memory": 1536,
+      "memory": 1024,
       "maxDuration": 120
     }
   },
