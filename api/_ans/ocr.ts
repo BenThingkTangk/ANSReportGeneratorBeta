@@ -106,7 +106,14 @@ export async function rasterizePdf(
     if (pdfjs.GlobalWorkerOptions) {
       const { createRequire } = await import("node:module");
       const { pathToFileURL } = await import("node:url");
-      const req = createRequire(import.meta.url);
+      // Anchor createRequire on a real path. import.meta.url can be undefined when
+      // this module is bundled to CJS (e.g. by @vercel/node), so fall back to the
+      // current working directory instead of throwing.
+      const anchor =
+        typeof import.meta !== "undefined" && import.meta.url
+          ? import.meta.url
+          : pathToFileURL(`${process.cwd()}/index.js`).href;
+      const req = createRequire(anchor);
       const workerPath = req.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
       pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
     }
