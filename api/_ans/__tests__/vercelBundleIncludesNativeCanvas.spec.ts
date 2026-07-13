@@ -32,12 +32,63 @@
  * this test fails BEFORE a deploy can reintroduce the "not installed" outage.
  */
 import { describe, it, expect, beforeAll } from "vitest";
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import { glob } from "@vercel/build-utils";
+import { minimatch } from "minimatch";
 
 const ROOT = process.cwd();
 const FN = "api/upload-vendor.ts";
+
+function readFunctionsConfig(): Record<string, any> {
+  const cfg = JSON.parse(readFileSync(join(ROOT, "vercel.json"), "utf8"));
+  expect(cfg.functions, "vercel.json must define a `functions` map").toBeTruthy();
+  return cfg.functions;
+}
+
+/** Enumerate the Serverless Functions Vercel would detect in api/ — every
+ *  `.ts`/`.tsx`/`.js`/`.mjs` file NOT under a `_`-prefixed segment and NOT a
+ *  test. Mirrors @vercel/static-build's `api/**` runtime match. */
+function detectApiFunctions(): string[] {
+  const out: string[] = [];
+  const apiDir = join(ROOT, "api");
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      const rel = relative(ROOT, full).split("\\").join("/");
+      if (statSync(full).isDirectory()) {
+        if (name === "__tests__" || name === "node_modules") continue;
+        walk(full);
+        continue;
+      }
+      if (!/\.(ts|tsx|js|mjs)$/.test(name)) continue;
+      if (name.endsWith(".d.ts")) continue;
+      // Vercel treats files/segments starting with `_` as non-routable helpers.
+      if (rel.split("/").some((seg) => seg.startsWith("_"))) continue;
+      out.push(rel);
+    }
+  };
+  walk(apiDir);
+  return out.sort();
+}
+
+/**
+ * Faithful reproduction of @vercel/static-build's function-pattern validation
+ * (the check that rejected the previous config with "The pattern
+ * 'api/upload-vendor.ts' ... doesn't match any Serverless Functions inside the
+ * api directory"). For each detected function file, `getFunction` picks the
+ * FIRST `functions` key (in object order) that matches via minimatch; any key
+ * that is never the first match for any file is "unused" and fails the deploy.
+ */
+function unusedFunctionPatterns(functions: Record<string, any>, apiFiles: string[]): string[] {
+  const keys = Object.keys(functions);
+  const used = new Set<string>();
+  for (const file of apiFiles) {
+    const k = keys.find((key) => key === file || minimatch(file, key));
+    if (k) used.add(k);
+  }
+  return keys.filter((k) => !used.has(k));
+}
 
 function readIncludeGlobs(): string[] {
   const cfg = JSON.parse(readFileSync(join(ROOT, "vercel.json"), "utf8"));
@@ -60,6 +111,57 @@ async function packagedFiles(): Promise<string[]> {
   }
   return [...all];
 }
+
+describe("Vercel functions config — accepted shape (no unused-pattern rejection)", () => {
+  let functions: Record<string, any>;
+  let apiFiles: string[];
+
+  beforeAll(() => {
+    functions = readFunctionsConfig();
+    apiFiles = detectApiFunctions();
+  });
+
+  it("detects api/upload-vendor.ts as a real Serverless Function", () => {
+    expect(apiFiles).toContain(FN);
+  });
+
+  it("every `functions` pattern matches at least one function (Vercel CLI 55 gate)", () => {
+    // This is the exact validation that rejected the prior config before build:
+    //   Error: The pattern "api/upload-vendor.ts" defined in `functions`
+    //   doesn't match any Serverless Functions inside the `api` directory.
+    const unused = unusedFunctionPatterns(functions, apiFiles);
+    expect(
+      unused,
+      `these functions patterns match no api function (Vercel will reject the deploy): ${unused.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("upload-vendor's specific pattern is ordered before the broad api/**/*.ts", () => {
+    // getFunction picks the FIRST matching key, so the specific override must
+    // precede the catch-all or upload-vendor's includeFiles would never apply
+    // AND the specific key would be flagged unused.
+    const keys = Object.keys(functions);
+    const specificIdx = keys.indexOf(FN);
+    const broadIdx = keys.findIndex((k) => k === "api/**/*.ts");
+    expect(specificIdx, `${FN} must be a functions key`).toBeGreaterThanOrEqual(0);
+    if (broadIdx >= 0) {
+      expect(specificIdx).toBeLessThan(broadIdx);
+    }
+  });
+
+  it("upload-vendor is the config Vercel resolves for that file (first match wins)", () => {
+    const keys = Object.keys(functions);
+    const chosen = keys.find((key) => key === FN || minimatch(FN, key));
+    expect(chosen).toBe(FN);
+    expect(functions[FN].includeFiles, "resolved config must carry includeFiles").toBeTruthy();
+  });
+
+  it("includeFiles is a single string (Vercel per-function schema requires string)", () => {
+    // @vercel/static-build validateFunctions: includeFiles must be a string.
+    expect(typeof functions[FN].includeFiles).toBe("string");
+    expect((functions[FN].includeFiles as string).length).toBeLessThanOrEqual(256);
+  });
+});
 
 describe("Vercel packaging — /api/upload-vendor bundles the native OCR runtime", () => {
   let files: string[] = [];
