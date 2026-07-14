@@ -31,9 +31,18 @@ const EXPLAINERS: Record<string, { title: string; whatItIs: string; everyday: st
   },
   PE_REST: {
     title: "Parasympathetic Excess at Rest",
-    whatItIs: "Your 'rest and digest' system is overactive when sitting quietly.",
-    everyday: "Low blood pressure, low mood, sluggish digestion, slow heart rate.",
-    doNow: ["Aerobic exercise (low intensity)", "Cold exposure (face, shower)", "Adequate sleep", "Limit sedatives"],
+    whatItIs: "Your 'rest and digest' system shows genuinely high activity when sitting quietly (measured vagal activity above the normal range).",
+    everyday: "Findings on this pattern should be interpreted with your symptoms and history by a clinician.",
+    doNow: ["Discuss these findings with a licensed clinician", "Bring the signed vendor report to your visit"],
+    icon: ShieldCheck,
+  },
+  RPD_REST: {
+    title: "Relative Parasympathetic Dominance at Rest",
+    whatItIs:
+      "Your sympathovagal balance is low, but this reflects reduced sympathetic (‘fight-or-flight’) modulation with normal ‘rest and digest’ activity — not an excess of the rest-and-digest system.",
+    everyday:
+      "This is a measurement pattern, not a diagnosis. Its meaning for you depends on your symptoms and history and should be reviewed by a clinician.",
+    doNow: ["Discuss these findings with a licensed clinician", "Bring the signed vendor report to your visit"],
     icon: ShieldCheck,
   },
   SE_REST: {
@@ -263,11 +272,14 @@ export function DiagnosisExplainer({ report }: DiagnosisExplainerProps) {
                   <p className="text-xs leading-relaxed text-foreground/85">{expl.whatItIs}</p>
                 </div>
                 <div>
-                  <div className="ps-overline mb-1" style={{ color: "hsl(185 80% 70%)" }}>In daily life</div>
+                  <div className="ps-overline mb-1" style={{ color: "hsl(185 80% 70%)" }}>Possible associations (not your reported symptoms)</div>
                   <p className="text-xs leading-relaxed text-foreground/85">{expl.everyday}</p>
+                  <p className="text-[10px] leading-relaxed text-muted-foreground/70 mt-1">
+                    This describes patterns sometimes associated with the finding — not symptoms this test recorded about you. Share your own symptoms with your clinician.
+                  </p>
                 </div>
                 <div>
-                  <div className="ps-overline mb-1.5" style={{ color: "hsl(185 80% 70%)" }}>What you can do</div>
+                  <div className="ps-overline mb-1.5" style={{ color: "hsl(185 80% 70%)" }}>To discuss with your clinician</div>
                   <ul className="space-y-1">
                     {expl.doNow.map((d, di) => (
                       <li key={di} className="text-xs flex items-start gap-2 text-foreground/85">

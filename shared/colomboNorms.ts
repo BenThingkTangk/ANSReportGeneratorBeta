@@ -178,3 +178,43 @@ export function sbZoneLabel(sb: number): string {
 export function sbIsBalanced(sb: number): boolean {
   return sbZone(sb) === "target";
 }
+
+// ---------------------------------------------------------------------------
+// Low sympathovagal balance (SB < 0.4) — WHAT DRIVES IT
+// ---------------------------------------------------------------------------
+
+export type LowSbDriver =
+  | "parasympathetic-excess" // RFa genuinely elevated above the normal band
+  | "reduced-sympathetic"    // RFa normal; low ratio driven by low / low-normal LFa
+  | "mixed"                  // RFa high AND LFa low (both contribute)
+  | "indeterminate";         // insufficient data to attribute
+
+/**
+ * Attribute a LOW sympathovagal balance (SB = LFa/RFa < 0.4) to its physiological
+ * driver, GENERICALLY from the raw spectral values (no patient hardcoding).
+ *
+ * A low ratio is NOT synonymous with parasympathetic *excess*: when RFa sits
+ * within its normal band and the ratio is low only because LFa is low or
+ * low-normal, the correct description is a RELATIVE parasympathetic dominance /
+ * REDUCED SYMPATHETIC MODULATION — not "parasympathetic excess" (and certainly
+ * not "parasympathetic withdrawal", which requires a fall in RFa). Only a
+ * genuinely elevated RFa (> normal high) supports true parasympathetic excess.
+ *
+ * @param lfa resting LFa (bpm²), @param rfa resting RFa (bpm²)
+ */
+export function classifyLowSbDriver(
+  lfa: number | null | undefined,
+  rfa: number | null | undefined,
+): LowSbDriver {
+  if (rfa == null || !Number.isFinite(rfa)) return "indeterminate";
+  const rfaHigh = rfa > COLOMBO_NORMS.RFa.hi;
+  // "Low / low-normal" LFa: below the normal band, or in the bottom of it
+  // (≤ 1.5 bpm² i.e. bottom ~10% of the 0.5–10 band) so a borderline-low LFa
+  // that drags the ratio down is attributed to reduced sympathetic modulation.
+  const lfaLowish =
+    lfa != null && Number.isFinite(lfa) && lfa < Math.max(COLOMBO_NORMS.LFa.lo, 1.5);
+  if (rfaHigh && lfaLowish) return "mixed";
+  if (rfaHigh) return "parasympathetic-excess";
+  // RFa normal (not elevated): the low ratio is a reduced-sympathetic pattern.
+  return "reduced-sympathetic";
+}

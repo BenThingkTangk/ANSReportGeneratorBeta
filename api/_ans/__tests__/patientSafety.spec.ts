@@ -2,7 +2,8 @@
  * Safety tests:
  *  - S2-7 / S4-2: every indication code emitted by shared/indications.ts has an
  *    authored patient explainer, and the patient card never prints a raw code.
- *  - S1-1: ALA is gated to contraindications when baseline SBP is low.
+ *  - S1-1 (superseded): the tool emits no individualized supplement/medication
+ *    dosing from an uploaded test alone — only non-prescriptive discussion topics.
  *
  * These are source-level invariants so they stay green regardless of which
  * specific patient/file is processed (generic guarantees, not fixtures).
@@ -84,23 +85,29 @@ describe("patient explainer coverage (S2-7 / S4-2)", () => {
   });
 });
 
-describe("ALA contraindication gating (S1-1)", () => {
+describe("Non-prescriptive treatment output (S1-1, superseded)", () => {
+  // SUPERSEDED: the tool no longer emits individualized supplement/medication
+  // dosing (previously ALA 600 mg TID, gated by baseline BP). An uploaded test
+  // alone must not prescribe. The therapy generator now emits DISCUSSION TOPICS
+  // with NO dose and an explicit licensed-clinician requirement.
   const src = read("api/upload.ts");
 
-  it("ALA is pushed to contraindications when baseline SBP is low", () => {
-    // The gate must compare a baseline systolic BP against a low threshold and
-    // route to contraindications rather than therapies.
-    expect(src).toMatch(/baselineSBP\s*<\s*95/);
-    expect(src).toMatch(/contraindications\.push\([^)]*Alpha-Lipoic Acid/);
+  it("does not emit an ALA dosage or a '600 mg' prescription", () => {
+    expect(src).not.toMatch(/600\s*mg\s*three times daily/i);
+    expect(src).not.toMatch(/intervention:\s*"Alpha-Lipoic Acid \(ALA\)"/);
   });
 
-  it("ALA is only offered as a therapy in the else branch (adequate BP)", () => {
-    // Ensure the therapy push for ALA sits after the low-BP contraindication
-    // branch (i.e. it is gated, not unconditional).
-    const contraIdx = src.indexOf("Alpha-Lipoic Acid (ALA) is contraindicated");
-    const therapyIdx = src.indexOf('intervention: "Alpha-Lipoic Acid (ALA)"');
-    expect(contraIdx).toBeGreaterThan(-1);
-    expect(therapyIdx).toBeGreaterThan(-1);
-    expect(therapyIdx).toBeGreaterThan(contraIdx);
+  it("therapy items in the generator carry no `dose:` field", () => {
+    // Scope to the therapy-generation region (after the therapies array is
+    // declared) so an unrelated `dose` string elsewhere can't mask a regression.
+    const start = src.indexOf("const therapies: TherapyRecommendation[] = []");
+    const end = src.indexOf("// Follow-up", start);
+    const region = src.slice(start, end > start ? end : undefined);
+    expect(region.length).toBeGreaterThan(0);
+    expect(region).not.toMatch(/\n\s*dose:\s*"/);
+  });
+
+  it("therapy rationales require a licensed clinician", () => {
+    expect(src).toMatch(/licensed clinician/i);
   });
 });

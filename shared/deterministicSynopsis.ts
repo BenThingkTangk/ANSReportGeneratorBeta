@@ -301,21 +301,17 @@ export function buildPatientSynopsis(report: Partial<ANSReport>): string {
     );
   }
 
-  // 3. Everyday meaning — tie to symptoms people feel.
-  const meaning: string[] = [];
-  if (report.dysfunctionPatterns?.parasympatheticExcess)
-    meaning.push("low energy or a foggy, sluggish feeling");
-  if (
-    report.dysfunctionPatterns?.sympatheticWithdrawal ||
-    report.dysfunctionPatterns?.orthostaticHypotension ||
-    report.dysfunctionPatterns?.POTS
-  )
-    meaning.push("dizziness or a racing heart when you stand up");
-  if (report.dysfunctionPatterns?.sympatheticExcess)
-    meaning.push("feeling wired, tense, or having trouble winding down at night");
-  if (meaning.length > 0) {
+  // 3. What to do with the findings — WITHOUT asserting symptoms the test did
+  // not capture. Prior versions stated specific daily-life symptoms ("low
+  // energy", "foggy, sluggish feeling", "dizziness…") tied to a pattern; those
+  // are unsupported unless the patient actually reported them, so we no longer
+  // assert them. Instead we invite the patient to share their own symptoms.
+  const flaggedAny =
+    !!report.dysfunctionPatterns &&
+    Object.values(report.dysfunctionPatterns).some((v) => v === true);
+  if (flaggedAny) {
     sentences.push(
-      `In day-to-day life this can show up as ${humanList(meaning)}. If that sounds familiar, it is worth mentioning to your doctor.`,
+      "These are measurement patterns, not a diagnosis, and this test did not record how you feel day to day. If you have symptoms, share them with your clinician so the findings can be interpreted in your context.",
     );
   }
 

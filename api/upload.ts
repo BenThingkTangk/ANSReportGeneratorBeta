@@ -8,6 +8,7 @@ import {
   classifyEwing,
   ewingNormalRangeLabel,
   COLOMBO_NORMS,
+  classifyLowSbDriver,
 } from "../shared/colomboNorms.js";
 import {
   computedProvenance,
@@ -1833,11 +1834,23 @@ function detectIndicationsLocal(
       severity: "high" });
   }
 
-  // Resting PE: SB < 0.4
+  // Resting low SB: SB < 0.4 — classified by WHAT DRIVES IT (see colomboNorms
+  // classifyLowSbDriver). True parasympathetic excess ONLY when RFa is elevated;
+  // otherwise a low/low-normal LFa drives the ratio → relative parasympathetic
+  // dominance / reduced sympathetic modulation (never "excess", never "withdrawal").
   if (restingSb != null && restingSb < 0.4 && !has("CAN_LOW_SB")) {
-    out.push({ code: "PE_REST", name: "Resting Parasympathetic Excess (PE)",
-      description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest. Associated with depression, fatigue, exercise intolerance, GI motility issues.`,
-      severity: "moderate" });
+    const driver = classifyLowSbDriver(restingLfa, restingRfa);
+    if (driver === "parasympathetic-excess" || driver === "mixed") {
+      out.push({ code: "PE_REST", name: "Resting Parasympathetic Excess (PE)",
+        description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest with elevated RFa ${restingRfa!.toFixed(2)} bpm² (> ${COLOMBO_NORMS.RFa.hi}). Parasympathetic (vagal) activity is genuinely high.`,
+        severity: "moderate" });
+    } else {
+      const lfaNote = restingLfa != null ? ` LFa ${restingLfa.toFixed(2)} bpm² is low/low-normal` : " sympathetic modulation is reduced";
+      const rfaNote = restingRfa != null ? `, RFa ${restingRfa.toFixed(2)} bpm² is within normal limits` : "";
+      out.push({ code: "RPD_REST", name: "Relative Parasympathetic Dominance (reduced sympathetic modulation)",
+        description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest:${lfaNote}${rfaNote}. The low ratio reflects reduced sympathetic modulation, not parasympathetic excess. Clinician review of the vendor report is advised.`,
+        severity: "moderate" });
+    }
   }
 
   // AAN: LFa in [0.1, 0.5) OR RFa < 0.5
@@ -2217,7 +2230,15 @@ export function generateColomboReport(
     if (rfaA.severity === "Normal") baselineFindings.push("Normal parasympathetic modulation (RFa)");
     else baselineFindings.push(`${rfaA.label} parasympathetic modulation (RFa)`);
     if (parasympatheticDominance) {
-      baselineFindings.push("Low sympathovagal balance (SB = LFa/RFa) suggesting possible parasympathetic dominance. This may be associated with fatigue, exercise intolerance, depression, poor circulation, and frequent headaches or migraines.");
+      // Describe the low ratio by its driver (generic) — reduced sympathetic
+      // modulation vs genuine parasympathetic excess — WITHOUT asserting
+      // unsupported daily-life symptoms (those require captured symptoms).
+      const driver = classifyLowSbDriver(A.LFa as number, A.RFa as number);
+      baselineFindings.push(
+        driver === "parasympathetic-excess" || driver === "mixed"
+          ? "Low sympathovagal balance (SB = LFa/RFa) with elevated RFa — genuinely high parasympathetic (vagal) activity. Interpret with the patient's symptoms and history."
+          : "Low sympathovagal balance (SB = LFa/RFa) driven by low/low-normal LFa with normal RFa — a relative parasympathetic dominance (reduced sympathetic modulation), not parasympathetic excess. Interpret with the patient's symptoms and history.",
+      );
     }
   } else {
     baselineFindings.push("Sympathetic/parasympathetic spectral measures (LFa/RFa/SB) not assessed — not reproducible from this recording. Clinician review of the vendor report is required for spectral interpretation.");
@@ -2308,112 +2329,108 @@ export function generateColomboReport(
   else if (abnormalChallengeCount === 2) overall = "Abnormal responses to multiple autonomic challenges suggest moderate autonomic dysfunction.";
   else overall = "Abnormal responses across all autonomic challenges suggest advanced autonomic dysfunction.";
 
-  // Therapy gating — Colombo 4.0 protocol from Jill's PDF
+  // Clinician DISCUSSION TOPICS — NON-PRESCRIPTIVE.
+  //
+  // SAFETY: this tool must NOT emit automatic, individualized medication or
+  // supplement recommendations with dosages from an uploaded test alone (that
+  // would be prescribing without a licensed clinician). We therefore surface
+  // pattern-relevant TOPICS a clinician may consider, with NO dose/frequency and
+  // NO "take this" framing. Every card states that any therapy requires a
+  // licensed clinician's assessment. Named agents/classes appear only as
+  // "topics a clinician may discuss", never as instructions to the patient.
   const therapies: TherapyRecommendation[] = [];
   const contraindications: string[] = [];
 
-  // HARD SAFETY GATE: every pharmacological / supplement / salt recommendation
-  // below depends on the spectral (LFa/RFa/SB) and/or BP measures. When those
-  // are not assessed we must NOT recommend ALA, salt, Nortriptyline, Midodrine,
-  // etc. Emit an explicit "insufficient data / clinician review" card instead.
-  const canRecommendTreatment = spectralAvailable; // BP-only therapies also require spectral context here
-  if (!canRecommendTreatment) {
+  const CLINICIAN_ONLY = "Any therapy — including supplements, lifestyle programs, and medications — requires assessment and a prescription/plan from a licensed clinician who has reviewed the full history. This report does not prescribe or recommend a dose.";
+
+  // Still gate on spectral availability: when spectral/BP are not assessable we
+  // cannot even suggest relevant topics tied to those measures.
+  const canDiscussTopics = spectralAvailable;
+  if (!canDiscussTopics) {
     therapies.push({
-      category: "Monitoring",
-      intervention: "Insufficient data for treatment recommendations — clinician review required",
-      rationale: "The proprietary spectral measures (sympathetic LFa, parasympathetic RFa, sympathovagal balance SB) and continuous blood pressure were not assessable from this recording. No supplement (e.g. Alpha-Lipoic Acid), salt/fluid, or pharmacological recommendation can be made without them. A qualified clinician should review the signed vendor report before any therapy is considered.",
+      category: "Clinician review",
+      intervention: "Insufficient data for treatment topics — clinician review required",
+      rationale:
+        "The proprietary spectral measures (LFa/RFa/SB) and continuous blood pressure were not assessable from this recording, so no autonomic pattern can be characterized here. " +
+        CLINICIAN_ONLY,
       priority: "primary",
     });
   }
 
-  // Parasympathetic Excess on stand/Valsalva → Nortriptyline / Amitriptyline / Duloxetine
-  if (canRecommendTreatment && parasympatheticExcess) {
+  // Genuine parasympathetic excess (RFa elevated) — discussion topic only.
+  if (canDiscussTopics && parasympatheticExcess) {
     therapies.push({
-      category: "Pharmacological",
-      intervention: "Low-dose Nortriptyline or Amitriptyline",
-      dose: "10–12 mg with dinner, titrate up to moderate dose",
-      rationale: "Anti-cholinergic effect at low dose treats Parasympathetic Excess (PE) on stand. May improve sleep, reduce headache and pain.",
-      contraindications: ["If cardiovascular disease, start with Carvedilol instead"],
-      priority: "primary",
-    });
-    therapies.push({
-      category: "Pharmacological",
-      intervention: "Add-on: Low-dose Carvedilol",
-      dose: "3.125 mg twice daily",
-      rationale: "If additional therapy is required (instead of titrating Nortriptyline to high dose). Preferred first-line if patient has cardiovascular disease, CAN, high sympathovagal balance, or is geriatric.",
-      priority: "secondary",
-    });
-  }
-
-  // Parasympathetic dominance at baseline (low SB)
-  if (canRecommendTreatment && parasympatheticDominance) {
-    therapies.push({
-      category: "Therapeutic Target",
-      intervention: "Restore sympathovagal balance (target SB 1.0 – 2.0)",
-      rationale: "Low Normal SB (0.4 < SB < 1.0) may be too low for non-geriatric adults. Lifestyle changes, medications, or other therapies may help raise SB.",
+      category: "Discussion topic",
+      intervention: "Discuss parasympathetic-excess management with your clinician",
+      rationale:
+        "The standing spectral pattern is consistent with elevated parasympathetic activity. A clinician may discuss options (which can include lifestyle measures or, at their discretion, medication). " +
+        CLINICIAN_ONLY,
       priority: "primary",
     });
   }
 
-  // ALA (Alpha-Lipoic Acid) — Colombo protocol candidate for any autonomic
-  // dysfunction (PE, PW, SE, SW, AAD). Gated strictly by baseline BP.
-  const baselineSBP = data.baselineSystolicBP ?? 120;
-  const alaCandidate = canRecommendTreatment && (advancedAutonomicDysfunction || parasympatheticWithdrawal
+  // Low sympathovagal balance at rest (relative parasympathetic dominance) —
+  // discussion topic only, no target-and-medicate instruction.
+  if (canDiscussTopics && parasympatheticDominance) {
+    therapies.push({
+      category: "Discussion topic",
+      intervention: "Discuss the low resting sympathovagal balance with your clinician",
+      rationale:
+        "Resting sympathovagal balance is below the usual range, reflecting reduced sympathetic modulation rather than parasympathetic excess. Whether anything should be done, and what, is a clinical decision. " +
+        CLINICIAN_ONLY,
+      priority: "primary",
+    });
+  }
+
+  // Neuroprotective / antioxidant discussion (e.g. alpha-lipoic acid) — TOPIC
+  // ONLY, NO DOSE. Named as something a clinician may discuss for autonomic
+  // findings; explicitly not a recommendation or dosage from this tool.
+  const neuroTopicCandidate = canDiscussTopics && (advancedAutonomicDysfunction || parasympatheticWithdrawal
     || parasympatheticExcess || sympatheticWithdrawal || sympatheticExcess
     || parasympatheticDominance);
-  if (alaCandidate) {
-    if (baselineSBP < 95) {
-      contraindications.push("Alpha-Lipoic Acid (ALA) is contraindicated due to low baseline blood pressure [Magidenko 2007; NutritionalReviews.org 2007]");
-    } else {
-      therapies.push({
-        category: "Neuroprotective",
-        intervention: "Alpha-Lipoic Acid (ALA)",
-        dose: "600 mg three times daily (time-release)",
-        rationale: "Non-prescription antioxidant specific for nerves. Slows progression of autonomic neuropathy and helps restore autonomic balance [Prendergast 2001].",
-        priority: "primary",
-      });
-    }
-  }
-
-  // Hydration + salt protocol (POTS / orthostatic / syncope)
-  if (canRecommendTreatment && (POTS || orthostaticHypotension || preSyncopeRisk || vasovagalRisk)) {
+  if (neuroTopicCandidate) {
     therapies.push({
-      category: "Lifestyle",
-      intervention: "Hydration + salt protocol",
-      dose: "6–8 glasses of water daily; 1 tbsp salt in 64 oz of water; reduce caffeine, sugar, alcohol",
-      rationale: "Expands blood volume, reduces orthostatic symptoms, supports baroreceptor function.",
-      priority: "primary",
-    });
-  }
-
-  // Low-and-slow exercise (PE or SE)
-  if (canRecommendTreatment && (parasympatheticExcess || sympatheticExcess)) {
-    therapies.push({
-      category: "Exercise",
-      intervention: "Low-and-Slow Exercise Protocol",
-      dose: "40 contiguous minutes/day of zero-impact cardio (walking ≤ 2 mph or easy cycling), for ≥ 6 months",
-      rationale: "Retrains autonomic nervous system to react normally to stresses without exacerbating PE/SE.",
+      category: "Discussion topic",
+      intervention: "Ask your clinician whether neuroprotective/antioxidant support is appropriate",
+      rationale:
+        "For autonomic findings, some clinicians discuss neuroprotective/antioxidant approaches (e.g. alpha-lipoic acid). Appropriateness, product, and dose — if any — are decisions for a licensed clinician who has reviewed your history and blood pressure. " +
+        CLINICIAN_ONLY,
       priority: "secondary",
     });
   }
 
-  // Midodrine / Droxidopa for SW
-  if (canRecommendTreatment && sympatheticWithdrawal && !parasympatheticExcess) {
+  // Orthostatic-symptom lifestyle discussion (hydration / salt) — TOPIC ONLY,
+  // NO DOSE. Only when an orthostatic/syncope pattern is genuinely present.
+  if (canDiscussTopics && (POTS || orthostaticHypotension || preSyncopeRisk || vasovagalRisk)) {
     therapies.push({
-      category: "Pharmacological",
-      intervention: "Midodrine",
-      dose: "2.5 mg TID (time release), increase to 5 mg then 10 mg if needed",
-      rationale: "Alpha-agonist vasoconstrictor addresses Sympathetic Withdrawal (SW) — raises BP and reduces orthostatic symptoms.",
+      category: "Discussion topic",
+      intervention: "Discuss orthostatic-symptom strategies with your clinician",
+      rationale:
+        "The pattern can be associated with orthostatic symptoms. Fluid/salt and other measures are sometimes discussed, but the plan (and any limits, e.g. blood pressure or cardiac/renal considerations) must come from a licensed clinician. " +
+        CLINICIAN_ONLY,
       priority: "primary",
     });
   }
 
-  // Default when nothing flags
+  // Graded-activity discussion (PE or SE) — TOPIC ONLY, NO PRESCRIPTION.
+  if (canDiscussTopics && (parasympatheticExcess || sympatheticExcess)) {
+    therapies.push({
+      category: "Discussion topic",
+      intervention: "Discuss a graded, low-intensity activity plan with your clinician",
+      rationale:
+        "Gentle graded activity is sometimes used to help retrain autonomic responses. Any program should be designed with a licensed clinician appropriate to your fitness and symptoms. " +
+        CLINICIAN_ONLY,
+      priority: "secondary",
+    });
+  }
+
+  // Default when nothing flags.
   if (therapies.length === 0) {
     therapies.push({
       category: "Monitoring",
-      intervention: "No specific therapy recommended at this time",
-      rationale: "All findings within acceptable ranges. Continue current lifestyle. The data must be interpreted by a qualified medical professional.",
+      intervention: "No specific concern flagged from this test",
+      rationale:
+        "No pattern above required a discussion topic. Continue routine care. " + CLINICIAN_ONLY,
       priority: "optional",
     });
   }
