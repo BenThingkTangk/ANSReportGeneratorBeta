@@ -113,3 +113,50 @@ describe("Hypothesis consistency — low SB with normal RFa", () => {
     expect(report.ratios?.eiRatio?.classification?.severity).toBeTruthy();
   });
 });
+
+describe("Rendered full-report — banned strings (normal-RFa / low-SB paired case)", () => {
+  // The whole report object + the patient synopsis together approximate what both
+  // the patient and clinician tabs render. None of the live-QA banned strings may
+  // appear anywhere for this normal-RFa + low-SB paired case.
+  const report = jillLikeReport();
+  const blob = JSON.stringify(report) + " " + buildPatientSynopsis(report as any);
+
+  const BANNED = [
+    // (2) hero excess/intensity + symptom framing
+    "prolonged 'rest and digest' state",
+    "prolonged rest and digest",
+    "low exercise tolerance",
+    "associated with fatigue",
+    // (2)/(1) mislabel
+    "Parasympathetic Excess at Rest",
+    "Parasympathetic-dominant. Your nervous system",
+    // (3) unvalidated slow-HR claim
+    "slow resting heart rate",
+    // (4) watch items from normal / unread / uncaptured fields
+    "Parasympathetic activity (RFa) normalization",
+    "should return to 0.09",
+    "Symptom improvement (fatigue",
+  ];
+
+  for (const s of BANNED) {
+    it(`does not contain: "${s}"`, () => {
+      expect(blob.includes(s), `banned string present: "${s}"`).toBe(false);
+    });
+  }
+
+  it("watch items (monitorParameters) contain no normal-RFa, unread-FRF, or symptom lines", () => {
+    const mp = (report.followUp?.monitorParameters ?? []).join(" | ");
+    expect(mp).not.toMatch(/RFa\)\s*normalization/i);
+    expect(mp).not.toMatch(/FRF/i); // FRF was not read for this case
+    expect(mp).not.toMatch(/symptom/i);
+    expect(mp).not.toMatch(/fatigue|dizziness|headache/i);
+  });
+
+  it("hero balance interpretation uses reduced-sympathetic / relative-dominance language", () => {
+    const interp = report.autonomicBalance?.interpretation ?? "";
+    expect(interp).toMatch(/relative parasympathetic dominance|reduced sympathetic modulation/i);
+    // "excess" may appear only to NEGATE it ("not an excess"); never as a claim.
+    expect(interp).not.toMatch(/(?<!not an )excess/i);
+    expect(interp).not.toMatch(/fatigue|exercise tolerance/i);
+  });
+});

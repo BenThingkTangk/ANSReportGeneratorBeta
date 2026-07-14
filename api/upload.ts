@@ -3,6 +3,7 @@ import { parseStudy } from "./_ans/parseStudy.js";
 import { ansStudyToLegacy } from "./_ans/legacyAdapter.js";
 import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
 import { reconcileStudyWithReport } from "./_ans/reconcileStudy.js";
+import { reconcilePhenotypesWithVendor } from "./_ans/reconcilePhenotypesWithVendor.js";
 import {
   EWING_THRESHOLDS,
   classifyEwing,
@@ -2160,7 +2161,13 @@ export function generateColomboReport(
   const LFa_n = norm("LFa", age);
 
   // HR-only patterns are always supported (ECG-derived, consensus tier).
-  const bradycardia = A.meanHR > 0 && A.meanHR < HR_n.lo;
+  // Bradycardia uses a VALIDATED clinical threshold (resting HR < 50 bpm), not
+  // the P10 normative band. The percentile floor (~56 at age 60) mislabeled a
+  // vendor-"Normal" resting HR of 56 as "slow"; a resting HR in the 50–60 range
+  // is within normal limits and must not be called bradycardia. Aligns with the
+  // < 50 cutoff already used by the syncope-risk indications.
+  const BRADYCARDIA_BPM = 50;
+  const bradycardia = A.meanHR > 0 && A.meanHR < BRADYCARDIA_BPM;
   const hrDelta = F.meanHR - A.meanHR;
   const POTS = A.meanHR > 0 && hrDelta >= 30;
   // FRF norm band is the single source of truth (Colombo 0.09–0.15 Hz). FRF is
@@ -2467,16 +2474,30 @@ export function generateColomboReport(
     (parasympatheticDominance && bradycardia) ? "Low" :
     (parasympatheticExcess || sympatheticExcess) ? "Moderate" : "High";
 
+  // Driver-aware balance interpretation. A low SB with normal RFa reflects
+  // REDUCED SYMPATHETIC MODULATION (relative parasympathetic dominance), not a
+  // "prolonged rest-and-digest state" and not an excess — and it asserts NO
+  // symptoms (those require captured symptoms).
+  const balanceInterpretation = (): string => {
+    if (parasympatheticDominance) {
+      const driver = classifyLowSbDriver(A.LFa as number, A.RFa as number);
+      if (driver === "parasympathetic-excess" || driver === "mixed") {
+        return "Relatively parasympathetic-leaning balance with genuinely elevated parasympathetic (vagal) activity. This is a measurement pattern — discuss its meaning with your clinician.";
+      }
+      return "Relative parasympathetic dominance: the low sympathovagal balance reflects reduced sympathetic modulation, with parasympathetic (vagal) activity within normal limits. This is a measurement pattern, not an excess — discuss its meaning with your clinician.";
+    }
+    if (parasympatheticExcess) {
+      return "Parasympathetic activity rose on standing when it would normally step down. This is a measurement pattern — discuss its meaning with your clinician.";
+    }
+    return "Balanced sympathovagal tone.";
+  };
   const autonomicBalance = spectralAvailable
     ? {
         parasympathetic: A.RFa as number,
         sympathetic: A.LFa as number,
         balance: A.SB as number,
         available: true,
-        interpretation: parasympatheticDominance
-          ? "Parasympathetic-dominant. Your nervous system is in a prolonged 'rest and digest' state, which at this intensity is associated with fatigue and low exercise tolerance."
-          : parasympatheticExcess ? "Parasympathetic Excess on standing — your vagal tone spikes when it should step down, which can cause unstable blood pressure and dizziness."
-          : "Balanced sympathovagal tone.",
+        interpretation: balanceInterpretation(),
       }
     : {
         // Never coerce missing spectral to 0 / a 0-100 split. The UI renders
@@ -2494,6 +2515,34 @@ export function generateColomboReport(
   if (bradycardia) clinicalFlags.push(`Bradycardia: resting HR ${A.meanHR} bpm`);
   if (parasympatheticDominance) clinicalFlags.push(`Parasympathetic dominance: SB = ${A.SB}`);
   if (!spectralAvailable) clinicalFlags.push("Spectral measures (LFa/RFa/SB) and continuous BP not assessed — not reproducible from this recording; clinician review of the vendor report required.");
+
+  // --- Watch items — ONLY from abnormal MEASURED/verified fields --------------
+  // Never watch a value that is already normal, a field that was not read, or
+  // symptoms the test did not capture. Each item corresponds to a genuinely
+  // out-of-range measured signal (or an assessed orthostatic finding).
+  const monitorParameters: string[] = [];
+  if (spectralAvailable) {
+    const rfaAbnormal = A.RFa != null && (A.RFa < RFa_n.lo || A.RFa > RFa_n.hi);
+    const lfaAbnormal = A.LFa != null && (A.LFa < LFa_n.lo || A.LFa > LFa_n.hi);
+    const sbAbnormal = A.SB != null && (A.SB < SB_n.lo || A.SB > SB_n.hi);
+    if (rfaAbnormal) monitorParameters.push("Parasympathetic activity (RFa) trending toward the normal range");
+    if (lfaAbnormal) monitorParameters.push("Sympathetic modulation (LFa) trending toward the normal range");
+    if (sbAbnormal) monitorParameters.push("Sympathovagal balance (SB) trending toward the normal range (0.4–3.0)");
+    // FRF only when it was actually READ and is out of range (never when unread).
+    if (highFRF && B.FRF != null && B.FRF > 0) {
+      monitorParameters.push(`FRF during deep breathing (currently ${B.FRF.toFixed(2)} Hz; normal ${COLOMBO_NORMS.FRF.lo}–${COLOMBO_NORMS.FRF.hi} Hz)`);
+    }
+  }
+  // Orthostatic tolerance only when an orthostatic finding was actually assessed
+  // and abnormal (requires real standing BP; see orthostaticBpAssessable).
+  if (orthostaticBpAssessable && orthostaticHypotension) {
+    monitorParameters.push("Orthostatic tolerance (blood-pressure response to standing)");
+  }
+  if (bradycardia) {
+    monitorParameters.push(`Resting heart rate (currently ${A.meanHR} bpm)`);
+  }
+  // No abnormal measured signal → nothing to watch (honest empty list; the UI
+  // hides the section). We do NOT invent generic watch items or symptom claims.
 
   const bodySystemImpact = computeBodyImpact(patterns, phaseEvents, { spectralAvailable, bpAvailable });
 
@@ -2530,14 +2579,11 @@ export function generateColomboReport(
     contraindications,
     followUp: {
       retestInterval, rationale: followUpRationale,
-      monitorParameters: [
-        "Parasympathetic activity (RFa) normalization",
-        "Sympathetic activity (LFa) balance",
-        "Sympathovagal Balance (SB) improvement",
-        "Orthostatic tolerance (HR and BP response to standing)",
-        "FRF during deep breathing (should return to 0.09–0.15 Hz)",
-        "Symptom improvement (fatigue, dizziness, headaches)",
-      ],
+      // Watch items are generated ONLY from ABNORMAL measured/verified fields.
+      // We never tell the clinician to watch a value that is already normal
+      // (e.g. RFa within band), a field that was NOT READ (e.g. FRF unavailable),
+      // or symptoms the test never captured. Built above as `monitorParameters`.
+      monitorParameters,
     },
     bodySystemImpact,
     clinicalFlags,
@@ -2650,6 +2696,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // everywhere else. Parser-extracted values are never overwritten.
         const reconciledStudy = reconcileStudyWithReport(ansStudy, report);
         diagnosticSummary = computeDiagnosticSummary(reconciledStudy);
+        // Cross-source: when the paired vendor report establishes normal RFa + low
+        // SB driven by low LFa, invalidate the estimate-based deterministic
+        // parasympathetic-withdrawal hypothesis so the clinician EVIDENCE panel
+        // and the patient view cannot contradict for the same metrics.
+        if (vendorMetrics) {
+          diagnosticSummary = reconcilePhenotypesWithVendor(diagnosticSummary, {
+            LFa: vendorMetrics.LFa,
+            RFa: vendorMetrics.RFa,
+            SB: vendorMetrics.SB,
+          });
+        }
       } catch (err: any) {
         console.warn(
           "[ans-scoring] computeDiagnosticSummary failed:",
