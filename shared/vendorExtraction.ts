@@ -148,6 +148,30 @@ export interface VendorPhaseTable {
   cellCount: number;
 }
 
+/**
+ * Vendor-reported orthostatic (baseline → stand) BP observation, derived ONLY
+ * from vendor-printed values (Phase A baseline BP vs Phase F stand BP) when BOTH
+ * are present. This is a VENDOR OBSERVATION for clinician context — explicitly
+ * NOT a deterministic .ans scoring input. It lets the UI resolve the "missing
+ * orthostatic BP data" contradiction honestly: when the paired PDF shows both
+ * arms, we can state whether the vendor's numbers show an orthostatic drop, with
+ * provenance, while the deterministic .ans adrenergic domain stays "not assessed"
+ * (the .ans has no standing BP).
+ */
+export interface VendorOrthostaticObservation {
+  baselineSBP: VendorField<number>;
+  baselineDBP: VendorField<number>;
+  standSBP: VendorField<number>;
+  standDBP: VendorField<number>;
+  /** baseline − stand (positive = a drop on standing). */
+  sbpDrop: number;
+  dbpDrop: number;
+  /** True when the vendor's values meet the OH criterion (≥20 SBP or ≥10 DBP). */
+  meetsOrthostaticHypotension: boolean;
+  /** Human summary with explicit vendor-reported framing. */
+  summary: string;
+}
+
 export interface VendorReportExtraction {
   /** Whether the pages looked like a genuine P&S / ANS vendor report. */
   looksLikeVendorReport: boolean;
@@ -159,6 +183,12 @@ export interface VendorReportExtraction {
    * located; rows/cells the scan could not resolve are ABSENT/null, never guessed.
    */
   phases?: VendorPhaseTable;
+  /**
+   * Vendor-reported baseline→stand BP observation (context only, NOT a
+   * deterministic .ans scoring input). Present only when the paired PDF shows
+   * both baseline and stand BP.
+   */
+  orthostatic?: VendorOrthostaticObservation;
   /** Mean confidence (0..1) across the fields actually read. */
   meanConfidence: number;
   /** Count of fields successfully extracted. */

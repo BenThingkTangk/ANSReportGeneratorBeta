@@ -70,7 +70,9 @@ d("real Jill PDF — A–F phase extraction", () => {
         if (!ok) wrong.push(`${k}.${c}=${v} (expected ${exp})`);
       }
     }
-    expect(read).toBeGreaterThan(15); // meaningful yield from this scan
+    // Cross-page reconciliation (page-1 panels + baseline summary) lifts the
+    // yield substantially; the live-verified floor is ~30 correct cells.
+    expect(read).toBeGreaterThan(30);
     expect(wrong, `wrong cells: ${wrong.join(", ")}`).toEqual([]);
   });
 
@@ -100,6 +102,27 @@ d("real Jill PDF — A–F phase extraction", () => {
     check("F", "SBP", 93);
     check("F", "DBP", 61);
     check("F", "RFa", 6.55);
+    // Cross-page reconciliation targets (page-1 panels + baseline summary).
+    check("A", "meanHR", 56);
+    check("A", "LFa", 0.91);
+    check("A", "RFa", 5.13);
+    check("A", "SB", 0.18);
+    check("A", "SBP", 92);
+    check("A", "DBP", 55);
+    check("B", "RFa", 2.88);
+    check("D", "RFa", 2.93);
+    check("F", "meanHR", 64);
+    check("F", "LFa", 2.62);
+    // Valsalva LFa is a response MULTIPLIER (x23.20) — must never be mapped.
+    expect(rowsByKey.D?.LFa?.value).toBeNull();
+  });
+
+  it("derives the vendor-reported orthostatic observation (no drop; context only)", () => {
+    // Jill: baseline 92/55 → stand 93/61 is NOT an orthostatic drop.
+    expect(x.orthostatic).toBeTruthy();
+    expect(x.orthostatic!.meetsOrthostaticHypotension).toBe(false);
+    expect(x.orthostatic!.summary).toMatch(/no orthostatic drop/i);
+    expect(x.orthostatic!.summary).toMatch(/not used as deterministic \.ans scoring input/i);
   });
 
   it("baseline + ratios (defect D) preserved alongside the phase table", () => {

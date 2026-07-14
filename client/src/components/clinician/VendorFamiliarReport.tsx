@@ -21,7 +21,7 @@
  *     familiar and traceable.
  */
 import { motion } from "framer-motion";
-import type { VendorReportExtraction, VendorField, VendorPhaseTable, VendorPhaseRow } from "@shared/vendorExtraction";
+import type { VendorReportExtraction, VendorField, VendorPhaseTable, VendorPhaseRow, VendorOrthostaticObservation } from "@shared/vendorExtraction";
 import { crossCheckTestDate } from "@shared/vendorExtraction";
 import {
   COLOMBO_NORMS,
@@ -334,6 +334,9 @@ export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileNa
         </>
       )}
 
+      {/* Vendor-reported orthostatic observation (context only, NOT .ans scoring) */}
+      {extraction.orthostatic && <OrthostaticObservationCard obs={extraction.orthostatic} />}
+
       {/* Vendor legend / footnote grammar */}
       <p className="text-[10px] text-muted-foreground/70 leading-relaxed px-1">
         * RFa is a measure of parasympathetic activity and LFa a measure of sympathetic activity
@@ -512,6 +515,48 @@ function PhaseTrendCharts({ table }: { table: VendorPhaseTable }) {
           );
         })}
       </div>
+    </section>
+  );
+}
+
+/**
+ * Vendor-reported orthostatic (baseline→stand) BP observation. Rendered with
+ * explicit vendor provenance and a clear statement that it is a vendor
+ * observation, NOT a deterministic .ans scoring input — resolving the clinician
+ * "missing orthostatic BP data" contradiction without conflating the two sources.
+ */
+function OrthostaticObservationCard({ obs }: { obs: VendorOrthostaticObservation }) {
+  const drop = obs.meetsOrthostaticHypotension;
+  return (
+    <section
+      className="rounded-2xl border border-border/30 bg-card/40 p-4"
+      data-testid="vendor-orthostatic-observation"
+    >
+      <h3 className="text-xs uppercase tracking-[0.15em] text-muted-foreground font-medium mb-1">
+        Orthostatic BP — vendor-reported observation
+      </h3>
+      <div className="flex items-baseline gap-3 flex-wrap">
+        <span
+          className="text-sm font-semibold"
+          style={{ color: drop ? RED : GREEN }}
+          data-testid="vendor-orthostatic-verdict"
+        >
+          {drop ? "Orthostatic drop present (vendor values)" : "No orthostatic drop (vendor values)"}
+        </span>
+        <span className="text-[11px] text-muted-foreground tabular-nums">
+          baseline {obs.baselineSBP.value}/{obs.baselineDBP.value} → stand {obs.standSBP.value}/
+          {obs.standDBP.value} mmHg · Δ {obs.sbpDrop}/{obs.dbpDrop}
+        </span>
+      </div>
+      <p className="text-[11px] text-muted-foreground/80 mt-2 leading-relaxed">
+        {obs.summary}
+      </p>
+      <p className="text-[10px] text-amber-300/80 mt-1.5">
+        This is a <span className="font-medium">vendor-reported paired-PDF observation</span>, shown
+        for clinician context. It is <span className="font-medium">not</span> a deterministic .ans
+        scoring input — the .ans recording carries no standing blood pressure, so the HumanOS
+        adrenergic/orthostatic domain remains gated as “not assessed” from the .ans alone.
+      </p>
     </section>
   );
 }

@@ -32,6 +32,7 @@ import type {
   VendorReportExtraction,
   VendorPhaseRow,
   VendorPhaseTable,
+  VendorOrthostaticObservation,
 } from "../../shared/vendorExtraction.js";
 
 export type {
@@ -582,6 +583,293 @@ function parsePhaseTable(pages: OcrPage[]): VendorPhaseTable {
 }
 
 // --------------------------------------------------------------------------
+// Page-1 response panels → exact per-phase fields (cross-page reconciliation)
+// --------------------------------------------------------------------------
+
+/**
+ * The signed vendor page-1 stacks four LABELED panels — Initial Baseline (A),
+ * Deep Breathing (B), Valsalva (D), Stand (F) — each an "Interpretation / VALUE"
+ * block whose rows are explicitly labeled ("Mean Heart Rate", "Range Heart Rate",
+ * "LFa* Modulation"/"LFa* Response", "RFa* …", "Systolic/Diastolic Blood
+ * Pressure"). We read a field into a phase ONLY when BOTH the row label and the
+ * panel (phase) are identifiable from the OCR — never by position alone.
+ *
+ * CRITICAL SAFETY: the B/D/F panels print SYMPATHETIC/PARASYMPATHETIC RESPONSES,
+ * some as MULTIPLIERS ("LFa* Response … x23.20" / "%23.20", "<600% increase").
+ * A multiplier is NOT an absolute spectral value, so any token carrying x / % /
+ * "increase"/"decrease" context is rejected. Only clean absolute numbers with the
+ * expected magnitude are mapped. Requires word geometry (page-1 raster).
+ */
+type Page1Phase = "A" | "B" | "D" | "F";
+type Page1Field = "meanHR" | "rangeHR" | "LFa" | "RFa" | "SB" | "SBP" | "DBP";
+
+interface Page1Cell {
+  phase: Page1Phase;
+  field: Page1Field;
+  value: number;
+  word: OcrWord;
+  page: number;
+  sourceText: string;
+}
+
+function parsePage1Panels(pages: OcrPage[]): Page1Cell[] {
+  // page 1 = the response-panel page. Prefer a page with word geometry that has
+  // the response-panel vocabulary and is NOT the numerical-summary page.
+  const page = pages
+    .filter(
+      (p) =>
+        (p.words?.length ?? 0) > 0 &&
+        !/Numerical\s*Summary/i.test(p.text ?? "") &&
+        /(Modulation|Response|Interpretation)/i.test(p.text ?? "") &&
+        /(Mean Heart Rate|Blood Pressure|LFa|RFa)/i.test(p.text ?? ""),
+    )
+    .sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0];
+  if (!page) return [];
+  const words = page.words;
+
+  // --- Panel (phase) bands: each panel starts at an "Interpretation" header. --
+  // The vendor prints Interpretation headers in phase order top→bottom. The FIRST
+  // panel is Initial Baseline (A); the next three are B, D, F.
+  const interpHeaders = words
+    .filter((w) => /Interpretation/i.test(w.text))
+    .sort((a, b) => a.bbox.y0 - b.bbox.y0);
+  // Deduplicate headers within ~40px (OCR sometimes double-detects).
+  const headerYs: number[] = [];
+  for (const h of interpHeaders) {
+    const y = cy(h);
+    if (!headerYs.some((yy) => Math.abs(yy - y) < 60)) headerYs.push(y);
+  }
+  if (headerYs.length < 2) return []; // need at least baseline + one response panel
+  headerYs.sort((a, b) => a - b);
+
+  // Map panels to phases by ORDER. The vendor's fixed page-1 sequence is
+  // A(Baseline) → B(Deep Breathing) → D(Valsalva) → F(Stand). We also require a
+  // corroborating phase keyword within the panel band before trusting B/D/F.
+  const PANEL_PHASES: Page1Phase[] = ["A", "B", "D", "F"];
+  const panels: Array<{ phase: Page1Phase; top: number; bottom: number }> = [];
+  for (let i = 0; i < headerYs.length && i < PANEL_PHASES.length; i++) {
+    const top = headerYs[i];
+    const bottom = i + 1 < headerYs.length ? headerYs[i + 1] : top + 700;
+    panels.push({ phase: PANEL_PHASES[i], top, bottom });
+  }
+
+  // Phase-keyword guards: a B/D/F panel is only accepted when the panel band (or
+  // the left-margin near it) shows the matching phase word. Baseline (A) is the
+  // first panel by construction. This prevents mis-labeling when a header is
+  // missed. The left-margin phase names OCR poorly, so we check the WHOLE band.
+  const bandText = (top: number, bottom: number) =>
+    words.filter((w) => cy(w) >= top - 30 && cy(w) <= bottom).map((w) => w.text).join(" ");
+  const PHASE_KW: Record<Page1Phase, RegExp | null> = {
+    A: null,
+    B: /deep\s*brea|breathing|\bDB\b|Age and Baseline/i, // DB panel prints RFa* Response + "Age and Baseline"
+    D: /valsalva|<\s*600%|Increase from Baseline/i,
+    F: /\bstand\b|10%\s*but|beats increase/i,
+  };
+
+  // Row-label recognizers. Each is anchored on a LEADING token (OCR splits multi-
+  // word labels), then the full phrase is confirmed from tokens on the same line.
+  // Modulation = baseline; Response = challenge panels — both accepted (the panel
+  // band already fixes the phase).
+  const ROW_LABELS: Array<{ field: Page1Field; lead: RegExp; phrase: RegExp }> = [
+    { field: "meanHR", lead: /^Mean$/i, phrase: /Mean\s+Heart\s+Rate/i },
+    { field: "rangeHR", lead: /^Range$/i, phrase: /Range\s+Heart\s+Rate/i },
+    { field: "LFa", lead: /^LFa\*?$/i, phrase: /LFa\*?\s*(Modulation|Response)/i },
+    { field: "RFa", lead: /^RFa\*?$/i, phrase: /RFa\*?\s*(Modulation|Response)/i },
+    { field: "SB", lead: /^LFa\s*\/\s*RFa$/i, phrase: /LFa\s*\/\s*RFa/i },
+    { field: "SBP", lead: /^Systolic$/i, phrase: /Systolic\s+Blood\s+Pressure/i },
+    { field: "DBP", lead: /^Diastolic$/i, phrase: /Diastolic\s+Blood\s+Pressure/i },
+  ];
+
+  // Per-field sanity: absolute-value ranges (reject multipliers/percentages which
+  // are far outside these once the x/%/context guard is applied too).
+  const SANITY: Record<Page1Field, (v: number) => boolean> = {
+    meanHR: (v) => v >= 25 && v <= 220,
+    rangeHR: (v) => v >= 0 && v <= 200,
+    LFa: (v) => v >= 0 && v <= 500,
+    RFa: (v) => v >= 0 && v <= 500,
+    SB: (v) => v >= 0 && v <= 100,
+    SBP: (v) => v >= 40 && v <= 260,
+    DBP: (v) => v >= 20 && v <= 160,
+  };
+  const DECIMAL_FIELDS = new Set<Page1Field>(["LFa", "RFa", "SB"]);
+
+  const out: Page1Cell[] = [];
+  const valueColMinX = 0.55 * (page.width || 1); // values sit in the right value column
+
+  for (const panel of panels) {
+    const kw = PHASE_KW[panel.phase];
+    if (kw && !kw.test(bandText(panel.top, panel.bottom))) continue; // phase not corroborated
+
+    for (const { field, lead, phrase } of ROW_LABELS) {
+      // Find a leading label token in the panel band, then confirm the full phrase
+      // from tokens on the same horizontal line (OCR splits "RFa* Response" etc.).
+      const leadCand = words
+        .filter((w) => cy(w) >= panel.top && cy(w) <= panel.bottom && lead.test(w.text.trim()))
+        .sort((a, b) => a.bbox.y0 - b.bbox.y0);
+      let labelWord: OcrWord | undefined;
+      for (const cand of leadCand) {
+        const lineText = words
+          .filter((w) => Math.abs(cy(w) - cy(cand)) <= 22 && cx(w) >= cx(cand) - 5)
+          .sort((a, b) => cx(a) - cx(b))
+          .map((w) => w.text)
+          .join(" ");
+        if (phrase.test(lineText)) { labelWord = cand; break; }
+      }
+      if (!labelWord) continue;
+      const bandY = cy(labelWord);
+
+      // Candidate value tokens: same horizontal band, in the value column, right
+      // of the label. A MULTIPLIER (e.g. Valsalva LFa "x23.20" / "%23.20") is a
+      // response ratio, NOT an absolute spectral value — reject a token that
+      // itself carries an x/× / % marker, or whose IMMEDIATELY-ADJACENT left token
+      // is such a marker. We do NOT reject on a distant "Expected: <600%"
+      // annotation elsewhere in the row (that would drop valid values like the DB
+      // RFa* Response 2.88).
+      const rowWords = words.filter((w) => Math.abs(cy(w) - bandY) <= 26);
+      const hasMultiplierMark = (w: OcrWord): boolean => {
+        if (/[x×%]/.test(w.text)) return true;
+        // adjacent-left token within ~1 char-width carrying a marker
+        const left = rowWords
+          .filter((o) => o !== w && cx(o) < cx(w) && Math.abs(cy(o) - cy(w)) <= 20)
+          .sort((a, b) => cx(b) - cx(a))[0];
+        return !!left && /[x×%]$/.test(left.text) && cx(w) - left.bbox.x1 < (w.bbox.x1 - w.bbox.x0);
+      };
+
+      const cands = rowWords
+        .filter((w) => cx(w) > Math.max(labelWord.bbox.x1, valueColMinX))
+        .filter((w) => !hasMultiplierMark(w)) // drop multiplier/percentage tokens
+        .map((w) => ({ w, raw: w.text.replace(/[^0-9.,]/g, "") }))
+        .filter((c) => c.raw.length > 0)
+        .filter((c) => !DECIMAL_FIELDS.has(field) || /\d[.,]\d/.test(c.w.text)) // decimals need a point
+        .map((c) => ({ w: c.w, v: toNumber(c.raw) }))
+        .filter((c) => c.v != null && SANITY[field](c.v as number))
+        .sort((a, b) => cx(a.w) - cx(b.w));
+
+      if (cands.length === 0) continue;
+      const chosen = cands[0];
+      out.push({
+        phase: panel.phase,
+        field,
+        value: chosen.v as number,
+        word: chosen.w,
+        page: page.page,
+        sourceText: `${labelWord.text} … ${chosen.w.text}`.slice(0, 80),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Cross-page semantic reconciliation: fill phase-table cells the page-2 direct
+ * table OCR could not resolve, using (in priority order) the page-1 response
+ * panels and the baseline summary block. PAGE-2 DIRECT OCR TAKES PRECEDENCE — we
+ * never overwrite a cell page-2 already read. Every reconciled cell keeps its own
+ * page/region/confidence provenance and is tagged in sourceText as reconciled.
+ * Nothing is inferred or guessed; a field is filled only where its label (and, for
+ * B/D/F, its phase) was matched.
+ */
+function reconcilePhases(
+  table: VendorPhaseTable,
+  baseline: VendorBaseline,
+  page1: Page1Cell[],
+): { table: VendorPhaseTable; reconciled: number } {
+  if (table.rows.length === 0) return { table, reconciled: 0 };
+  const byKey = new Map(table.rows.map((r) => [r.key, r]));
+  let reconciled = 0;
+
+  const setIfEmpty = (
+    row: VendorPhaseRow | undefined,
+    field: Exclude<Page1Field, never>,
+    value: number,
+    prov: FieldProvenance,
+  ) => {
+    if (!row) return;
+    const cur = (row as any)[field] as VendorField<number> | undefined;
+    if (cur && cur.value != null) return; // page-2 (or earlier source) precedence
+    (row as any)[field] = { value, unit: cur?.unit ?? null, provenance: prov };
+    reconciled++;
+  };
+
+  // (2) Page-1 response panels → exact B/D/F (and A) fields.
+  for (const c of page1) {
+    const row = byKey.get(c.phase);
+    setIfEmpty(row, c.field, c.value, {
+      page: c.page,
+      region: c.word.bbox,
+      confidence: clamp01((c.word.confidence ?? 0) / 100),
+      sourceText: `reconciled(page-1 ${c.phase} panel): ${c.sourceText}`,
+    });
+  }
+
+  // (1) Baseline summary block → Phase A only (it is the semantic baseline).
+  const A = byKey.get("A");
+  if (A) {
+    const map: Array<[Page1Field, VendorField<number>]> = [
+      ["meanHR", baseline.meanHR],
+      ["rangeHR", baseline.rangeHR],
+      ["LFa", baseline.LFa],
+      ["RFa", baseline.RFa],
+      ["SB", baseline.SB],
+      ["SBP", baseline.SBP],
+      ["DBP", baseline.DBP],
+    ];
+    for (const [field, f] of map) {
+      if (f.value != null && f.provenance != null) {
+        setIfEmpty(A, field, f.value, {
+          page: f.provenance.page,
+          region: f.provenance.region,
+          confidence: f.provenance.confidence,
+          sourceText: `reconciled(baseline summary): ${f.provenance.sourceText}`,
+        });
+      }
+    }
+  }
+
+  const cellCount = table.rows.reduce((n, r) => {
+    for (const k of ["duration", "meanHR", "rangeHR", "FRF", "LFa", "RFa", "SB", "SBP", "DBP", "PP", "MAP"] as const) {
+      if ((r as any)[k]?.value != null) n++;
+    }
+    return n;
+  }, 0);
+  return { table: { rows: table.rows, cellCount }, reconciled };
+}
+
+/**
+ * Build the vendor-reported orthostatic (baseline→stand) BP observation from the
+ * reconciled phase table: Phase A baseline BP vs Phase F stand BP, using only
+ * vendor-printed values. Returns undefined unless BOTH arms are present. This is
+ * an OBSERVATION for clinician context — explicitly NOT a deterministic .ans
+ * scoring input.
+ */
+function buildOrthostaticObservation(
+  table: VendorPhaseTable,
+): VendorOrthostaticObservation | undefined {
+  const A = table.rows.find((r) => r.key === "A");
+  const F = table.rows.find((r) => r.key === "F");
+  if (!A || !F) return undefined;
+  const bSBP = A.SBP, bDBP = A.DBP, sSBP = F.SBP, sDBP = F.DBP;
+  if (bSBP.value == null || bDBP.value == null || sSBP.value == null || sDBP.value == null) {
+    return undefined;
+  }
+  const sbpDrop = bSBP.value - sSBP.value;
+  const dbpDrop = bDBP.value - sDBP.value;
+  const meets = sbpDrop >= 20 || dbpDrop >= 10;
+  const summary = meets
+    ? `Vendor-reported baseline and stand BP show an orthostatic drop in this pair ` +
+      `(baseline ${bSBP.value}/${bDBP.value} → stand ${sSBP.value}/${sDBP.value} mmHg; ` +
+      `Δ ${sbpDrop}/${dbpDrop}). Vendor observation only — not used as deterministic .ans scoring input.`
+    : `Vendor-reported baseline and stand BP show no orthostatic drop in this pair ` +
+      `(baseline ${bSBP.value}/${bDBP.value} → stand ${sSBP.value}/${sDBP.value} mmHg; ` +
+      `Δ ${sbpDrop}/${dbpDrop}, below the ≥20/≥10 mmHg criterion). Vendor observation only — ` +
+      `not used as deterministic .ans scoring input.`;
+  return {
+    baselineSBP: bSBP, baselineDBP: bDBP, standSBP: sSBP, standDBP: sDBP,
+    sbpDrop, dbpDrop, meetsOrthostaticHypotension: meets, summary,
+  };
+}
+
+// --------------------------------------------------------------------------
 // main
 // --------------------------------------------------------------------------
 
@@ -700,13 +988,38 @@ export function parseVendorOcrPages(pages: OcrPage[]): VendorReportExtraction {
 
   // Per-phase A–F numerical summary (page 2, geometry-based). Absent cells stay
   // null. Only included when at least one cell was read.
-  const phaseTable = parsePhaseTable(pages);
+  let phaseTable = parsePhaseTable(pages);
+
+  // Cross-page semantic reconciliation: fill cells page-2 could not resolve from
+  // the page-1 response panels (exact label+phase match) and the baseline summary
+  // (Phase A only). Page-2 direct OCR always takes precedence; every reconciled
+  // cell keeps page/region/confidence provenance. Nothing is inferred/guessed.
+  if (phaseTable.rows.length > 0) {
+    const page1 = parsePage1Panels(pages);
+    const rec = reconcilePhases(phaseTable, baseline, page1);
+    phaseTable = rec.table;
+    if (rec.reconciled > 0) {
+      notes.push(
+        `Cross-page reconciliation: ${rec.reconciled} phase cell(s) filled from page-1 panels / baseline summary (page-2 table takes precedence).`,
+      );
+    }
+  }
+
   const phases = phaseTable.cellCount > 0 ? phaseTable : undefined;
   if (phases) {
     notes.push(`Per-phase numerical summary: ${phases.cellCount} cell(s) read across ${phases.rows.length} phase row(s).`);
   }
 
-  return { looksLikeVendorReport, identity, baseline, ratios, phases, meanConfidence, fieldCount, notes };
+  // Vendor-reported orthostatic (baseline→stand) BP observation — context only,
+  // NOT a deterministic .ans scoring input. Requires BOTH the Phase A baseline BP
+  // and Phase F stand BP from vendor-printed values. Resolves the clinician
+  // "missing orthostatic BP data" contradiction honestly with explicit provenance.
+  const orthostatic = phases ? buildOrthostaticObservation(phases) : undefined;
+  if (orthostatic) {
+    notes.push(`Vendor-reported orthostatic observation available (baseline vs stand BP; context only, not .ans scoring).`);
+  }
+
+  return { looksLikeVendorReport, identity, baseline, ratios, phases, orthostatic, meanConfidence, fieldCount, notes };
 }
 
 /**

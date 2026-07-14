@@ -240,3 +240,35 @@ describe("VendorFamiliarReport — defect C: per-phase A–F table", () => {
     cleanup();
   });
 });
+
+describe("VendorFamiliarReport — vendor-reported orthostatic observation", () => {
+  it("renders the vendor orthostatic observation with the 'not .ans scoring' disclaimer", async () => {
+    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { VendorFamiliarReport } = await import("../components/clinician/VendorFamiliarReport");
+    const ext = makeExtraction();
+    ext.orthostatic = {
+      baselineSBP: field(92) as any, baselineDBP: field(55) as any,
+      standSBP: field(93) as any, standDBP: field(61) as any,
+      sbpDrop: -1, dbpDrop: -6, meetsOrthostaticHypotension: false,
+      summary:
+        "Vendor-reported baseline and stand BP show no orthostatic drop in this pair " +
+        "(baseline 92/55 → stand 93/61 mmHg; Δ -1/-6, below the ≥20/≥10 mmHg criterion). " +
+        "Vendor observation only — not used as deterministic .ans scoring input.",
+    };
+    render(<VendorFamiliarReport extraction={ext} source="ocr" />);
+    const card = screen.getByTestId("vendor-orthostatic-observation");
+    expect(card).toBeTruthy();
+    expect(screen.getByTestId("vendor-orthostatic-verdict").textContent).toMatch(/no orthostatic drop/i);
+    expect(card.textContent).toMatch(/not a deterministic \.ans scoring input/i);
+    expect(card.textContent).toMatch(/not assessed/i); // .ans domain stays gated
+    cleanup();
+  });
+
+  it("shows no orthostatic card when the extraction lacks paired baseline/stand BP", async () => {
+    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { VendorFamiliarReport } = await import("../components/clinician/VendorFamiliarReport");
+    render(<VendorFamiliarReport extraction={makeExtraction()} source="ocr" />);
+    expect(screen.queryByTestId("vendor-orthostatic-observation")).toBeNull();
+    cleanup();
+  });
+});
