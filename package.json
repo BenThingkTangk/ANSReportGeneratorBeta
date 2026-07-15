@@ -17,7 +17,8 @@
     "eval:build-fixtures": "tsx eval/buildFixtures.ts",
     "audit:esm": "node scripts/audit-esm-imports.mjs",
     "audit:esm:fix": "node scripts/audit-esm-imports.mjs --fix",
-    "prebuild:vercel": "npm run audit:esm && tsc --noEmit",
+    "verify:ocr-native": "node scripts/verify-ocr-native-deps.mjs",
+    "prebuild:vercel": "npm run audit:esm && npm run verify:ocr-native && tsc --noEmit",
     "ci": "npm run audit:esm && tsc --noEmit && npm run test:ans && npm run test:client && npm run eval:ci",
     "smoke:coldstart": "node scripts/coldstart-smoke.mjs",
     "test:client": "vitest run --config vitest.client.config.ts"

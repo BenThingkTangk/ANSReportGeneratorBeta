@@ -10,6 +10,7 @@
  */
 
 import type { PhaseMetrics } from "./schema";
+import { COLOMBO_NORMS, classifyLowSbDriver } from "./colomboNorms.js";
 
 export interface Indication {
   /** Code key for tagging (e.g. "CAN", "POTS", "VVS"). */
@@ -24,6 +25,15 @@ export interface Indication {
 
 interface DetectInput {
   phases: PhaseMetrics[];
+  /**
+   * Standing-phase availability gates. Orthostatic / standing findings must be
+   * driven ONLY by real standing data — a stand phase whose spectral is a
+   * computed estimate (e.g. paired path with baseline-only vendor values) or
+   * whose cuff BP was never measured must not fabricate a standing response.
+   * Default true preserves legacy behavior for fully-measured studies.
+   */
+  standSpectralAvailable?: boolean;
+  standBpAvailable?: boolean;
   /** Optional clinical history flags from patient bio. */
   knownDiabetes?: boolean;
   /** Optional baseline office BP (for white-coat detection). */
@@ -93,11 +103,14 @@ export function detectIndications(input: DetectInput): Indication[] {
   const valsalvaLfa = D?.LFa ?? null;
   const valsalvaRfa = D?.RFa ?? null;
   const valsalvaSbp = D?.SBP ?? null;
-  const standLfa = F?.LFa ?? null;
-  const standRfa = F?.RFa ?? null;
-  const standHr  = F?.meanHR ?? null;
-  const standSbp = F?.SBP ?? null;
-  const standDbp = F?.DBP ?? null;
+  // Gate standing spectral / BP to REAL standing measurements (see DetectInput).
+  const standSpectralOk = input.standSpectralAvailable !== false;
+  const standBpOk = input.standBpAvailable !== false;
+  const standLfa = standSpectralOk ? (F?.LFa ?? null) : null;
+  const standRfa = standSpectralOk ? (F?.RFa ?? null) : null;
+  const standHr  = F?.meanHR ?? null; // HR is ECG-derived, always available
+  const standSbp = standBpOk ? (F?.SBP ?? null) : null;
+  const standDbp = standBpOk ? (F?.DBP ?? null) : null;
 
   const out: Indication[] = [];
   const has = (code: string) => out.some(i => i.code === code);
@@ -130,11 +143,27 @@ export function detectIndications(input: DetectInput): Indication[] {
       severity: "high" });
   }
 
-  // === Resting PE: SB < 0.4 (skip if CAN_LOW_SB) ===
+  // === Resting low sympathovagal balance: SB < 0.4 (skip if CAN_LOW_SB) ===
+  // A low ratio is classified by WHAT DRIVES IT (generic, from LFa/RFa): true
+  // parasympathetic excess ONLY when RFa is genuinely elevated; otherwise a
+  // low/low-normal LFa driving the ratio down is a RELATIVE parasympathetic
+  // dominance / reduced sympathetic modulation — never "excess", never
+  // "withdrawal". This prevents the patient/clinician contradiction where a
+  // normal RFa + low SB was mislabeled "Parasympathetic Excess".
   if (restingSb != null && restingSb < 0.4 && !has("CAN_LOW_SB")) {
-    out.push({ code: "PE_REST", name: "Resting Parasympathetic Excess (PE)",
-      description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest. Associated with depression, fatigue, exercise intolerance, GI motility issues.`,
-      severity: "moderate" });
+    const driver = classifyLowSbDriver(restingLfa, restingRfa);
+    if (driver === "parasympathetic-excess" || driver === "mixed") {
+      out.push({ code: "PE_REST", name: "Resting Parasympathetic Excess (PE)",
+        description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest with elevated RFa ${restingRfa!.toFixed(2)} bpm² (> ${COLOMBO_NORMS.RFa.hi}). Parasympathetic (vagal) activity is genuinely high.`,
+        severity: "moderate" });
+    } else {
+      // reduced-sympathetic (or indeterminate-but-RFa-normal): relative dominance.
+      const lfaNote = restingLfa != null ? ` LFa ${restingLfa.toFixed(2)} bpm² is low/low-normal` : " sympathetic modulation is reduced";
+      const rfaNote = restingRfa != null ? `, RFa ${restingRfa.toFixed(2)} bpm² is within normal limits` : "";
+      out.push({ code: "RPD_REST", name: "Relative Parasympathetic Dominance (reduced sympathetic modulation)",
+        description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest:${lfaNote}${rfaNote}. The low ratio reflects reduced sympathetic modulation, not parasympathetic excess. Clinician review of the vendor report is advised.`,
+        severity: "moderate" });
+    }
   }
 
   // === AAN: LFa in [0.1, 0.5) OR RFa < 0.5 ===

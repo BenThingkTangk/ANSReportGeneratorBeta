@@ -3,11 +3,13 @@ import { parseStudy } from "./_ans/parseStudy.js";
 import { ansStudyToLegacy } from "./_ans/legacyAdapter.js";
 import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
 import { reconcileStudyWithReport } from "./_ans/reconcileStudy.js";
+import { reconcilePhenotypesWithVendor } from "./_ans/reconcilePhenotypesWithVendor.js";
 import {
   EWING_THRESHOLDS,
   classifyEwing,
   ewingNormalRangeLabel,
   COLOMBO_NORMS,
+  classifyLowSbDriver,
 } from "../shared/colomboNorms.js";
 import {
   computedProvenance,
@@ -360,7 +362,7 @@ function readLPString(buffer: Buffer, offset: number): { value: string; nextOffs
  */
 function extractTestDate(
   buffer: Buffer,
-  isJillShah: boolean,
+  _isJillShah: boolean,
   _lastName: string,
   _firstName: string,
   fileName?: string,
@@ -399,10 +401,9 @@ function extractTestDate(
     }
   }
 
-  // 3) Jill Shah hard-coded fallback (verified from PDF)
-  if (isJillShah) return "9/26/2025";
-
-  // 4) Last resort
+  // 3) Last resort. No patient-specific hard-coding: the .ans timestamp and the
+  // filename date (both handled above) are the authoritative sources; anything
+  // else is unknown rather than guessed per-patient.
   return new Date().toLocaleDateString();
 }
 
@@ -1770,7 +1771,14 @@ function detectCheynesStokesLocal(breathing?: { t: number[]; v: number[] }): boo
   return peakCorr > 0.55;
 }
 
-function detectIndicationsLocal(phaseEvents: PhaseMetrics[], mpg?: MultiParameterGraphical): Indication[] {
+function detectIndicationsLocal(
+  phaseEvents: PhaseMetrics[],
+  mpg?: MultiParameterGraphical,
+  gates: { standSpectralAvailable: boolean; standBpAvailable: boolean } = {
+    standSpectralAvailable: true,
+    standBpAvailable: true,
+  },
+): Indication[] {
   if (!phaseEvents || phaseEvents.length === 0) return [];
   const A = phaseEvents[0];
   const D = phaseEvents[3] || null;
@@ -1785,11 +1793,16 @@ function detectIndicationsLocal(phaseEvents: PhaseMetrics[], mpg?: MultiParamete
   const valsalvaLfa = D?.LFa ?? null;
   const valsalvaRfa = D?.RFa ?? null;
   const valsalvaSbp = D?.SBP ?? null;
-  const standLfa = F?.LFa ?? null;
-  const standRfa = F?.RFa ?? null;
+  // Standing findings must use REAL standing data only. When the stand phase's
+  // spectral is a computed estimate (paired path supplies vendor values for the
+  // baseline only) or the standing cuff BP was never measured, these read null so
+  // no orthostatic/adrenergic/syncope indication can be fabricated. HR is always
+  // ECG-derived, so standHr stays available for HR-only findings (POTS/Pre-POTS).
+  const standLfa = gates.standSpectralAvailable ? (F?.LFa ?? null) : null;
+  const standRfa = gates.standSpectralAvailable ? (F?.RFa ?? null) : null;
   const standHr  = F?.meanHR ?? null;
-  const standSbp = F?.SBP ?? null;
-  const standDbp = F?.DBP ?? null;
+  const standSbp = gates.standBpAvailable ? (F?.SBP ?? null) : null;
+  const standDbp = gates.standBpAvailable ? (F?.DBP ?? null) : null;
 
   const out: Indication[] = [];
   const has = (code: string) => out.some(i => i.code === code);
@@ -1822,11 +1835,23 @@ function detectIndicationsLocal(phaseEvents: PhaseMetrics[], mpg?: MultiParamete
       severity: "high" });
   }
 
-  // Resting PE: SB < 0.4
+  // Resting low SB: SB < 0.4 — classified by WHAT DRIVES IT (see colomboNorms
+  // classifyLowSbDriver). True parasympathetic excess ONLY when RFa is elevated;
+  // otherwise a low/low-normal LFa drives the ratio → relative parasympathetic
+  // dominance / reduced sympathetic modulation (never "excess", never "withdrawal").
   if (restingSb != null && restingSb < 0.4 && !has("CAN_LOW_SB")) {
-    out.push({ code: "PE_REST", name: "Resting Parasympathetic Excess (PE)",
-      description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest. Associated with depression, fatigue, exercise intolerance, GI motility issues.`,
-      severity: "moderate" });
+    const driver = classifyLowSbDriver(restingLfa, restingRfa);
+    if (driver === "parasympathetic-excess" || driver === "mixed") {
+      out.push({ code: "PE_REST", name: "Resting Parasympathetic Excess (PE)",
+        description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest with elevated RFa ${restingRfa!.toFixed(2)} bpm² (> ${COLOMBO_NORMS.RFa.hi}). Parasympathetic (vagal) activity is genuinely high.`,
+        severity: "moderate" });
+    } else {
+      const lfaNote = restingLfa != null ? ` LFa ${restingLfa.toFixed(2)} bpm² is low/low-normal` : " sympathetic modulation is reduced";
+      const rfaNote = restingRfa != null ? `, RFa ${restingRfa.toFixed(2)} bpm² is within normal limits` : "";
+      out.push({ code: "RPD_REST", name: "Relative Parasympathetic Dominance (reduced sympathetic modulation)",
+        description: `Sympathovagal balance ${restingSb.toFixed(2)} (< 0.4) at rest:${lfaNote}${rfaNote}. The low ratio reflects reduced sympathetic modulation, not parasympathetic excess. Clinician review of the vendor report is advised.`,
+        severity: "moderate" });
+    }
   }
 
   // AAN: LFa in [0.1, 0.5) OR RFa < 0.5
@@ -2054,6 +2079,26 @@ export function generateColomboReport(
   );
   const bpAvailable = A.SBP != null && A.DBP != null;
 
+  // --- Standing-phase availability gates -------------------------------------
+  // Orthostatic / standing findings must be driven ONLY by real standing data.
+  // In the paired-report path only the BASELINE receives vendor_reported values;
+  // the Stand (F) phase spectral stays computed/estimated and its cuff BP is not
+  // present at all. Reading those estimates as a real standing response is what
+  // fabricated "a weakened fight-or-flight response on standing", "a
+  // blood-pressure drop when standing", "a tendency toward fainting spells", and
+  // "Orthostatic Dysfunction (High Risk)" while the clinician view correctly
+  // said Adrenergic/orthostatic were NOT assessed. We gate on the STAND phase's
+  // OWN provenance (spectral) and on the presence of BOTH baseline and standing
+  // cuff BP (orthostatic BP), so nothing standing-derived surfaces unless the
+  // standing measurement genuinely exists.
+  const standSpectralAvailable = !!(
+    F.provenance &&
+    mayInterpretClinically(F.provenance.LFa) &&
+    mayInterpretClinically(F.provenance.RFa)
+  );
+  const standBpAvailable = F.SBP != null && F.DBP != null;
+  const orthostaticBpAssessable = bpAvailable && standBpAvailable;
+
   // Snapshot the raw (estimated) spectral values BEFORE nulling. The internal
   // wellness index and the clinician trend charts operate on these numeric
   // estimates; the report-facing `phaseEvents` (and every clinical claim /
@@ -2116,7 +2161,13 @@ export function generateColomboReport(
   const LFa_n = norm("LFa", age);
 
   // HR-only patterns are always supported (ECG-derived, consensus tier).
-  const bradycardia = A.meanHR > 0 && A.meanHR < HR_n.lo;
+  // Bradycardia uses a VALIDATED clinical threshold (resting HR < 50 bpm), not
+  // the P10 normative band. The percentile floor (~56 at age 60) mislabeled a
+  // vendor-"Normal" resting HR of 56 as "slow"; a resting HR in the 50–60 range
+  // is within normal limits and must not be called bradycardia. Aligns with the
+  // < 50 cutoff already used by the syncope-risk indications.
+  const BRADYCARDIA_BPM = 50;
+  const bradycardia = A.meanHR > 0 && A.meanHR < BRADYCARDIA_BPM;
   const hrDelta = F.meanHR - A.meanHR;
   const POTS = A.meanHR > 0 && hrDelta >= 30;
   // FRF norm band is the single source of truth (Colombo 0.09–0.15 Hz). FRF is
@@ -2131,7 +2182,12 @@ export function generateColomboReport(
   const A_SB = sSB(A), A_RFa = sRFa(A), A_LFa = sLFa(A);
   const B_RFa = sRFa(B);
   const D_LFa = sLFa(D);
-  const F_RFa = sRFa(F), F_LFa = sLFa(F);
+  // Standing (F) spectral is only usable when the STAND phase's OWN provenance is
+  // clinically interpretable — not when only the baseline was vendor-reported and
+  // the standing values are computed estimates. sF*() enforce that.
+  const sfLFa = (p: PhaseMetrics): number | null => (standSpectralAvailable ? (p.LFa as number) : null);
+  const sfRFa = (p: PhaseMetrics): number | null => (standSpectralAvailable ? (p.RFa as number) : null);
+  const F_RFa = sfRFa(F), F_LFa = sfLFa(F);
 
   const parasympatheticDominance = A_SB != null && A_SB > 0 && A_SB < SB_n.lo;
   const dbRFaLow = B_RFa != null && B_RFa < 19; // Jill's PDF DB norm 19.97-70.79
@@ -2145,9 +2201,14 @@ export function generateColomboReport(
   const maskedSW = parasympatheticExcess && sympatheticWithdrawal;
   const preSyncopeRisk =
     D_LFa != null && F_LFa != null && F_LFa > D_LFa * 0.9; // stand peak ≈ valsalva
-  // Orthostatic hypotension requires real BP — gated on bpAvailable.
+  // Orthostatic hypotension requires real BASELINE AND STANDING cuff BP, and a
+  // genuine drop between them. The prior formula compared baseline to a default
+  // (120) and never used standing BP, so it could both mis-fire and fire without
+  // any standing measurement. Now: assessable only when both arms are present.
   const orthostaticHypotension =
-    bpAvailable && (data.baselineSystolicBP ?? 120) - (A.SBP ?? 120) > 20;
+    orthostaticBpAssessable &&
+    (((A.SBP as number) - (F.SBP as number)) >= 20 ||
+      ((A.DBP as number) - (F.DBP as number)) >= 10);
   const vasovagalRisk = F_RFa != null && F_LFa != null && F_RFa > F_LFa;
   const advancedAutonomicDysfunction = parasympatheticWithdrawal && sympatheticWithdrawal;
   const CAN = advancedAutonomicDysfunction && ratios.eiRatio.classification.severity === "Abnormal";
@@ -2176,7 +2237,15 @@ export function generateColomboReport(
     if (rfaA.severity === "Normal") baselineFindings.push("Normal parasympathetic modulation (RFa)");
     else baselineFindings.push(`${rfaA.label} parasympathetic modulation (RFa)`);
     if (parasympatheticDominance) {
-      baselineFindings.push("Low sympathovagal balance (SB = LFa/RFa) suggesting possible parasympathetic dominance. This may be associated with fatigue, exercise intolerance, depression, poor circulation, and frequent headaches or migraines.");
+      // Describe the low ratio by its driver (generic) — reduced sympathetic
+      // modulation vs genuine parasympathetic excess — WITHOUT asserting
+      // unsupported daily-life symptoms (those require captured symptoms).
+      const driver = classifyLowSbDriver(A.LFa as number, A.RFa as number);
+      baselineFindings.push(
+        driver === "parasympathetic-excess" || driver === "mixed"
+          ? "Low sympathovagal balance (SB = LFa/RFa) with elevated RFa — genuinely high parasympathetic (vagal) activity. Interpret with the patient's symptoms and history."
+          : "Low sympathovagal balance (SB = LFa/RFa) driven by low/low-normal LFa with normal RFa — a relative parasympathetic dominance (reduced sympathetic modulation), not parasympathetic excess. Interpret with the patient's symptoms and history.",
+      );
     }
   } else {
     baselineFindings.push("Sympathetic/parasympathetic spectral measures (LFa/RFa/SB) not assessed — not reproducible from this recording. Clinician review of the vendor report is required for spectral interpretation.");
@@ -2267,112 +2336,108 @@ export function generateColomboReport(
   else if (abnormalChallengeCount === 2) overall = "Abnormal responses to multiple autonomic challenges suggest moderate autonomic dysfunction.";
   else overall = "Abnormal responses across all autonomic challenges suggest advanced autonomic dysfunction.";
 
-  // Therapy gating — Colombo 4.0 protocol from Jill's PDF
+  // Clinician DISCUSSION TOPICS — NON-PRESCRIPTIVE.
+  //
+  // SAFETY: this tool must NOT emit automatic, individualized medication or
+  // supplement recommendations with dosages from an uploaded test alone (that
+  // would be prescribing without a licensed clinician). We therefore surface
+  // pattern-relevant TOPICS a clinician may consider, with NO dose/frequency and
+  // NO "take this" framing. Every card states that any therapy requires a
+  // licensed clinician's assessment. Named agents/classes appear only as
+  // "topics a clinician may discuss", never as instructions to the patient.
   const therapies: TherapyRecommendation[] = [];
   const contraindications: string[] = [];
 
-  // HARD SAFETY GATE: every pharmacological / supplement / salt recommendation
-  // below depends on the spectral (LFa/RFa/SB) and/or BP measures. When those
-  // are not assessed we must NOT recommend ALA, salt, Nortriptyline, Midodrine,
-  // etc. Emit an explicit "insufficient data / clinician review" card instead.
-  const canRecommendTreatment = spectralAvailable; // BP-only therapies also require spectral context here
-  if (!canRecommendTreatment) {
+  const CLINICIAN_ONLY = "Any therapy — including supplements, lifestyle programs, and medications — requires assessment and a prescription/plan from a licensed clinician who has reviewed the full history. This report does not prescribe or recommend a dose.";
+
+  // Still gate on spectral availability: when spectral/BP are not assessable we
+  // cannot even suggest relevant topics tied to those measures.
+  const canDiscussTopics = spectralAvailable;
+  if (!canDiscussTopics) {
     therapies.push({
-      category: "Monitoring",
-      intervention: "Insufficient data for treatment recommendations — clinician review required",
-      rationale: "The proprietary spectral measures (sympathetic LFa, parasympathetic RFa, sympathovagal balance SB) and continuous blood pressure were not assessable from this recording. No supplement (e.g. Alpha-Lipoic Acid), salt/fluid, or pharmacological recommendation can be made without them. A qualified clinician should review the signed vendor report before any therapy is considered.",
+      category: "Clinician review",
+      intervention: "Insufficient data for treatment topics — clinician review required",
+      rationale:
+        "The proprietary spectral measures (LFa/RFa/SB) and continuous blood pressure were not assessable from this recording, so no autonomic pattern can be characterized here. " +
+        CLINICIAN_ONLY,
       priority: "primary",
     });
   }
 
-  // Parasympathetic Excess on stand/Valsalva → Nortriptyline / Amitriptyline / Duloxetine
-  if (canRecommendTreatment && parasympatheticExcess) {
+  // Genuine parasympathetic excess (RFa elevated) — discussion topic only.
+  if (canDiscussTopics && parasympatheticExcess) {
     therapies.push({
-      category: "Pharmacological",
-      intervention: "Low-dose Nortriptyline or Amitriptyline",
-      dose: "10–12 mg with dinner, titrate up to moderate dose",
-      rationale: "Anti-cholinergic effect at low dose treats Parasympathetic Excess (PE) on stand. May improve sleep, reduce headache and pain.",
-      contraindications: ["If cardiovascular disease, start with Carvedilol instead"],
-      priority: "primary",
-    });
-    therapies.push({
-      category: "Pharmacological",
-      intervention: "Add-on: Low-dose Carvedilol",
-      dose: "3.125 mg twice daily",
-      rationale: "If additional therapy is required (instead of titrating Nortriptyline to high dose). Preferred first-line if patient has cardiovascular disease, CAN, high sympathovagal balance, or is geriatric.",
-      priority: "secondary",
-    });
-  }
-
-  // Parasympathetic dominance at baseline (low SB)
-  if (canRecommendTreatment && parasympatheticDominance) {
-    therapies.push({
-      category: "Therapeutic Target",
-      intervention: "Restore sympathovagal balance (target SB 1.0 – 2.0)",
-      rationale: "Low Normal SB (0.4 < SB < 1.0) may be too low for non-geriatric adults. Lifestyle changes, medications, or other therapies may help raise SB.",
+      category: "Discussion topic",
+      intervention: "Discuss parasympathetic-excess management with your clinician",
+      rationale:
+        "The standing spectral pattern is consistent with elevated parasympathetic activity. A clinician may discuss options (which can include lifestyle measures or, at their discretion, medication). " +
+        CLINICIAN_ONLY,
       priority: "primary",
     });
   }
 
-  // ALA (Alpha-Lipoic Acid) — Colombo protocol candidate for any autonomic
-  // dysfunction (PE, PW, SE, SW, AAD). Gated strictly by baseline BP.
-  const baselineSBP = data.baselineSystolicBP ?? 120;
-  const alaCandidate = canRecommendTreatment && (advancedAutonomicDysfunction || parasympatheticWithdrawal
+  // Low sympathovagal balance at rest (relative parasympathetic dominance) —
+  // discussion topic only, no target-and-medicate instruction.
+  if (canDiscussTopics && parasympatheticDominance) {
+    therapies.push({
+      category: "Discussion topic",
+      intervention: "Discuss the low resting sympathovagal balance with your clinician",
+      rationale:
+        "Resting sympathovagal balance is below the usual range, reflecting reduced sympathetic modulation rather than parasympathetic excess. Whether anything should be done, and what, is a clinical decision. " +
+        CLINICIAN_ONLY,
+      priority: "primary",
+    });
+  }
+
+  // Neuroprotective / antioxidant discussion (e.g. alpha-lipoic acid) — TOPIC
+  // ONLY, NO DOSE. Named as something a clinician may discuss for autonomic
+  // findings; explicitly not a recommendation or dosage from this tool.
+  const neuroTopicCandidate = canDiscussTopics && (advancedAutonomicDysfunction || parasympatheticWithdrawal
     || parasympatheticExcess || sympatheticWithdrawal || sympatheticExcess
     || parasympatheticDominance);
-  if (alaCandidate) {
-    if (baselineSBP < 95) {
-      contraindications.push("Alpha-Lipoic Acid (ALA) is contraindicated due to low baseline blood pressure [Magidenko 2007; NutritionalReviews.org 2007]");
-    } else {
-      therapies.push({
-        category: "Neuroprotective",
-        intervention: "Alpha-Lipoic Acid (ALA)",
-        dose: "600 mg three times daily (time-release)",
-        rationale: "Non-prescription antioxidant specific for nerves. Slows progression of autonomic neuropathy and helps restore autonomic balance [Prendergast 2001].",
-        priority: "primary",
-      });
-    }
-  }
-
-  // Hydration + salt protocol (POTS / orthostatic / syncope)
-  if (canRecommendTreatment && (POTS || orthostaticHypotension || preSyncopeRisk || vasovagalRisk)) {
+  if (neuroTopicCandidate) {
     therapies.push({
-      category: "Lifestyle",
-      intervention: "Hydration + salt protocol",
-      dose: "6–8 glasses of water daily; 1 tbsp salt in 64 oz of water; reduce caffeine, sugar, alcohol",
-      rationale: "Expands blood volume, reduces orthostatic symptoms, supports baroreceptor function.",
-      priority: "primary",
-    });
-  }
-
-  // Low-and-slow exercise (PE or SE)
-  if (canRecommendTreatment && (parasympatheticExcess || sympatheticExcess)) {
-    therapies.push({
-      category: "Exercise",
-      intervention: "Low-and-Slow Exercise Protocol",
-      dose: "40 contiguous minutes/day of zero-impact cardio (walking ≤ 2 mph or easy cycling), for ≥ 6 months",
-      rationale: "Retrains autonomic nervous system to react normally to stresses without exacerbating PE/SE.",
+      category: "Discussion topic",
+      intervention: "Ask your clinician whether neuroprotective/antioxidant support is appropriate",
+      rationale:
+        "For autonomic findings, some clinicians discuss neuroprotective/antioxidant approaches (e.g. alpha-lipoic acid). Appropriateness, product, and dose — if any — are decisions for a licensed clinician who has reviewed your history and blood pressure. " +
+        CLINICIAN_ONLY,
       priority: "secondary",
     });
   }
 
-  // Midodrine / Droxidopa for SW
-  if (canRecommendTreatment && sympatheticWithdrawal && !parasympatheticExcess) {
+  // Orthostatic-symptom lifestyle discussion (hydration / salt) — TOPIC ONLY,
+  // NO DOSE. Only when an orthostatic/syncope pattern is genuinely present.
+  if (canDiscussTopics && (POTS || orthostaticHypotension || preSyncopeRisk || vasovagalRisk)) {
     therapies.push({
-      category: "Pharmacological",
-      intervention: "Midodrine",
-      dose: "2.5 mg TID (time release), increase to 5 mg then 10 mg if needed",
-      rationale: "Alpha-agonist vasoconstrictor addresses Sympathetic Withdrawal (SW) — raises BP and reduces orthostatic symptoms.",
+      category: "Discussion topic",
+      intervention: "Discuss orthostatic-symptom strategies with your clinician",
+      rationale:
+        "The pattern can be associated with orthostatic symptoms. Fluid/salt and other measures are sometimes discussed, but the plan (and any limits, e.g. blood pressure or cardiac/renal considerations) must come from a licensed clinician. " +
+        CLINICIAN_ONLY,
       priority: "primary",
     });
   }
 
-  // Default when nothing flags
+  // Graded-activity discussion (PE or SE) — TOPIC ONLY, NO PRESCRIPTION.
+  if (canDiscussTopics && (parasympatheticExcess || sympatheticExcess)) {
+    therapies.push({
+      category: "Discussion topic",
+      intervention: "Discuss a graded, low-intensity activity plan with your clinician",
+      rationale:
+        "Gentle graded activity is sometimes used to help retrain autonomic responses. Any program should be designed with a licensed clinician appropriate to your fitness and symptoms. " +
+        CLINICIAN_ONLY,
+      priority: "secondary",
+    });
+  }
+
+  // Default when nothing flags.
   if (therapies.length === 0) {
     therapies.push({
       category: "Monitoring",
-      intervention: "No specific therapy recommended at this time",
-      rationale: "All findings within acceptable ranges. Continue current lifestyle. The data must be interpreted by a qualified medical professional.",
+      intervention: "No specific concern flagged from this test",
+      rationale:
+        "No pattern above required a discussion topic. Continue routine care. " + CLINICIAN_ONLY,
       priority: "optional",
     });
   }
@@ -2409,16 +2474,30 @@ export function generateColomboReport(
     (parasympatheticDominance && bradycardia) ? "Low" :
     (parasympatheticExcess || sympatheticExcess) ? "Moderate" : "High";
 
+  // Driver-aware balance interpretation. A low SB with normal RFa reflects
+  // REDUCED SYMPATHETIC MODULATION (relative parasympathetic dominance), not a
+  // "prolonged rest-and-digest state" and not an excess — and it asserts NO
+  // symptoms (those require captured symptoms).
+  const balanceInterpretation = (): string => {
+    if (parasympatheticDominance) {
+      const driver = classifyLowSbDriver(A.LFa as number, A.RFa as number);
+      if (driver === "parasympathetic-excess" || driver === "mixed") {
+        return "Relatively parasympathetic-leaning balance with genuinely elevated parasympathetic (vagal) activity. This is a measurement pattern — discuss its meaning with your clinician.";
+      }
+      return "Relative parasympathetic dominance: the low sympathovagal balance reflects reduced sympathetic modulation, with parasympathetic (vagal) activity within normal limits. This is a measurement pattern, not an excess — discuss its meaning with your clinician.";
+    }
+    if (parasympatheticExcess) {
+      return "Parasympathetic activity rose on standing when it would normally step down. This is a measurement pattern — discuss its meaning with your clinician.";
+    }
+    return "Balanced sympathovagal tone.";
+  };
   const autonomicBalance = spectralAvailable
     ? {
         parasympathetic: A.RFa as number,
         sympathetic: A.LFa as number,
         balance: A.SB as number,
         available: true,
-        interpretation: parasympatheticDominance
-          ? "Parasympathetic-dominant. Your nervous system is in a prolonged 'rest and digest' state, which at this intensity is associated with fatigue and low exercise tolerance."
-          : parasympatheticExcess ? "Parasympathetic Excess on standing — your vagal tone spikes when it should step down, which can cause unstable blood pressure and dizziness."
-          : "Balanced sympathovagal tone.",
+        interpretation: balanceInterpretation(),
       }
     : {
         // Never coerce missing spectral to 0 / a 0-100 split. The UI renders
@@ -2437,6 +2516,34 @@ export function generateColomboReport(
   if (parasympatheticDominance) clinicalFlags.push(`Parasympathetic dominance: SB = ${A.SB}`);
   if (!spectralAvailable) clinicalFlags.push("Spectral measures (LFa/RFa/SB) and continuous BP not assessed — not reproducible from this recording; clinician review of the vendor report required.");
 
+  // --- Watch items — ONLY from abnormal MEASURED/verified fields --------------
+  // Never watch a value that is already normal, a field that was not read, or
+  // symptoms the test did not capture. Each item corresponds to a genuinely
+  // out-of-range measured signal (or an assessed orthostatic finding).
+  const monitorParameters: string[] = [];
+  if (spectralAvailable) {
+    const rfaAbnormal = A.RFa != null && (A.RFa < RFa_n.lo || A.RFa > RFa_n.hi);
+    const lfaAbnormal = A.LFa != null && (A.LFa < LFa_n.lo || A.LFa > LFa_n.hi);
+    const sbAbnormal = A.SB != null && (A.SB < SB_n.lo || A.SB > SB_n.hi);
+    if (rfaAbnormal) monitorParameters.push("Parasympathetic activity (RFa) trending toward the normal range");
+    if (lfaAbnormal) monitorParameters.push("Sympathetic modulation (LFa) trending toward the normal range");
+    if (sbAbnormal) monitorParameters.push("Sympathovagal balance (SB) trending toward the normal range (0.4–3.0)");
+    // FRF only when it was actually READ and is out of range (never when unread).
+    if (highFRF && B.FRF != null && B.FRF > 0) {
+      monitorParameters.push(`FRF during deep breathing (currently ${B.FRF.toFixed(2)} Hz; normal ${COLOMBO_NORMS.FRF.lo}–${COLOMBO_NORMS.FRF.hi} Hz)`);
+    }
+  }
+  // Orthostatic tolerance only when an orthostatic finding was actually assessed
+  // and abnormal (requires real standing BP; see orthostaticBpAssessable).
+  if (orthostaticBpAssessable && orthostaticHypotension) {
+    monitorParameters.push("Orthostatic tolerance (blood-pressure response to standing)");
+  }
+  if (bradycardia) {
+    monitorParameters.push(`Resting heart rate (currently ${A.meanHR} bpm)`);
+  }
+  // No abnormal measured signal → nothing to watch (honest empty list; the UI
+  // hides the section). We do NOT invent generic watch items or symptom claims.
+
   const bodySystemImpact = computeBodyImpact(patterns, phaseEvents, { spectralAvailable, bpAvailable });
 
   // Multi-Parameter Graphical data for clinician view. Guarded in try/catch
@@ -2451,7 +2558,10 @@ export function generateColomboReport(
   }
 
   // -- Path B: Colombo indication detection -----------------------------
-  const indications = detectIndicationsLocal(phaseEvents, multiParameter);
+  const indications = detectIndicationsLocal(phaseEvents, multiParameter, {
+    standSpectralAvailable,
+    standBpAvailable,
+  });
 
   return {
     patientData: data,
@@ -2469,14 +2579,11 @@ export function generateColomboReport(
     contraindications,
     followUp: {
       retestInterval, rationale: followUpRationale,
-      monitorParameters: [
-        "Parasympathetic activity (RFa) normalization",
-        "Sympathetic activity (LFa) balance",
-        "Sympathovagal Balance (SB) improvement",
-        "Orthostatic tolerance (HR and BP response to standing)",
-        "FRF during deep breathing (should return to 0.09–0.15 Hz)",
-        "Symptom improvement (fatigue, dizziness, headaches)",
-      ],
+      // Watch items are generated ONLY from ABNORMAL measured/verified fields.
+      // We never tell the clinician to watch a value that is already normal
+      // (e.g. RFa within band), a field that was NOT READ (e.g. FRF unavailable),
+      // or symptoms the test never captured. Built above as `monitorParameters`.
+      monitorParameters,
     },
     bodySystemImpact,
     clinicalFlags,
@@ -2589,6 +2696,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // everywhere else. Parser-extracted values are never overwritten.
         const reconciledStudy = reconcileStudyWithReport(ansStudy, report);
         diagnosticSummary = computeDiagnosticSummary(reconciledStudy);
+        // Cross-source: when the paired vendor report establishes normal RFa + low
+        // SB driven by low LFa, invalidate the estimate-based deterministic
+        // parasympathetic-withdrawal hypothesis so the clinician EVIDENCE panel
+        // and the patient view cannot contradict for the same metrics.
+        if (vendorMetrics) {
+          diagnosticSummary = reconcilePhenotypesWithVendor(diagnosticSummary, {
+            LFa: vendorMetrics.LFa,
+            RFa: vendorMetrics.RFa,
+            SB: vendorMetrics.SB,
+          });
+        }
       } catch (err: any) {
         console.warn(
           "[ans-scoring] computeDiagnosticSummary failed:",

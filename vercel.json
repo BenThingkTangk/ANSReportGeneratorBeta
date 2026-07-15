@@ -4,6 +4,11 @@
   "installCommand": "npm install",
   "framework": null,
   "functions": {
+    "api/upload-vendor.ts": {
+      "memory": 1024,
+      "maxDuration": 120,
+      "includeFiles": "node_modules/{@napi-rs/canvas*,pdfjs-dist,tesseract.js*,pdf-parse,node-fetch,bmp-js,is-url,is-electron,tr46,webidl-conversions,whatwg-url,wasm-feature-detect,regenerator-runtime}/**"
+    },
     "api/**/*.ts": {
       "memory": 1024,
       "maxDuration": 120

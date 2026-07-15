@@ -144,6 +144,7 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
           source={vendorSource?.source}
           ocrConfidence={vendorSource?.ocrConfidence}
           fileName={vendorSource?.fileName}
+          trustedTestDate={report.patientData?.testDate ?? null}
         />
       )}
 
