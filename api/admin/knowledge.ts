@@ -5,6 +5,7 @@ import {
   logAudit,
   setCorsHeaders,
   handleError,
+  backendError,
 } from "../_supabase.js";
 
 /**
@@ -15,11 +16,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const supabase = createSupabaseFromRequest(req);
-
   try {
     if (req.method === "GET") {
+      // Authorize FIRST (gateway session cookie → super_admin; no Supabase user
+      // session is consulted), THEN touch the backend — so an unauthenticated
+      // caller can never probe backend configuration state.
       await requireRole(req, ["super_admin", "clinical_admin", "reviewer"]);
+      const supabase = createSupabaseFromRequest(req);
 
       const {
         status,
@@ -55,7 +58,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       query = query.range(from, from + limitNum - 1);
 
       const { data, error, count } = await query;
-      if (error) throw Object.assign(new Error(error.message), { statusCode: 400 });
+      // Distinguish a transport/connectivity failure (unreachable or
+      // misconfigured SUPABASE_URL → 503, actionable non-secret message) from a
+      // genuine query error (400). Previously any error — including a bare
+      // `TypeError: fetch failed` — was surfaced as a misleading 400.
+      if (error) throw backendError(error);
 
       return res.status(200).json({
         success: true,
@@ -66,6 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (req.method === "POST") {
       const user = await requireRole(req, ["super_admin", "clinical_admin"]);
+      const supabase = createSupabaseFromRequest(req);
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
       if (!body?.title) {
@@ -102,7 +110,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select()
         .single();
 
-      if (error) throw Object.assign(new Error(error.message), { statusCode: 400 });
+      if (error) throw backendError(error);
 
       await logAudit(
         supabase,
