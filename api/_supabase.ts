@@ -5,14 +5,21 @@
  */
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { VercelRequest } from "@vercel/node";
-import { requireGateway } from "./_adminGateway.js";
+import { isGatewayConfigured, gatewayStatus } from "./_adminGateway.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type UserRole = "super_admin" | "clinical_admin" | "reviewer" | "viewer";
 
 export interface AdminUser {
-  id: string;
+  /**
+   * Supabase auth user id, or `null` when the request was authorized purely by
+   * the env-configured admin gateway (username + password). In gateway mode
+   * there is no per-user Supabase identity, so ownership/audit columns
+   * (`added_by`, `last_updated_by`, `actor_id`) are written as NULL — they are
+   * nullable FKs to auth.users(id) ON DELETE SET NULL.
+   */
+  id: string | null;
   email: string;
   role: UserRole;
 }
@@ -101,13 +108,31 @@ export async function requireRole(
   let user: { id: string; email?: string } | null = null;
 
   if ("headers" in reqOrSupabase) {
-    // Perimeter check FIRST: when the env-configured admin gateway is enabled,
-    // every request must carry a valid gateway session cookie before we even
-    // look at the Supabase identity. No-op when the gateway is unconfigured, so
-    // magic-link-only deployments are unaffected. This sits IN FRONT of Supabase
-    // RLS — it never replaces it.
-    requireGateway(reqOrSupabase as VercelRequest);
-    user = (await getAuthUser(reqOrSupabase as VercelRequest)) as any;
+    const req = reqOrSupabase as VercelRequest;
+
+    // Primary path: the env-configured admin gateway (username + password) is
+    // the sole, authoritative admin entry point for this deployment. A valid
+    // signed gateway session cookie authorizes as super_admin — the highest
+    // role — which satisfies every admin route's role gate. No Supabase
+    // magic-link identity is required or consulted in this mode.
+    if (isGatewayConfigured()) {
+      const gw = gatewayStatus(req);
+      if (!gw.authenticated) {
+        throw Object.assign(
+          new Error("Admin gateway authentication required"),
+          { statusCode: 401 }
+        );
+      }
+      const role: UserRole = "super_admin";
+      if (!allowedRoles.includes(role)) {
+        throw Object.assign(new Error("Forbidden"), { statusCode: 403 });
+      }
+      return { id: null, email: gw.sub ?? "", role };
+    }
+
+    // Legacy fallback (gateway unconfigured — e.g. local dev / older
+    // deployments): resolve identity from the Supabase Bearer token and RLS.
+    user = (await getAuthUser(req)) as any;
   } else {
     const { data } = await (reqOrSupabase as SupabaseClient).auth.getUser();
     user = data.user as any;
