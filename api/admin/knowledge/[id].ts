@@ -1,65 +1,99 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { requireRole, setCorsHeaders, handleError } from "../../_supabase.js";
 import {
-  createSupabaseFromRequest,
-  requireRole,
-  logAudit,
-  setCorsHeaders,
-  handleError,
-} from "../../_supabase.js";
+  ragQuery,
+  withRagTransaction,
+  recordRagVersion,
+  logRagAudit,
+  ragBackendError,
+  SOURCE_COLUMNS,
+  type RagChangeAction,
+} from "../../_ragDb.js";
 
 /**
- * GET    /api/admin/knowledge/:id — get single source + chunk summary
- * PUT    /api/admin/knowledge/:id — update source
+ * GET    /api/admin/knowledge/:id — get single source + chunk summary + versions
+ * PUT    /api/admin/knowledge/:id — update source (also activate/archive)
  * DELETE /api/admin/knowledge/:id — delete (super_admin only)
+ *
+ * Backed by Akamai Managed PostgreSQL (humanos-ans-rag-pg) via ../../_ragDb —
+ * NOT Supabase REST. Auth is enforced FIRST via the admin gateway session.
+ * Every statement is parameterized.
  */
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const asArray = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const supabase = createSupabaseFromRequest(req);
   const id = req.query.id as string;
-
   if (!id) return res.status(400).json({ success: false, error: "id is required" });
+  // A non-uuid id can never match a row; treat as not found (never a 500).
+  if (!UUID_RE.test(id)) {
+    return res.status(404).json({ success: false, error: "Not found" });
+  }
 
   try {
     if (req.method === "GET") {
       await requireRole(req, ["super_admin", "clinical_admin", "reviewer"]);
 
-      const { data, error } = await supabase
-        .from("ans_knowledge_sources")
-        .select("*")
-        .eq("id", id)
-        .single();
+      let source: Record<string, unknown> | undefined;
+      let chunkCount = 0;
+      let chunks: Array<Record<string, unknown>> = [];
+      let versions: Array<Record<string, unknown>> = [];
+      try {
+        const srcRes = await ragQuery(
+          `SELECT ${SOURCE_COLUMNS} FROM public.ans_knowledge_sources WHERE id = $1`,
+          [id]
+        );
+        source = srcRes.rows[0];
+        if (!source) {
+          return res.status(404).json({ success: false, error: "Not found" });
+        }
 
-      if (error || !data) {
-        return res.status(404).json({ success: false, error: "Not found" });
+        const [countRes, chunkRes, verRes] = await Promise.all([
+          ragQuery<{ n: number }>(
+            "SELECT count(*)::int AS n FROM public.ans_knowledge_chunks WHERE source_id = $1",
+            [id]
+          ),
+          ragQuery<{ id: string; chunk_index: number; tokens: number | null; content: string }>(
+            `SELECT id, chunk_index, tokens, content
+               FROM public.ans_knowledge_chunks
+              WHERE source_id = $1
+              ORDER BY chunk_index ASC
+              LIMIT 200`,
+            [id]
+          ),
+          ragQuery(
+            `SELECT version, change_action, changed_by_email, created_at
+               FROM public.ans_knowledge_versions
+              WHERE source_id = $1
+              ORDER BY version DESC
+              LIMIT 20`,
+            [id]
+          ),
+        ]);
+
+        chunkCount = countRes.rows[0]?.n ?? 0;
+        chunks = chunkRes.rows.map((c) => ({
+          id: c.id,
+          chunkIndex: c.chunk_index,
+          tokens: c.tokens ?? null,
+          // Preview only — keeps payloads small while making chunks browseable.
+          preview: typeof c.content === "string" ? c.content.slice(0, 600) : "",
+          length: typeof c.content === "string" ? c.content.length : 0,
+        }));
+        versions = verRes.rows;
+      } catch (dbErr) {
+        throw ragBackendError(dbErr);
       }
-
-      // chunk summary + a browseable preview of the actual chunks (bounded).
-      const { count: chunkCount } = await supabase
-        .from("ans_knowledge_chunks")
-        .select("id", { count: "exact", head: true })
-        .eq("source_id", id);
-
-      const { data: chunkRows } = await supabase
-        .from("ans_knowledge_chunks")
-        .select("id, chunk_index, tokens, content")
-        .eq("source_id", id)
-        .order("chunk_index", { ascending: true })
-        .limit(200);
-
-      const chunks = (chunkRows ?? []).map((c: any) => ({
-        id: c.id,
-        chunkIndex: c.chunk_index,
-        tokens: c.tokens ?? null,
-        // Preview only — keeps payloads small while making chunks browseable.
-        preview: typeof c.content === "string" ? c.content.slice(0, 600) : "",
-        length: typeof c.content === "string" ? c.content.length : 0,
-      }));
 
       return res.status(200).json({
         success: true,
-        data: { ...data, chunkCount: chunkCount ?? 0, chunks },
+        data: { ...source, chunkCount, chunks, versions },
       });
     }
 
@@ -71,25 +105,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ]);
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-      // Fetch existing for audit
-      const { data: existing, error: fetchErr } = await supabase
-        .from("ans_knowledge_sources")
-        .select("*")
-        .eq("id", id)
-        .single();
-
-      if (fetchErr || !existing) {
-        return res.status(404).json({ success: false, error: "Not found" });
-      }
-
-      // Only super_admin/clinical_admin can toggle active_in_ai_analysis
+      // Only super_admin/clinical_admin can toggle active_in_ai_analysis.
       const allowedToToggleAI = ["super_admin", "clinical_admin"].includes(user.role);
 
-      const updatePayload: Record<string, unknown> = {
-        last_updated_by: user.id,
+      // Build a parameterized SET list from whitelisted fields only.
+      const sets: string[] = [];
+      const params: unknown[] = [];
+      let i = 1;
+      const setField = (col: string, value: unknown, cast = "") => {
+        sets.push(`${col} = $${i}${cast}`);
+        params.push(value);
+        i++;
       };
 
-      const allowedFields = [
+      const scalarFields = [
         "title",
         "authors",
         "year",
@@ -100,11 +129,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "pubmed_id",
         "url",
         "abstract",
-        "key_claims",
         "diagnostic_relevance",
-        "ans_metrics",
-        "tags",
-        "used_in",
         "active_in_report_citations",
         "active_in_admin_review",
         "review_status",
@@ -112,60 +137,110 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         "file_mime",
         "file_size_bytes",
       ];
-
-      for (const field of allowedFields) {
-        if (field in body) updatePayload[field] = body[field];
+      for (const f of scalarFields) {
+        if (f in body) {
+          let v = body[f];
+          if (f === "year") v = body.year != null ? parseInt(String(body.year), 10) : null;
+          if (f === "file_size_bytes")
+            v = body.file_size_bytes != null ? parseInt(String(body.file_size_bytes), 10) : null;
+          setField(f, v ?? null);
+        }
       }
-
+      if ("key_claims" in body) setField("key_claims", JSON.stringify(body.key_claims ?? []), "::jsonb");
+      for (const f of ["ans_metrics", "tags", "used_in"]) {
+        if (f in body) setField(f, asArray(body[f]));
+      }
       if (allowedToToggleAI && "active_in_ai_analysis" in body) {
-        updatePayload["active_in_ai_analysis"] = body.active_in_ai_analysis;
+        setField("active_in_ai_analysis", Boolean(body.active_in_ai_analysis));
+      }
+      // Always stamp the editor (id is null in gateway mode).
+      setField("last_updated_by", user.id);
+
+      const idPh = i;
+      params.push(id);
+
+      let existing: Record<string, unknown> | undefined;
+      let updated: Record<string, unknown> | undefined;
+      try {
+        updated = await withRagTransaction(async (client) => {
+          const cur = await client.query(
+            `SELECT ${SOURCE_COLUMNS} FROM public.ans_knowledge_sources WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
+          existing = cur.rows[0] as Record<string, unknown> | undefined;
+          if (!existing) return undefined;
+
+          const upd = await client.query(
+            `UPDATE public.ans_knowledge_sources SET ${sets.join(", ")} WHERE id = $${idPh} RETURNING ${SOURCE_COLUMNS}`,
+            params
+          );
+          const row = upd.rows[0] as Record<string, unknown>;
+
+          // Precise version action for the immutable history.
+          let action: RagChangeAction = "update";
+          if (body.review_status === "archived" && existing.review_status !== "archived") {
+            action = "archive";
+          } else if (
+            allowedToToggleAI &&
+            body.active_in_ai_analysis === true &&
+            existing.active_in_ai_analysis === false
+          ) {
+            action = "activate";
+          }
+          await recordRagVersion(client, id, action, row, { id: user.id, email: user.email });
+          return row;
+        });
+      } catch (dbErr) {
+        throw ragBackendError(dbErr);
       }
 
-      const { data, error } = await supabase
-        .from("ans_knowledge_sources")
-        .update(updatePayload)
-        .eq("id", id)
-        .select()
-        .single();
+      if (!updated) {
+        return res.status(404).json({ success: false, error: "Not found" });
+      }
 
-      if (error) throw Object.assign(new Error(error.message), { statusCode: 400 });
-
-      await logAudit(
-        supabase,
+      await logRagAudit(
         "update",
         "ans_knowledge_sources",
         id,
-        existing as Record<string, unknown>,
-        data as Record<string, unknown>,
+        existing ?? null,
+        updated,
+        { id: user.id, email: user.email },
         req
       );
 
-      return res.status(200).json({ success: true, data });
+      return res.status(200).json({ success: true, data: updated });
     }
 
     if (req.method === "DELETE") {
       const user = await requireRole(req, ["super_admin"]);
 
-      const { data: existing } = await supabase
-        .from("ans_knowledge_sources")
-        .select("*")
-        .eq("id", id)
-        .single();
+      let existing: Record<string, unknown> | undefined;
+      try {
+        const del = await withRagTransaction(async (client) => {
+          const cur = await client.query(
+            `SELECT ${SOURCE_COLUMNS} FROM public.ans_knowledge_sources WHERE id = $1 FOR UPDATE`,
+            [id]
+          );
+          existing = cur.rows[0] as Record<string, unknown> | undefined;
+          if (!existing) return false;
+          // chunks + versions cascade via ON DELETE CASCADE.
+          await client.query("DELETE FROM public.ans_knowledge_sources WHERE id = $1", [id]);
+          return true;
+        });
+        if (!del) {
+          return res.status(404).json({ success: false, error: "Not found" });
+        }
+      } catch (dbErr) {
+        throw ragBackendError(dbErr);
+      }
 
-      const { error } = await supabase
-        .from("ans_knowledge_sources")
-        .delete()
-        .eq("id", id);
-
-      if (error) throw Object.assign(new Error(error.message), { statusCode: 400 });
-
-      await logAudit(
-        supabase,
+      await logRagAudit(
         "delete",
         "ans_knowledge_sources",
         id,
-        existing as Record<string, unknown>,
+        existing ?? null,
         null,
+        { id: user.id, email: user.email },
         req
       );
 

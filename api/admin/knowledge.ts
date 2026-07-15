@@ -1,17 +1,32 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { requireRole, setCorsHeaders, handleError } from "../_supabase.js";
 import {
-  createSupabaseFromRequest,
-  requireRole,
-  logAudit,
-  setCorsHeaders,
-  handleError,
-  backendError,
-} from "../_supabase.js";
+  ragQuery,
+  withRagTransaction,
+  recordRagVersion,
+  logRagAudit,
+  ragBackendError,
+  SOURCE_COLUMNS,
+} from "../_ragDb.js";
 
 /**
  * GET  /api/admin/knowledge — list knowledge sources with filters
  * POST /api/admin/knowledge — create a new source
+ *
+ * Backed by the dedicated Akamai Managed PostgreSQL instance (humanos-ans-rag-pg)
+ * via the `pg` pool in ../_ragDb — NOT Supabase REST. Authorization is enforced
+ * FIRST via the admin gateway session (requireRole → super_admin), before the
+ * database is touched, so an unauthenticated caller can never probe backend
+ * state. All SQL is parameterized.
  */
+
+/** Escape LIKE/ILIKE metacharacters so user search text is matched literally. */
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+const asArray = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -19,10 +34,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (req.method === "GET") {
       // Authorize FIRST (gateway session cookie → super_admin; no Supabase user
-      // session is consulted), THEN touch the backend — so an unauthenticated
-      // caller can never probe backend configuration state.
+      // session is consulted), THEN touch the backend.
       await requireRole(req, ["super_admin", "clinical_admin", "reviewer"]);
-      const supabase = createSupabaseFromRequest(req);
 
       const {
         status,
@@ -33,96 +46,140 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         limit = "50",
       } = req.query as Record<string, string>;
 
-      let query = supabase
-        .from("ans_knowledge_sources")
-        .select(
-          "id, title, authors, year, publication_type, journal, publisher, doi, url, abstract, key_claims, ans_metrics, tags, used_in, active_in_ai_analysis, active_in_report_citations, active_in_admin_review, review_status, file_path, file_mime, file_size_bytes, added_by, last_updated_by, created_at, updated_at",
-          { count: "exact" }
-        )
-        .order("year", { ascending: false })
-        .order("created_at", { ascending: false });
+      const conds: string[] = [];
+      const params: unknown[] = [];
+      let i = 1;
 
-      if (status) query = query.eq("review_status", status);
-      if (type) query = query.eq("publication_type", type);
-      if (active === "true") query = query.eq("active_in_ai_analysis", true);
-      if (active === "false") query = query.eq("active_in_ai_analysis", false);
+      if (status) {
+        conds.push(`review_status = $${i++}`);
+        params.push(status);
+      }
+      if (type) {
+        conds.push(`publication_type = $${i++}`);
+        params.push(type);
+      }
+      if (active === "true") {
+        conds.push(`active_in_ai_analysis = $${i++}`);
+        params.push(true);
+      } else if (active === "false") {
+        conds.push(`active_in_ai_analysis = $${i++}`);
+        params.push(false);
+      }
       if (search) {
-        query = query.or(
-          `title.ilike.%${search}%,authors.ilike.%${search}%,abstract.ilike.%${search}%`
+        conds.push(
+          `(title ILIKE $${i} OR authors ILIKE $${i} OR abstract ILIKE $${i})`
         );
+        params.push(`%${escapeLike(search)}%`);
+        i++;
       }
 
-      const pageNum = Math.max(1, parseInt(page, 10));
-      const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
-      const from = (pageNum - 1) * limitNum;
-      query = query.range(from, from + limitNum - 1);
+      const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
 
-      const { data, error, count } = await query;
-      // Distinguish a transport/connectivity failure (unreachable or
-      // misconfigured SUPABASE_URL → 503, actionable non-secret message) from a
-      // genuine query error (400). Previously any error — including a bare
-      // `TypeError: fetch failed` — was surfaced as a misleading 400.
-      if (error) throw backendError(error);
+      const pageNum = Math.max(1, parseInt(page, 10) || 1);
+      const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+      const from = (pageNum - 1) * limitNum;
+
+      const limitPh = i++;
+      params.push(limitNum);
+      const offsetPh = i++;
+      params.push(from);
+
+      // count(*) OVER() returns the full filtered total alongside the page rows
+      // in a single round trip (mirrors Supabase's count:"exact").
+      const sql = `SELECT ${SOURCE_COLUMNS}, count(*) OVER() AS total_count
+        FROM public.ans_knowledge_sources
+        ${where}
+        ORDER BY year DESC NULLS LAST, created_at DESC
+        LIMIT $${limitPh} OFFSET $${offsetPh}`;
+
+      let rows: Array<Record<string, unknown>>;
+      try {
+        const result = await ragQuery(sql, params);
+        rows = result.rows;
+      } catch (dbErr) {
+        // Transport/connectivity → 503 (secret-free); schema missing → 503 with
+        // a "run the migration" hint; a genuine query error → 400. Never a raw
+        // driver TypeError.
+        throw ragBackendError(dbErr);
+      }
+
+      const total = rows.length ? Number(rows[0].total_count) : 0;
+      const data = rows.map(({ total_count, ...rest }) => rest);
 
       return res.status(200).json({
         success: true,
         data,
-        meta: { total: count ?? 0, page: pageNum, limit: limitNum },
+        meta: { total, page: pageNum, limit: limitNum },
       });
     }
 
     if (req.method === "POST") {
       const user = await requireRole(req, ["super_admin", "clinical_admin"]);
-      const supabase = createSupabaseFromRequest(req);
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
       if (!body?.title) {
         return res.status(400).json({ success: false, error: "title is required" });
       }
 
-      const payload = {
-        title: body.title,
-        authors: body.authors ?? null,
-        year: body.year ? parseInt(body.year, 10) : null,
-        publication_type: body.publication_type ?? null,
-        journal: body.journal ?? null,
-        publisher: body.publisher ?? null,
-        doi: body.doi ?? null,
-        pubmed_id: body.pubmed_id ?? null,
-        url: body.url ?? null,
-        abstract: body.abstract ?? null,
-        key_claims: body.key_claims ?? [],
-        diagnostic_relevance: body.diagnostic_relevance ?? null,
-        ans_metrics: body.ans_metrics ?? [],
-        tags: body.tags ?? [],
-        used_in: body.used_in ?? [],
-        active_in_ai_analysis: body.active_in_ai_analysis ?? false,
-        active_in_report_citations: body.active_in_report_citations ?? false,
-        active_in_admin_review: body.active_in_admin_review ?? true,
-        review_status: body.review_status ?? "draft",
-        added_by: user.id,
-        last_updated_by: user.id,
-      };
+      const values = [
+        body.title,
+        body.authors ?? null,
+        body.year ? parseInt(String(body.year), 10) : null,
+        body.publication_type ?? null,
+        body.journal ?? null,
+        body.publisher ?? null,
+        body.doi ?? null,
+        body.pubmed_id ?? null,
+        body.url ?? null,
+        body.abstract ?? null,
+        JSON.stringify(body.key_claims ?? []), // jsonb
+        body.diagnostic_relevance ?? null,
+        asArray(body.ans_metrics), // text[]
+        asArray(body.tags), // text[]
+        asArray(body.used_in), // text[]
+        body.active_in_ai_analysis ?? false,
+        body.active_in_report_citations ?? false,
+        body.active_in_admin_review ?? true,
+        body.review_status ?? "draft",
+        user.id,
+        user.id,
+      ];
 
-      const { data, error } = await supabase
-        .from("ans_knowledge_sources")
-        .insert(payload)
-        .select()
-        .single();
+      let created: Record<string, unknown>;
+      try {
+        created = await withRagTransaction(async (client) => {
+          const insertRes = await client.query(
+            `INSERT INTO public.ans_knowledge_sources
+               (title, authors, year, publication_type, journal, publisher, doi, pubmed_id, url,
+                abstract, key_claims, diagnostic_relevance, ans_metrics, tags, used_in,
+                active_in_ai_analysis, active_in_report_citations, active_in_admin_review,
+                review_status, added_by, last_updated_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+             RETURNING ${SOURCE_COLUMNS}`,
+            values
+          );
+          const row = insertRes.rows[0] as Record<string, unknown>;
+          await recordRagVersion(client, row.id as string, "create", row, {
+            id: user.id,
+            email: user.email,
+          });
+          return row;
+        });
+      } catch (dbErr) {
+        throw ragBackendError(dbErr);
+      }
 
-      if (error) throw backendError(error);
-
-      await logAudit(
-        supabase,
+      await logRagAudit(
         "create",
         "ans_knowledge_sources",
-        data.id,
+        created.id as string,
         null,
-        data as Record<string, unknown>,
+        created,
+        { id: user.id, email: user.email },
         req
       );
 
-      return res.status(201).json({ success: true, data });
+      return res.status(201).json({ success: true, data: created });
     }
 
     return res.status(405).json({ success: false, error: "Method not allowed" });

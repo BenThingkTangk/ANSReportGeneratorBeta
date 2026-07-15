@@ -1,32 +1,42 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
-  createSupabaseFromRequest,
-  createSupabaseAdmin,
   requireRole,
-  logAudit,
   setCorsHeaders,
   handleError,
+  backendConfigStatus,
+  createSupabaseAdmin,
 } from "../../_supabase.js";
+import {
+  withRagTransaction,
+  recordRagVersion,
+  logRagAudit,
+  ragBackendError,
+  SOURCE_COLUMNS,
+} from "../../_ragDb.js";
 
 /**
  * POST /api/admin/knowledge/upload
- * Multipart upload of PDF/text file for a knowledge source.
+ * Multipart upload of a PDF/text file for a knowledge source.
  * - Validates ≤25 MB
- * - Uploads to Supabase Storage bucket 'knowledge-files'
+ * - Stores the binary in Supabase Storage bucket 'knowledge-files' IF Supabase
+ *   is configured; otherwise it degrades gracefully (binary skipped) but the
+ *   extracted text + chunks are STILL persisted — content is never discarded.
  * - If PDF: extracts text with pdf-parse
  * - Chunks ~800 tokens (≈3000 chars) with 100-char overlap
- * - Inserts chunks into ans_knowledge_chunks
+ * - Writes source row + chunks + version snapshot to Akamai PostgreSQL
+ *   (humanos-ans-rag-pg) via ../../_ragDb — NOT Supabase.
  * - Returns { source_id, file_path, chunkCount }
  *
  * Expects multipart/form-data with fields:
  *   - file: the binary file
- *   - source_id: existing draft source ID to attach to (optional)
+ *   - source_id: existing source ID to attach to (optional)
  *   - title: required if no source_id
  */
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
 const CHUNK_SIZE = 3000; // ~800 tokens
 const CHUNK_OVERLAP = 100;
+const INSERT_BATCH = 500;
 
 function chunkText(text: string): string[] {
   const chunks: string[] = [];
@@ -51,21 +61,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ success: false, error: "POST only" });
 
-  const supabase = createSupabaseFromRequest(req);
-  const adminSupabase = createSupabaseAdmin();
-
   try {
+    // Authorize FIRST — before touching any backend or reading the body.
     const user = await requireRole(req, ["super_admin", "clinical_admin"]);
 
     // Parse multipart form data
-    const chunks: Buffer[] = [];
+    const parts0: Buffer[] = [];
     await new Promise<void>((resolve, reject) => {
-      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("data", (chunk: Buffer) => parts0.push(chunk));
       req.on("end", () => resolve());
       req.on("error", reject);
     });
 
-    const rawBody = Buffer.concat(chunks);
+    const rawBody = Buffer.concat(parts0);
 
     if (rawBody.length > MAX_FILE_SIZE) {
       return res.status(413).json({ success: false, error: "File exceeds 25 MB limit" });
@@ -114,47 +122,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ success: false, error: "No file data found in request" });
     }
 
-    // Extract or create source record
+    // Resolve / create the source row (PostgreSQL).
     let finalSourceId = sourceId;
     if (!finalSourceId) {
       if (!title) {
-        return res
-          .status(400)
-          .json({ success: false, error: "Provide source_id or title" });
+        return res.status(400).json({ success: false, error: "Provide source_id or title" });
       }
-      const { data: newSource, error: createErr } = await adminSupabase
-        .from("ans_knowledge_sources")
-        .insert({
-          title,
-          file_mime: mimeType,
-          file_size_bytes: fileBuffer.length,
-          review_status: "draft",
-          added_by: user.id,
-          last_updated_by: user.id,
-        })
-        .select("id")
-        .single();
-      if (createErr || !newSource) {
-        throw Object.assign(new Error(createErr?.message ?? "Failed to create source"), {
-          statusCode: 400,
+      try {
+        const ins = await withRagTransaction(async (client) => {
+          const r = await client.query<{ id: string }>(
+            `INSERT INTO public.ans_knowledge_sources
+               (title, file_mime, file_size_bytes, review_status, added_by, last_updated_by)
+             VALUES ($1, $2, $3, 'draft', $4, $4)
+             RETURNING id`,
+            [title, mimeType, fileBuffer.length, user.id]
+          );
+          return r.rows[0].id;
         });
+        finalSourceId = ins;
+      } catch (dbErr) {
+        throw ragBackendError(dbErr);
       }
-      finalSourceId = newSource.id;
     }
 
-    // Upload to Supabase Storage
-    const storageKey = `${finalSourceId}/${Date.now()}_${fileName}`;
-    const { error: storageErr } = await adminSupabase.storage
-      .from("knowledge-files")
-      .upload(storageKey, fileBuffer, {
-        contentType: mimeType,
-        upsert: true,
-      });
-
-    if (storageErr) {
-      throw Object.assign(new Error(`Storage upload failed: ${storageErr.message}`), {
-        statusCode: 500,
-      });
+    // Store the binary in Supabase Storage — best-effort. If Supabase is not
+    // configured or the upload fails, we DO NOT abort: the extracted text and
+    // chunks (the RAG-relevant content) are still persisted below.
+    let storageKey: string | null = null;
+    if (backendConfigStatus().configured) {
+      try {
+        const adminSupabase = createSupabaseAdmin();
+        const key = `${finalSourceId}/${Date.now()}_${fileName}`;
+        const { error: storageErr } = await adminSupabase.storage
+          .from("knowledge-files")
+          .upload(key, fileBuffer, { contentType: mimeType, upsert: true });
+        if (storageErr) {
+          console.warn(
+            "Supabase Storage upload failed (continuing; text/chunks still stored):",
+            storageErr.message
+          );
+        } else {
+          storageKey = key;
+        }
+      } catch (e) {
+        console.warn("Supabase Storage unavailable (continuing):", (e as Error)?.message ?? "unknown");
+      }
+    } else {
+      console.warn("Supabase Storage not configured; skipping binary upload (text/chunks still stored).");
     }
 
     // Extract text
@@ -163,10 +177,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (isPdf) {
       try {
-        // Dynamic import to avoid module loading issues in Vercel.
-        // pdf-parse's TS types expose only a namespace; runtime gives us
-        // either a CJS default or the namespace itself depending on the
-        // resolver, so we coerce via `unknown`.
         const mod = (await import("pdf-parse")) as unknown as
           | { default: (b: Buffer) => Promise<{ text?: string }> }
           | ((b: Buffer) => Promise<{ text?: string }>);
@@ -187,51 +197,63 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       extractedText = fileBuffer.toString("utf-8");
     }
 
-    // Chunk and insert
+    // Persist chunks + metadata + version snapshot in one transaction.
     let chunkCount = 0;
-    if (extractedText.trim().length > 0) {
-      const textChunks = chunkText(extractedText);
+    let updatedSource: Record<string, unknown> | null = null;
+    try {
+      const textChunks = extractedText.trim().length > 0 ? chunkText(extractedText) : [];
       chunkCount = textChunks.length;
 
-      // Delete old chunks for this source
-      await adminSupabase
-        .from("ans_knowledge_chunks")
-        .delete()
-        .eq("source_id", finalSourceId);
+      updatedSource = await withRagTransaction(async (client) => {
+        // Replace any existing chunks for this source.
+        await client.query("DELETE FROM public.ans_knowledge_chunks WHERE source_id = $1", [
+          finalSourceId,
+        ]);
 
-      // Insert new chunks
-      if (textChunks.length > 0) {
-        const chunkRows = textChunks.map((content, idx) => ({
-          source_id: finalSourceId,
-          chunk_index: idx,
-          content,
-          tokens: Math.ceil(content.length / 4), // rough estimate
-        }));
-        const { error: chunkErr } = await adminSupabase
-          .from("ans_knowledge_chunks")
-          .insert(chunkRows);
-        if (chunkErr) console.warn("Chunk insert error:", chunkErr.message);
-      }
+        for (let start = 0; start < textChunks.length; start += INSERT_BATCH) {
+          const slice = textChunks.slice(start, start + INSERT_BATCH);
+          const valuesSql: string[] = [];
+          const p: unknown[] = [];
+          let k = 1;
+          slice.forEach((content, j) => {
+            const idx = start + j;
+            valuesSql.push(`($${k++}, $${k++}, $${k++}, $${k++})`);
+            p.push(finalSourceId, idx, content, Math.ceil(content.length / 4));
+          });
+          await client.query(
+            `INSERT INTO public.ans_knowledge_chunks (source_id, chunk_index, content, tokens)
+             VALUES ${valuesSql.join(", ")}`,
+            p
+          );
+        }
+
+        const upd = await client.query(
+          `UPDATE public.ans_knowledge_sources
+              SET file_path = $2, file_mime = $3, file_size_bytes = $4, last_updated_by = $5
+            WHERE id = $1
+            RETURNING ${SOURCE_COLUMNS}`,
+          [finalSourceId, storageKey, mimeType, fileBuffer.length, user.id]
+        );
+        const row = (upd.rows[0] as Record<string, unknown>) ?? null;
+        if (row) {
+          await recordRagVersion(client, finalSourceId as string, "import", row, {
+            id: user.id,
+            email: user.email,
+          });
+        }
+        return row;
+      });
+    } catch (dbErr) {
+      throw ragBackendError(dbErr);
     }
 
-    // Update source metadata
-    await adminSupabase
-      .from("ans_knowledge_sources")
-      .update({
-        file_path: storageKey,
-        file_mime: mimeType,
-        file_size_bytes: fileBuffer.length,
-        last_updated_by: user.id,
-      })
-      .eq("id", finalSourceId);
-
-    await logAudit(
-      supabase,
+    await logRagAudit(
       "upload_file",
       "ans_knowledge_sources",
       finalSourceId,
       null,
-      { file_path: storageKey, file_mime: mimeType, chunkCount } as Record<string, unknown>,
+      { file_path: storageKey, file_mime: mimeType, chunkCount },
+      { id: user.id, email: user.email },
       req
     );
 

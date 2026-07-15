@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import knowledgeHandler from "../../admin/knowledge.js";
 import {
   backendConfigStatus,
@@ -7,6 +7,7 @@ import {
   supabaseUrl,
   supabaseServiceRoleKey,
 } from "../../_supabase.js";
+import { _resetPoolForTests } from "../../_ragDb.js";
 import {
   hashPassword,
   signSession,
@@ -16,22 +17,26 @@ import {
 /**
  * Admin Knowledge (RAG inventory) route — backend connection + error contract.
  *
- * Production QA on f410e64 showed an authenticated GET /api/admin/knowledge
- * returning HTTP 400 `{"success":false,"error":"TypeError: fetch failed"}`:
- * the Supabase REST fetch failed at the transport layer (unreachable/misconfig
- * SUPABASE_URL) and the raw low-level error was mislabelled as a client 400.
- *
- * These tests pin the fixed contract on the REAL route handler + shared
- * helpers:
+ * The knowledge routes now read/write the dedicated Akamai Managed PostgreSQL
+ * instance (humanos-ans-rag-pg) via api/_ragDb — NOT Supabase REST. Block 1
+ * pins the fixed contract on the REAL route handler:
  *   - auth is enforced via the gateway session cookie BEFORE the backend is
- *     touched (no stale Supabase user auth, no config probing pre-auth);
- *   - a missing / malformed SUPABASE_URL yields a precise, SECRET-FREE 503 that
- *     names the offending variable — never a raw `TypeError: fetch failed`;
- *   - env values are whitespace-trimmed (Vercel paste newline tolerance);
- *   - a transport failure maps to 503 while a genuine query error stays 400;
- *   - no secret (URL value, key) ever appears in an error message.
+ *     touched (no config probing pre-auth, no backend var leaked to anon);
+ *   - a missing / malformed HUMANOS_DATABASE_URL (or missing
+ *     HUMANOS_DATABASE_CA_CERT) yields a precise, SECRET-FREE 503 that names the
+ *     offending variable — never a raw `TypeError: fetch failed`;
+ *   - no secret (connection string value, host, password) ever appears in an
+ *     error message.
+ * These config-error paths short-circuit in getPool() BEFORE a pg Pool is ever
+ * constructed, so no network / live PostgreSQL is required. (Full CRUD, SQL
+ * injection, schema-missing, vector, and pool behaviour are covered against a
+ * mocked `pg` in ragKnowledgePg.spec.ts.)
  *
- * Pure handler-level drive with mock req/res — no network, no live Supabase.
+ * Blocks 2-4 pin the retained Supabase config/error helpers in _supabase.ts —
+ * still used for the OPTIONAL knowledge-file Storage upload path and the gated
+ * evidence-retrieval read path — which are unchanged by the PostgreSQL move.
+ *
+ * Pure handler-level drive with mock req/res — no network, no live backend.
  */
 
 const GW_USER = "admin";
@@ -68,7 +73,7 @@ function gatewayCookie(): string {
   return `${GATEWAY_COOKIE}=${signSession(GW_USER, GW_SECRET)}`;
 }
 
-/** Set or clear the Supabase backend env for a single test. */
+/** Set or clear the Supabase backend env for a single test (blocks 2-4). */
 function setBackend(url: string | undefined, key: string | undefined) {
   if (url === undefined) delete (process.env as any).SUPABASE_URL;
   else process.env.SUPABASE_URL = url;
@@ -76,12 +81,27 @@ function setBackend(url: string | undefined, key: string | undefined) {
   else process.env.SUPABASE_SERVICE_ROLE_KEY = key;
 }
 
+/** Set or clear the Akamai PostgreSQL (RAG) backend env for a single test. */
+function setRagBackend(url: string | undefined, ca: string | undefined) {
+  if (url === undefined) delete (process.env as any).HUMANOS_DATABASE_URL;
+  else process.env.HUMANOS_DATABASE_URL = url;
+  if (ca === undefined) delete (process.env as any).HUMANOS_DATABASE_CA_CERT;
+  else process.env.HUMANOS_DATABASE_CA_CERT = ca;
+}
+
+// A syntactically-plausible PEM so the CA-present branch is exercised; never a
+// real certificate, and never asserted on (it must never appear in any error).
+const VALID_CA =
+  "-----BEGIN CERTIFICATE-----\nMIIBcTESTONLYTESTONLYTESTONLYTESTONLY==\n-----END CERTIFICATE-----\n";
+
 const prev = {
   u: process.env.ADMIN_GATEWAY_USERNAME,
   h: process.env.ADMIN_GATEWAY_PASSWORD_HASH,
   s: process.env.ADMIN_SESSION_SECRET,
   url: process.env.SUPABASE_URL,
   key: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  ragUrl: process.env.HUMANOS_DATABASE_URL,
+  ragCa: process.env.HUMANOS_DATABASE_CA_CERT,
 };
 
 beforeAll(() => {
@@ -90,7 +110,8 @@ beforeAll(() => {
   process.env.ADMIN_SESSION_SECRET = GW_SECRET;
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await _resetPoolForTests();
   const restore = (k: string, v: string | undefined) =>
     v === undefined ? delete (process.env as any)[k] : ((process.env as any)[k] = v);
   restore("ADMIN_GATEWAY_USERNAME", prev.u);
@@ -98,55 +119,68 @@ afterAll(() => {
   restore("ADMIN_SESSION_SECRET", prev.s);
   restore("SUPABASE_URL", prev.url);
   restore("SUPABASE_SERVICE_ROLE_KEY", prev.key);
+  restore("HUMANOS_DATABASE_URL", prev.ragUrl);
+  restore("HUMANOS_DATABASE_CA_CERT", prev.ragCa);
 });
 
-describe("admin knowledge route — auth + precise backend-config status", () => {
+describe("admin knowledge route — auth-first + precise Akamai PostgreSQL config status", () => {
+  // Each test only exercises config-error paths (no pool is ever built), but
+  // reset the singleton defensively so no state leaks between tests.
+  afterEach(async () => {
+    await _resetPoolForTests();
+  });
+
   it("rejects an unauthenticated GET with 401 (gateway session enforced, backend untouched)", async () => {
-    setBackend(undefined, undefined); // even with no backend env, auth must fail first
+    setRagBackend(undefined, undefined); // even with no backend env, auth must fail first
     const res = mockRes();
     await knowledgeHandler(mockReq(/* no cookie */), res);
     expect(res._status).toBe(401);
     expect(res._json).toMatchObject({ success: false });
     // Must not leak backend config state to an unauthenticated caller.
-    expect(String(res._json.error)).not.toMatch(/SUPABASE_URL/);
+    expect(String(res._json.error)).not.toMatch(/HUMANOS_DATABASE_URL/);
   });
 
-  it("returns a precise, secret-free 503 (not a raw TypeError) when SUPABASE_URL is unset", async () => {
-    setBackend(undefined, "dummy-service-role-key");
+  it("returns a precise, secret-free 503 (not a raw TypeError) when HUMANOS_DATABASE_URL is unset", async () => {
+    setRagBackend(undefined, VALID_CA);
     const res = mockRes();
     await knowledgeHandler(mockReq({ cookie: gatewayCookie() }), res);
     expect(res._status).toBe(503);
     expect(res._json.success).toBe(false);
-    expect(String(res._json.error)).toMatch(/SUPABASE_URL/);
+    expect(String(res._json.error)).toMatch(/HUMANOS_DATABASE_URL/);
     // The precise contract: NOT the raw low-level transport error.
     expect(String(res._json.error)).not.toMatch(/fetch failed|TypeError/i);
   });
 
-  it("names SUPABASE_SERVICE_ROLE_KEY in the 503 when only the key is missing", async () => {
-    setBackend("https://ref123.supabase.co", undefined);
+  it("names HUMANOS_DATABASE_CA_CERT in the 503 when only the CA certificate is missing", async () => {
+    setRagBackend(
+      "postgres://u:p@db.example-ref.akamai.internal:5432/ans?sslmode=require",
+      undefined
+    );
     const res = mockRes();
     await knowledgeHandler(mockReq({ cookie: gatewayCookie() }), res);
     expect(res._status).toBe(503);
-    expect(String(res._json.error)).toMatch(/SUPABASE_SERVICE_ROLE_KEY/);
+    expect(String(res._json.error)).toMatch(/HUMANOS_DATABASE_CA_CERT/);
   });
 
-  it("returns 503 with a valid-URL hint when SUPABASE_URL is malformed", async () => {
-    setBackend("not-a-valid-url", "dummy-service-role-key");
+  it("returns 503 with a connection-string hint when HUMANOS_DATABASE_URL is malformed", async () => {
+    setRagBackend("not-a-valid-url", VALID_CA);
     const res = mockRes();
     await knowledgeHandler(mockReq({ cookie: gatewayCookie() }), res);
     expect(res._status).toBe(503);
-    expect(String(res._json.error)).toMatch(/SUPABASE_URL/);
-    expect(String(res._json.error)).toMatch(/valid URL|https/i);
+    expect(String(res._json.error)).toMatch(/HUMANOS_DATABASE_URL/);
+    expect(String(res._json.error)).toMatch(/postgres|connection string/i);
   });
 
-  it("never echoes the SUPABASE_URL VALUE in an error (no secret leakage)", async () => {
-    const secretishUrl = "https://supersecretprojectref.supabase.co";
-    setBackend(secretishUrl, undefined); // key missing → 503 path
+  it("never echoes the HUMANOS_DATABASE_URL VALUE in an error (no secret leakage)", async () => {
+    const secretishUrl =
+      "postgres://admin:sup3rs3cretpw@supersecrethost.akamai.internal:5432/ans";
+    setRagBackend(secretishUrl, undefined); // CA missing → 503 config path
     const res = mockRes();
     await knowledgeHandler(mockReq({ cookie: gatewayCookie() }), res);
     expect(res._status).toBe(503);
     expect(String(res._json.error)).not.toContain(secretishUrl);
-    expect(String(res._json.error)).not.toContain("supersecretprojectref");
+    expect(String(res._json.error)).not.toContain("sup3rs3cretpw");
+    expect(String(res._json.error)).not.toContain("supersecrethost");
   });
 });
 
