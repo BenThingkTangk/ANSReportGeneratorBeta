@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Send, Plus, Square, RotateCcw, CornerUpLeft, User, Stethoscope, Mic, Volume2 } from "lucide-react";
+import { X, Send, Plus, Square, RotateCcw, CornerUpLeft, User, Stethoscope, Mic, Volume2, VolumeX } from "lucide-react";
 import { AtomLogo } from "./AtomLogo";
 import { AtomMarkdown } from "./AtomMarkdown";
 import { apiRequest } from "@/lib/queryClient";
@@ -192,6 +192,9 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
   const [streaming, setStreaming] = useState(false);
   const [retryable, setRetryable] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  // Global mute: when on, voice-originated answers are NOT spoken automatically
+  // and any in-flight speech is stopped. Manual "Play" is still available.
+  const [muted, setMuted] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -200,11 +203,23 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
   const idRef = useRef(0);
   // Text already typed when the mic was pressed, so dictation appends instead of clobbering it.
   const baseInputRef = useRef("");
+  // True while the current input was produced by dictation, so the resulting
+  // answer is auto-spoken. Reset the moment the user types manually.
+  const dictatedRef = useRef(false);
+  // Mirror `muted` into a ref so the reveal-timer callback reads the live value
+  // without being re-created on every toggle.
+  const mutedRef = useRef(false);
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
 
   // PHI (patient/physician names) stripped client-side before any text is spoken or sent to TTS.
   const redactTerms = useMemo(() => phiTermsFromReport(report), [report]);
   const voice = useAtomVoice({
-    onTranscript: (text) => setInput((baseInputRef.current + text).trimStart()),
+    onTranscript: (text) => {
+      dictatedRef.current = true;
+      setInput((baseInputRef.current + text).trimStart());
+    },
   });
 
   const nextId = () => `m${idRef.current++}`;
@@ -248,8 +263,17 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
     }
   };
 
-  // Progressive reveal: reveal the response word-by-word so long answers stream in.
-  const startReveal = (fullText: string, citations: string[]) => {
+  // Speak an answer aloud (server Atom voice, browser fallback). PHI terms are
+  // stripped before synthesis. Marks the message as the actively-speaking one.
+  const speakMessage = (id: string, content: string) => {
+    setSpeakingId(id);
+    voice.speak(content, redactTerms);
+  };
+
+  // Progressive reveal: reveal the response word-by-word so long answers stream
+  // in. When `autoSpeak` (the question came from the mic) and not muted, the
+  // finished answer is read aloud in the configured Atom voice.
+  const startReveal = (fullText: string, citations: string[], autoSpeak = false) => {
     const id = nextId();
     setMessages(prev => [...prev, { id, role: "assistant", content: "", status: "streaming", citations } as ChatMessage].slice(-10));
     setStreaming(true);
@@ -266,6 +290,9 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
         clearReveal();
         setStreaming(false);
         setMessages(prev => prev.map(m => (m.id === id ? { ...m, content: fullText, status: "done" } : m)));
+        if (autoSpeak && !mutedRef.current && fullText.trim()) {
+          speakMessage(id, fullText);
+        }
       } else {
         const partial = tokens.slice(0, idx).join("");
         setMessages(prev => prev.map(m => (m.id === id ? { ...m, content: partial } : m)));
@@ -273,7 +300,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
     }, 22);
   };
 
-  const runQuery = async (base: ChatMessage[]) => {
+  const runQuery = async (base: ChatMessage[], fromVoice = false) => {
     setRetryable(false);
     setLoading(true);
     const controller = new AbortController();
@@ -297,7 +324,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
       if (!data?.success || !data?.message) throw new Error(data?.error || "No response");
       const citations = dedupeCitations([...(data.citations ?? []), ...(data.webCitations ?? [])]);
       setLoading(false);
-      startReveal(stripProvenanceMarkers(String(data.message)), citations);
+      startReveal(stripProvenanceMarkers(String(data.message)), citations, fromVoice);
     } catch (e) {
       abortRef.current = null;
       setLoading(false);
@@ -320,13 +347,17 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
     }
   };
 
-  const sendMessage = (text: string) => {
+  const sendMessage = (text: string, fromVoice?: boolean) => {
     const t = text.trim();
     if (!t || loading || streaming) return;
+    // Voice origin: explicit arg wins; otherwise infer from whether the current
+    // input was dictated. Reset the flag so the next turn starts fresh.
+    const spoken = fromVoice ?? dictatedRef.current;
+    dictatedRef.current = false;
     const next = [...messages, { id: nextId(), role: "user" as const, content: t }].slice(-10);
     setMessages(next);
     setInput("");
-    runQuery(next);
+    runQuery(next, spoken);
   };
 
   // Cancel: abort the request and/or stop the reveal, keeping any partial text.
@@ -378,8 +409,16 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
       voice.stopSpeaking();
       return;
     }
-    setSpeakingId(msg.id);
-    voice.speak(msg.content, redactTerms);
+    speakMessage(msg.id, msg.content);
+  };
+
+  // Global mute toggle: silence auto-spoken answers and stop any current speech.
+  const toggleMute = () => {
+    setMuted(prev => {
+      const next = !prev;
+      if (next) voice.stopSpeaking();
+      return next;
+    });
   };
 
   // Branch back: rewind to an earlier question, restoring its text for editing.
@@ -476,6 +515,20 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                 <p className="text-sm font-semibold leading-tight">Ask Atom</p>
                 <p className="text-[10px] text-muted-foreground">Powered by ATOM</p>
               </div>
+              <button
+                onClick={toggleMute}
+                className="p-1.5 rounded-lg hover:bg-card/80 transition-colors"
+                data-testid="atom-mute-toggle"
+                aria-pressed={muted}
+                aria-label={muted ? "Unmute Atom voice" : "Mute Atom voice"}
+                title={muted ? "Voice muted — click to unmute" : "Mute Atom voice"}
+              >
+                {muted ? (
+                  <VolumeX className="w-3.5 h-3.5" style={{ color: "hsl(0 70% 68%)" }} />
+                ) : (
+                  <Volume2 className="w-3.5 h-3.5 text-muted-foreground" />
+                )}
+              </button>
               <button
                 onClick={reset}
                 disabled={messages.length === 0 && !retryable}
@@ -582,7 +635,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                     {prompts.map((p, i) => (
                       <button
                         key={i}
-                        onClick={() => sendMessage(p)}
+                        onClick={() => sendMessage(p, false)}
                         className="text-left text-xs px-3 py-2.5 rounded-xl transition-colors hover:border-[hsl(185_85%_42%/0.4)]"
                         style={{
                           background: "hsl(210 18% 12%)",
@@ -722,7 +775,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                   {followUps.map((q, i) => (
                     <button
                       key={i}
-                      onClick={() => sendMessage(q)}
+                      onClick={() => sendMessage(q, false)}
                       className="text-[10px] px-2.5 py-1.5 rounded-full transition-colors hover:brightness-125"
                       style={{
                         background: "hsl(185 85% 42% / 0.08)",
@@ -787,7 +840,11 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                 ref={inputRef}
                 type="text"
                 value={input}
-                onChange={e => setInput(e.target.value)}
+                onChange={e => {
+                  // Manual typing overrides any prior dictation → treat as text-origin.
+                  dictatedRef.current = false;
+                  setInput(e.target.value);
+                }}
                 onKeyDown={e => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
