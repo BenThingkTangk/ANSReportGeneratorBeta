@@ -29,6 +29,9 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   isGatewayConfigured,
   gatewayStatus,
+  gatewayUsername,
+  gatewayPasswordHash,
+  gatewaySecret,
   verifyPassword,
   safeEquals,
   signSession,
@@ -103,9 +106,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .json({ success: false, error: "Username and password are required" });
       }
 
-      const expectedUser = process.env.ADMIN_GATEWAY_USERNAME as string;
-      const expectedHash = process.env.ADMIN_GATEWAY_PASSWORD_HASH as string;
-      const secret = process.env.ADMIN_SESSION_SECRET as string;
+      // Read through the normalising accessors so a stray newline/space in the
+      // configured env value (common with dashboard paste / `vercel env add`)
+      // cannot cause a valid credential to be rejected.
+      const expectedUser = gatewayUsername() as string;
+      const expectedHash = gatewayPasswordHash() as string;
+      const secret = gatewaySecret() as string;
 
       // Evaluate BOTH factors unconditionally (no short-circuit) so a wrong
       // username and a wrong password are indistinguishable in timing and in the

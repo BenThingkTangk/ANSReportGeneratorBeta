@@ -204,3 +204,102 @@ describe("admin gateway route — login / lockout / logout / protection", () => 
     expect(serialized).not.toContain(process.env.ADMIN_GATEWAY_PASSWORD_HASH as string);
   });
 });
+
+/**
+ * Regression: an externally-generated (LITERAL) scrypt hash must verify through
+ * the ACTUAL deployed route, and stray whitespace / newlines in the configured
+ * env values must NOT reject a valid credential.
+ *
+ * Why a literal hash: the suite above sets ADMIN_GATEWAY_PASSWORD_HASH via
+ * `hashPassword()`, so a hash-format/param drift between hashPassword() and
+ * verifyPassword() would be masked (both move together). Pinning a hash the test
+ * did NOT generate — produced offline with the documented params
+ * (scrypt N=16384 r=8 p=1, keylen 64, base64), exactly as an operator would —
+ * locks the on-the-wire stored format the route must accept.
+ *
+ * Why the whitespace cases: env values pasted into the Vercel dashboard or added
+ * via `echo … | vercel env add` routinely gain a trailing "\n" or surrounding
+ * spaces. That silently broke the exact-match username check and (for a LEADING
+ * newline) the scrypt hash prefix, so a correct password 401'd in production.
+ */
+describe("admin gateway route — literal hash + whitespace-tolerant env parsing", () => {
+  // password: "Literal-Test-Pass-2026!" — hash generated offline with a fixed
+  // salt via crypto.scryptSync(pw, salt, 64, {N:16384,r:8,p:1}); base64 encoded.
+  const LITERAL_USER = "admin";
+  const LITERAL_PASSWORD = "Literal-Test-Pass-2026!";
+  const LITERAL_HASH =
+    "scrypt$16384$8$1$Zm9vYmFyc2FsdDEyMzQ1Ng==$6dO+ZNtw2UhZ+BuztBapSSDBOcTw30qSP2Kpk0dZaf87Ez0o6Z4JOiMmgjrX2NmbPBIm5zALjxt79Z/Wm9SQcA==";
+  const LITERAL_SECRET = "literal-regression-session-secret";
+
+  const prev = {
+    u: process.env.ADMIN_GATEWAY_USERNAME,
+    h: process.env.ADMIN_GATEWAY_PASSWORD_HASH,
+    s: process.env.ADMIN_SESSION_SECRET,
+  };
+
+  afterAll(() => {
+    const restore = (k: string, v: string | undefined) =>
+      v === undefined ? delete (process.env as any)[k] : ((process.env as any)[k] = v);
+    restore("ADMIN_GATEWAY_USERNAME", prev.u);
+    restore("ADMIN_GATEWAY_PASSWORD_HASH", prev.h);
+    restore("ADMIN_SESSION_SECRET", prev.s);
+  });
+
+  beforeEach(() => _resetRateLimit());
+
+  function setEnv(user: string, hash: string, secret: string) {
+    process.env.ADMIN_GATEWAY_USERNAME = user;
+    process.env.ADMIN_GATEWAY_PASSWORD_HASH = hash;
+    process.env.ADMIN_SESSION_SECRET = secret;
+  }
+
+  it("accepts a valid password against a LITERAL externally-generated scrypt hash", async () => {
+    setEnv(LITERAL_USER, LITERAL_HASH, LITERAL_SECRET);
+    const res = mockRes();
+    await gatewayHandler(
+      mockReq("POST", { body: { username: LITERAL_USER, password: LITERAL_PASSWORD } }),
+      res,
+    );
+    expect(res._status).toBe(200);
+    expect(res._json).toMatchObject({ success: true, authenticated: true });
+    expect(res._headers["Set-Cookie"]).toContain(`${GATEWAY_COOKIE}=`);
+  });
+
+  it("rejects a wrong password against the LITERAL hash (generic 401)", async () => {
+    setEnv(LITERAL_USER, LITERAL_HASH, LITERAL_SECRET);
+    const res = mockRes();
+    await gatewayHandler(
+      mockReq("POST", { body: { username: LITERAL_USER, password: "wrong-password" } }),
+      res,
+    );
+    expect(res._status).toBe(401);
+    expect(res._json.error).toMatch(/invalid username or password/i);
+    expect(res._headers["Set-Cookie"]).toBeUndefined();
+  });
+
+  it("authenticates despite stray whitespace/newlines in the configured env values", async () => {
+    // Simulate exactly how Vercel-pasted values get corrupted: a trailing newline
+    // on the username, a LEADING+trailing newline on the hash, and surrounding
+    // spaces on the secret. The submitted username is the clean "admin".
+    setEnv(`${LITERAL_USER}\n`, `\n${LITERAL_HASH}\n`, `  ${LITERAL_SECRET}  `);
+    const res = mockRes();
+    await gatewayHandler(
+      mockReq("POST", { body: { username: LITERAL_USER, password: LITERAL_PASSWORD } }),
+      res,
+    );
+    expect(res._status).toBe(200);
+    expect(res._json).toMatchObject({ success: true, authenticated: true });
+    expect(res._headers["Set-Cookie"]).toContain(`${GATEWAY_COOKIE}=`);
+  });
+
+  it("still rejects a wrong password when env values carry whitespace (no weakening)", async () => {
+    setEnv(`${LITERAL_USER}\n`, `\n${LITERAL_HASH}\n`, `  ${LITERAL_SECRET}  `);
+    const res = mockRes();
+    await gatewayHandler(
+      mockReq("POST", { body: { username: LITERAL_USER, password: "still-wrong" } }),
+      res,
+    );
+    expect(res._status).toBe(401);
+    expect(res._headers["Set-Cookie"]).toBeUndefined();
+  });
+});
