@@ -3,16 +3,24 @@
  *
  * Resolves deterministic rule references -> approved Knowledge Library sources.
  *
+ * Reads from the AUTHORITATIVE Akamai Managed PostgreSQL store (humanos-ans-rag-pg)
+ * via ./_ragDb — the SAME store admin CRUD writes to — so there is NO Supabase
+ * split-brain: an admin-created/activated link is discoverable by the AI retriever
+ * (after cache invalidation) and an archived/deactivated source instantly drops out.
+ *
  * Safety guarantees:
  *   1. Only sources with active_in_ai_analysis=true AND review_status='approved'
- *      are ever returned. The DB join filters this server-side every read.
- *   2. Never exposes raw private bucket paths. Callers requesting a downloadable
- *      reference must use createSignedFileUrl() which is admin-gated upstream.
+ *      are ever returned. The SQL JOIN filters this server-side on every read.
+ *   2. Never exposes raw private file bytes. `hasPrivateFile` is a boolean
+ *      presence flag only; the bytes are served solely via the admin-gated
+ *      streaming endpoint (api/admin/source-file).
  *   3. 60s in-memory cache keyed by (rule_type, rule_key) to keep report
- *      generation fast without losing freshness when admins approve sources.
+ *      generation fast; admin mutations call clearEvidenceCache() for freshness.
+ *   4. Fail-safe: any backend error returns the last good cache entry (or []),
+ *      and the master toggle defaults to FALSE — never citations by accident.
  */
 
-import { createSupabaseAdmin } from "./_supabase.js";
+import { ragQuery } from "./_ragDb.js";
 import type { EvidenceLink, RuleRef } from "../shared/evidenceTypes.js";
 
 interface CacheEntry {
@@ -32,6 +40,37 @@ export function clearEvidenceCache(): void {
   _cache.clear();
 }
 
+/** Row shape from the evidence-link ⋈ source JOIN. */
+interface EvidenceRow {
+  link_id: string;
+  rule_type?: string;
+  rule_key?: string;
+  evidence_quote: string | null;
+  page_ref: string | null;
+  source_id: string;
+  title: string;
+  authors: string | null;
+  year: number | null;
+  url: string | null;
+  publication_type: string | null;
+  file_path: string | null;
+}
+
+function rowToLink(row: EvidenceRow): EvidenceLink {
+  return {
+    linkId: row.link_id,
+    sourceId: row.source_id,
+    title: row.title,
+    authors: row.authors ?? null,
+    year: row.year ?? null,
+    publicationType: row.publication_type ?? null,
+    url: row.url ?? null,
+    hasPrivateFile: !!row.file_path,
+    evidenceQuote: row.evidence_quote ?? null,
+    pageRef: row.page_ref ?? null,
+  };
+}
+
 /**
  * Fetch ACTIVE+APPROVED sources linked to a single rule reference.
  * Returns [] when no link exists OR the linked source is no longer approved.
@@ -45,57 +84,32 @@ export async function getEvidenceForRule(ref: RuleRef): Promise<EvidenceLink[]> 
   }
 
   try {
-    const admin = createSupabaseAdmin();
-    // Join through the bridge table; filter for approved+active sources.
-    const { data, error } = await admin
-      .from("ans_rule_evidence_links")
-      .select(
-        `
-          id,
-          evidence_quote,
-          page_ref,
-          source:ans_knowledge_sources!inner (
-            id, title, authors, year, url, publication_type, file_path,
-            active_in_ai_analysis, review_status
-          )
-        `
-      )
-      .eq("rule_type", ref.type)
-      .eq("rule_key", ref.key)
-      .eq("source.active_in_ai_analysis", true)
-      .eq("source.review_status", "approved");
+    // JOIN through the bridge table; filter for approved+active sources so an
+    // archived/deactivated source can never be cited even if the link remains.
+    const { rows } = await ragQuery<EvidenceRow>(
+      `SELECT l.id AS link_id, l.evidence_quote, l.page_ref,
+              s.id AS source_id, s.title, s.authors, s.year, s.url,
+              s.publication_type, s.file_path
+         FROM public.ans_rule_evidence_links l
+         JOIN public.ans_knowledge_sources s ON s.id = l.source_id
+        WHERE l.rule_type = $1
+          AND l.rule_key = $2
+          AND s.active_in_ai_analysis = true
+          AND s.review_status = 'approved'`,
+      [ref.type, ref.key]
+    );
 
-    if (error) {
-      console.warn("[evidence] fetch error", error.message);
-      return cached?.links ?? [];
-    }
-
-    const links: EvidenceLink[] = (data ?? []).map((row: any) => {
-      const src = row.source;
-      return {
-        linkId: row.id,
-        sourceId: src.id,
-        title: src.title,
-        authors: src.authors ?? null,
-        year: src.year ?? null,
-        publicationType: src.publication_type ?? null,
-        url: src.url ?? null,
-        hasPrivateFile: !!src.file_path,
-        evidenceQuote: row.evidence_quote ?? null,
-        pageRef: row.page_ref ?? null,
-      };
-    });
-
+    const links = rows.map(rowToLink);
     _cache.set(key, { links, fetchedAt: now });
     return links;
   } catch (e) {
-    console.warn("[evidence] exception", e);
+    console.warn("[evidence] fetch exception", (e as Error)?.message ?? "unknown");
     return cached?.links ?? [];
   }
 }
 
 /**
- * Batch lookup — fetches evidence for many rules in a single round-trip.
+ * Batch lookup — fetches evidence for many rules grouped by type.
  * Falls back to per-rule cache when individual entries are warm.
  */
 export async function getEvidenceForRules(
@@ -120,9 +134,7 @@ export async function getEvidenceForRules(
   if (cold.length === 0) return out;
 
   try {
-    const admin = createSupabaseAdmin();
-    // Build OR filter: (rule_type=X AND rule_key=Y) OR ...
-    // Supabase doesn't support compound OR easily, so we fetch by type-buckets.
+    // Group cold refs by type, then one query per type using = ANY($2::text[]).
     const byType = new Map<string, string[]>();
     for (const ref of cold) {
       const arr = byType.get(ref.type) ?? [];
@@ -131,50 +143,28 @@ export async function getEvidenceForRules(
     }
 
     for (const [type, keys] of Array.from(byType.entries())) {
-      const { data, error } = await admin
-        .from("ans_rule_evidence_links")
-        .select(
-          `
-            id, rule_type, rule_key,
-            evidence_quote, page_ref,
-            source:ans_knowledge_sources!inner (
-              id, title, authors, year, url, publication_type, file_path,
-              active_in_ai_analysis, review_status
-            )
-          `
-        )
-        .eq("rule_type", type)
-        .in("rule_key", keys)
-        .eq("source.active_in_ai_analysis", true)
-        .eq("source.review_status", "approved");
+      const { rows } = await ragQuery<EvidenceRow>(
+        `SELECT l.id AS link_id, l.rule_type, l.rule_key, l.evidence_quote, l.page_ref,
+                s.id AS source_id, s.title, s.authors, s.year, s.url,
+                s.publication_type, s.file_path
+           FROM public.ans_rule_evidence_links l
+           JOIN public.ans_knowledge_sources s ON s.id = l.source_id
+          WHERE l.rule_type = $1
+            AND l.rule_key = ANY($2::text[])
+            AND s.active_in_ai_analysis = true
+            AND s.review_status = 'approved'`,
+        [type, keys]
+      );
 
-      if (error) {
-        console.warn("[evidence] batch fetch error", error.message);
-        continue;
-      }
-
-      // Initialise empty buckets so cold-miss = empty (not undefined).
+      // Initialise empty buckets so a cold-miss = empty (not undefined).
       for (const k of keys) {
         out.set(`${type}::${k}`, []);
       }
 
-      for (const row of data ?? []) {
-        const src = (row as any).source;
-        const link: EvidenceLink = {
-          linkId: (row as any).id,
-          sourceId: src.id,
-          title: src.title,
-          authors: src.authors ?? null,
-          year: src.year ?? null,
-          publicationType: src.publication_type ?? null,
-          url: src.url ?? null,
-          hasPrivateFile: !!src.file_path,
-          evidenceQuote: (row as any).evidence_quote ?? null,
-          pageRef: (row as any).page_ref ?? null,
-        };
-        const k = `${(row as any).rule_type}::${(row as any).rule_key}`;
+      for (const row of rows) {
+        const k = `${row.rule_type}::${row.rule_key}`;
         const arr = out.get(k) ?? [];
-        arr.push(link);
+        arr.push(rowToLink(row));
         out.set(k, arr);
       }
     }
@@ -185,7 +175,7 @@ export async function getEvidenceForRules(
       _cache.set(k, { links: out.get(k) ?? [], fetchedAt: now });
     }
   } catch (e) {
-    console.warn("[evidence] batch exception", e);
+    console.warn("[evidence] batch exception", (e as Error)?.message ?? "unknown");
   }
 
   return out;
@@ -193,47 +183,18 @@ export async function getEvidenceForRules(
 
 /**
  * Read the master toggle from app_settings. Defaults to FALSE on any error
- * (fail-safe — no citations unless explicitly enabled).
+ * (fail-safe — no citations unless explicitly enabled). The `value` column is
+ * jsonb, so pg returns the parsed JSON (boolean true) directly.
  */
 export async function isEvidenceEnabled(): Promise<boolean> {
   try {
-    const admin = createSupabaseAdmin();
-    const { data, error } = await admin
-      .from("app_settings")
-      .select("value")
-      .eq("key", "evidence_linked_explanations_enabled")
-      .maybeSingle();
-    if (error || !data) return false;
-    return data.value === true;
+    const { rows } = await ragQuery<{ value: unknown }>(
+      `SELECT value FROM public.app_settings
+        WHERE key = 'evidence_linked_explanations_enabled'`
+    );
+    if (rows.length === 0) return false;
+    return rows[0].value === true;
   } catch {
     return false;
-  }
-}
-
-/**
- * Create a short-lived signed URL for a private knowledge-files object.
- * Caller MUST have verified admin/reviewer role before calling this.
- *
- * @param filePath Storage key within the 'knowledge-files' bucket
- * @param ttlSeconds expiry (default 5 minutes)
- */
-export async function createSignedFileUrl(
-  filePath: string,
-  ttlSeconds: number = 300
-): Promise<string | null> {
-  if (!filePath) return null;
-  try {
-    const admin = createSupabaseAdmin();
-    const { data, error } = await admin.storage
-      .from("knowledge-files")
-      .createSignedUrl(filePath, ttlSeconds);
-    if (error || !data?.signedUrl) {
-      console.warn("[evidence] signed url error", error?.message);
-      return null;
-    }
-    return data.signedUrl;
-  } catch (e) {
-    console.warn("[evidence] signed url exception", e);
-    return null;
   }
 }

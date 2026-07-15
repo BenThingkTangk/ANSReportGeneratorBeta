@@ -1,11 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import {
-  requireRole,
-  setCorsHeaders,
-  handleError,
-  backendConfigStatus,
-  createSupabaseAdmin,
-} from "../../_supabase.js";
+import crypto from "crypto";
+import { requireRole, setCorsHeaders, handleError } from "../../_supabase.js";
 import {
   withRagTransaction,
   recordRagVersion,
@@ -13,17 +8,20 @@ import {
   ragBackendError,
   SOURCE_COLUMNS,
 } from "../../_ragDb.js";
+import { invalidateKnowledgeCaches } from "../../_knowledgeInvalidate.js";
 
 /**
  * POST /api/admin/knowledge/upload
  * Multipart upload of a PDF/text file for a knowledge source.
- * - Validates ≤25 MB
- * - Stores the binary in Supabase Storage bucket 'knowledge-files' IF Supabase
- *   is configured; otherwise it degrades gracefully (binary skipped) but the
- *   extracted text + chunks are STILL persisted — content is never discarded.
+ * - Validates ≤25 MB and a strict MIME/extension allowlist (pdf, text, markdown)
+ * - Stores the binary in the AUTHORITATIVE Akamai PostgreSQL store as bytea
+ *   (ans_knowledge_files) WITHIN the same transaction as the chunks — no
+ *   Supabase Storage bucket and no signed URL. The DB CHECK (<=25MB) backstops
+ *   the handler limit; the binary is served only via the admin-gated streaming
+ *   endpoint api/admin/source-file.
  * - If PDF: extracts text with pdf-parse
  * - Chunks ~800 tokens (≈3000 chars) with 100-char overlap
- * - Writes source row + chunks + version snapshot to Akamai PostgreSQL
+ * - Writes source row + chunks + binary + version snapshot to Akamai PostgreSQL
  *   (humanos-ans-rag-pg) via ../../_ragDb — NOT Supabase.
  * - Returns { source_id, file_path, chunkCount }
  *
@@ -33,10 +31,25 @@ import {
  *   - title: required if no source_id
  */
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB (matches ans_knowledge_files CHECK)
 const CHUNK_SIZE = 3000; // ~800 tokens
 const CHUNK_OVERLAP = 100;
 const INSERT_BATCH = 500;
+
+// Strict allowlist — the only binary types we accept and can extract/serve
+// safely. A mismatched Content-Type still passes if the filename extension is
+// allowed (browsers frequently send application/octet-stream for PDFs).
+const ALLOWED_MIME = new Set([
+  "application/pdf",
+  "text/plain",
+  "text/markdown",
+  "text/x-markdown",
+]);
+function isAllowedUpload(mime: string, name: string): boolean {
+  if (ALLOWED_MIME.has(mime)) return true;
+  const lower = name.toLowerCase();
+  return lower.endsWith(".pdf") || lower.endsWith(".txt") || lower.endsWith(".md");
+}
 
 function chunkText(text: string): string[] {
   const chunks: string[] = [];
@@ -122,6 +135,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ success: false, error: "No file data found in request" });
     }
 
+    // Enforce the MIME/extension allowlist BEFORE creating any row or storing
+    // bytes — reject anything we can't extract text from or serve safely.
+    if (!isAllowedUpload(mimeType, fileName)) {
+      return res.status(415).json({
+        success: false,
+        error: "Unsupported file type. Allowed: PDF, plain text, or Markdown.",
+      });
+    }
+
+    // Content hash for provenance; the binary is stored in the authoritative
+    // PostgreSQL store within the chunk transaction below (no external bucket).
+    const sha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+
     // Resolve / create the source row (PostgreSQL).
     let finalSourceId = sourceId;
     if (!finalSourceId) {
@@ -143,32 +169,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch (dbErr) {
         throw ragBackendError(dbErr);
       }
-    }
-
-    // Store the binary in Supabase Storage — best-effort. If Supabase is not
-    // configured or the upload fails, we DO NOT abort: the extracted text and
-    // chunks (the RAG-relevant content) are still persisted below.
-    let storageKey: string | null = null;
-    if (backendConfigStatus().configured) {
-      try {
-        const adminSupabase = createSupabaseAdmin();
-        const key = `${finalSourceId}/${Date.now()}_${fileName}`;
-        const { error: storageErr } = await adminSupabase.storage
-          .from("knowledge-files")
-          .upload(key, fileBuffer, { contentType: mimeType, upsert: true });
-        if (storageErr) {
-          console.warn(
-            "Supabase Storage upload failed (continuing; text/chunks still stored):",
-            storageErr.message
-          );
-        } else {
-          storageKey = key;
-        }
-      } catch (e) {
-        console.warn("Supabase Storage unavailable (continuing):", (e as Error)?.message ?? "unknown");
-      }
-    } else {
-      console.warn("Supabase Storage not configured; skipping binary upload (text/chunks still stored).");
     }
 
     // Extract text
@@ -227,12 +227,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           );
         }
 
+        // Store the binary in the SAME authoritative store + transaction. The
+        // source_id PK gives natural upsert semantics (re-upload replaces the
+        // prior binary); the DB CHECK (<=25MB) backstops the handler limit.
+        await client.query(
+          `INSERT INTO public.ans_knowledge_files
+             (source_id, file_name, file_mime, file_size_bytes, content, sha256, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (source_id) DO UPDATE
+             SET file_name = EXCLUDED.file_name,
+                 file_mime = EXCLUDED.file_mime,
+                 file_size_bytes = EXCLUDED.file_size_bytes,
+                 content = EXCLUDED.content,
+                 sha256 = EXCLUDED.sha256,
+                 uploaded_by = EXCLUDED.uploaded_by`,
+          [finalSourceId, fileName, mimeType, fileBuffer.length, fileBuffer, sha256, user.id]
+        );
+
+        // file_path stores the (non-secret) filename as a "has private file"
+        // presence indicator — the bytes live in ans_knowledge_files, served
+        // only via the admin-gated streaming endpoint.
         const upd = await client.query(
           `UPDATE public.ans_knowledge_sources
               SET file_path = $2, file_mime = $3, file_size_bytes = $4, last_updated_by = $5
             WHERE id = $1
             RETURNING ${SOURCE_COLUMNS}`,
-          [finalSourceId, storageKey, mimeType, fileBuffer.length, user.id]
+          [finalSourceId, fileName, mimeType, fileBuffer.length, user.id]
         );
         const row = (upd.rows[0] as Record<string, unknown>) ?? null;
         if (row) {
@@ -252,15 +272,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       "ans_knowledge_sources",
       finalSourceId,
       null,
-      { file_path: storageKey, file_mime: mimeType, chunkCount },
+      { file_name: fileName, file_mime: mimeType, file_size_bytes: fileBuffer.length, sha256, chunkCount },
       { id: user.id, email: user.email },
       req
     );
 
+    // A re-chunked / newly-attached source may already be active+approved —
+    // refresh the AI read-path caches so it is retrievable immediately.
+    invalidateKnowledgeCaches();
+
     return res.status(200).json({
       success: true,
       source_id: finalSourceId,
-      file_path: storageKey,
+      file_path: fileName,
       chunkCount,
     });
   } catch (err) {

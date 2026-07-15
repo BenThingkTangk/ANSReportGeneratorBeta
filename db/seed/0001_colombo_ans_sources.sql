@@ -7,11 +7,15 @@
 -- this application (ported verbatim from supabase/migrations/0002 so provenance,
 -- exact titles, authors, years, DOIs, claims, metrics and usage are preserved).
 --
--- Contains ONLY published bibliographic references + one internal clinical
--- consultation transcript of Dr. Colombo's chart explanations. It contains NO
--- patient records, NO PHI, and MUST NOT be extended with Jill or any other
--- patient report. Do not invent medical content — every row below already
--- existed in the repo's curated Supabase seed.
+-- Rows 1-12 are PUBLISHED, peer-reviewed / editorially-published bibliographic
+-- references (books + journal articles, each with a DOI or PubMed link).
+-- Row 13 is the ONE internal item: a USER-PROVIDED verbatim transcript of Dr.
+-- Colombo's own chart explanations. It is typed publication_type='internal_protocol'
+-- (NOT 'book'/'journal_article'), so the grounding layer labels it
+-- "(internal, non-peer-reviewed)" and never presents it as published evidence.
+-- The corpus contains NO patient records, NO PHI, and MUST NOT be extended with
+-- Jill or any other patient report. Do not invent medical content — every row
+-- below already existed in the repo's curated Supabase seed.
 --
 -- IDEMPOTENT: keyed on lower(title) via uq_ans_knowledge_sources_title_ci, so
 -- re-running never duplicates or overwrites operator edits.
@@ -210,7 +214,10 @@ INSERT INTO public.ans_knowledge_sources (
   true, true, true, 'approved'
 ),
 
--- 13. Colombo 04-09-2026 Consultation Transcript (internal, non-PII)
+-- 13. Colombo 04-09-2026 Consultation Transcript
+--     INTERNAL, user-provided, NON-PII, NON-peer-reviewed. Typed
+--     'internal_protocol' so the AI grounding layer flags it as internal and
+--     never cites it as published/peer-reviewed evidence.
 (
   gen_random_uuid(),
   'Colombo P&S 04-09-2026 Clinical Consultation (Transcript)',

@@ -210,6 +210,7 @@ function defaultImpl(text: string): { rows: unknown[] } {
   if (t.includes("count(*)::int as n from public.ans_knowledge_chunks")) return { rows: [{ n: 2 }] };
   if (t.includes("insert into public.ans_knowledge_chunks")) return { rows: [] };
   if (t.includes("delete from public.ans_knowledge_chunks")) return { rows: [] };
+  if (t.includes("insert into public.ans_knowledge_files")) return { rows: [] };
   if (t.includes("from public.ans_knowledge_chunks"))
     return { rows: [{ id: "c1", chunk_index: 0, tokens: 10, content: "hello world chunk" }] };
   if (t.includes("coalesce(max(version)")) return { rows: [{ next: "1" }] };
@@ -614,10 +615,10 @@ describe("route /api/admin/knowledge-status — readiness endpoint", () => {
   });
 });
 
-// ── Route: /api/admin/knowledge/upload — degrades without Storage ─────────────
-describe("route /api/admin/knowledge/upload — writes chunks to PG, Storage optional", () => {
-  it("persists extracted text chunks to PostgreSQL even when Supabase Storage is unconfigured", async () => {
-    // No Supabase env → storage is skipped, but text/chunks must NOT be discarded.
+// ── Route: /api/admin/knowledge/upload — chunks + binary to Akamai PG ─────────
+describe("route /api/admin/knowledge/upload — chunks + binary to PostgreSQL (no Supabase Storage)", () => {
+  it("persists extracted text chunks AND the file binary to PostgreSQL (bytea), no Supabase needed", async () => {
+    // No Supabase env at all — the authoritative store is Akamai PG only.
     delete (process.env as any).SUPABASE_URL;
     delete (process.env as any).SUPABASE_SERVICE_ROLE_KEY;
     const res = mockRes();
@@ -631,11 +632,42 @@ describe("route /api/admin/knowledge/upload — writes chunks to PG, Storage opt
     await uploadHandler(req, res);
     expect(res._status).toBe(200);
     expect(res._json.success).toBe(true);
-    expect(res._json.file_path).toBeNull(); // storage skipped
+    // file_path is now the (non-secret) filename presence indicator, not a bucket key.
+    expect(res._json.file_path).toBe("note.txt");
     expect(res._json.chunkCount).toBeGreaterThan(0);
+
     // chunks were inserted to PG, parameterized
     const chunkInsert = h.state.calls.find((c) => c.text.toLowerCase().includes("insert into public.ans_knowledge_chunks"))!;
     expect(chunkInsert).toBeTruthy();
     expect(chunkInsert.text).toMatch(/\$\d/);
+
+    // the binary was upserted into ans_knowledge_files as a bytea Buffer, keyed on source_id
+    const fileInsert = h.state.calls.find((c) => c.text.toLowerCase().includes("insert into public.ans_knowledge_files"))!;
+    expect(fileInsert).toBeTruthy();
+    expect(fileInsert.text.toLowerCase()).toContain("on conflict (source_id)");
+    // filename/mime/bytes/content/sha256 are all bound params — the raw bytes never inlined
+    const contentParam = (fileInsert.params ?? []).find((p) => Buffer.isBuffer(p));
+    expect(Buffer.isBuffer(contentParam)).toBe(true);
+    expect((contentParam as Buffer).length).toBeGreaterThan(0);
+    // a sha256 provenance hash (64 lowercase hex) is among the params
+    expect((fileInsert.params ?? []).some((p) => typeof p === "string" && /^[0-9a-f]{64}$/.test(p))).toBe(true);
+  });
+
+  it("rejects a disallowed MIME/extension (415) and NEVER creates a source or stores bytes", async () => {
+    const res = mockRes();
+    const req = multipartReq(
+      [
+        { name: "title", value: "Malware" },
+        { name: "file", value: "MZ\x00\x00 not a document", filename: "evil.exe", contentType: "application/octet-stream" },
+      ],
+      gatewayCookie()
+    );
+    await uploadHandler(req, res);
+    expect(res._status).toBe(415);
+    expect(String(res._json.error)).toMatch(/PDF|text|Markdown/i);
+    // No source row, no chunks, no binary — the allowlist rejects BEFORE any write.
+    expect(h.state.calls.some((c) => c.text.toLowerCase().includes("insert into public.ans_knowledge_sources"))).toBe(false);
+    expect(h.state.calls.some((c) => c.text.toLowerCase().includes("insert into public.ans_knowledge_files"))).toBe(false);
+    expect(h.state.calls.some((c) => c.text.toLowerCase().includes("insert into public.ans_knowledge_chunks"))).toBe(false);
   });
 });

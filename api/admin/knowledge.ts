@@ -8,6 +8,7 @@ import {
   ragBackendError,
   SOURCE_COLUMNS,
 } from "../_ragDb.js";
+import { invalidateKnowledgeCaches } from "../_knowledgeInvalidate.js";
 
 /**
  * GET  /api/admin/knowledge — list knowledge sources with filters
@@ -178,6 +179,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         { id: user.id, email: user.email },
         req
       );
+
+      // A newly-created source may be active+approved (e.g. imported) — refresh
+      // the AI read-path caches so it is discoverable without waiting for TTL.
+      invalidateKnowledgeCaches();
 
       return res.status(201).json({ success: true, data: created });
     }

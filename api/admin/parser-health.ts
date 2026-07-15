@@ -5,12 +5,8 @@ import { performance } from "node:perf_hooks";
 import { parseStudy } from "../_ans/parseStudy.js";
 import { computeDiagnosticSummary } from "../_ans/scoring/index.js";
 import { PARSER_VERSION } from "../../shared/ansStudy.js";
-import {
-  createSupabaseFromRequest,
-  requireRole,
-  setCorsHeaders,
-  handleError,
-} from "../_supabase.js";
+import { requireRole, setCorsHeaders, handleError } from "../_supabase.js";
+import { ragQuery } from "../_ragDb.js";
 
 /**
  * GET /api/admin/parser-health
@@ -31,8 +27,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "GET") return res.status(405).json({ success: false, error: "GET only" });
-
-  const supabase = createSupabaseFromRequest(req);
 
   try {
     await requireRole(req, ["super_admin", "clinical_admin", "reviewer"]);
@@ -89,21 +83,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
 
     // ---- Knowledge base reachability --------------------------------------
+    // Counts come from the AUTHORITATIVE Akamai PostgreSQL store (the same store
+    // the AI path retrieves from) in one round trip. count(*) returns text → Number().
     const knowledge: any = { ok: true };
     try {
-      const [{ count: sourceCount }, { count: activeCount }, { count: chunkCount }] =
-        await Promise.all([
-          supabase.from("ans_knowledge_sources").select("id", { count: "exact", head: true }),
-          supabase
-            .from("ans_knowledge_sources")
-            .select("id", { count: "exact", head: true })
-            .eq("active_in_ai_analysis", true)
-            .eq("review_status", "approved"),
-          supabase.from("ans_knowledge_chunks").select("id", { count: "exact", head: true }),
-        ]);
-      knowledge.totalSources = sourceCount ?? 0;
-      knowledge.activeApprovedSources = activeCount ?? 0;
-      knowledge.totalChunks = chunkCount ?? 0;
+      const { rows } = await ragQuery<{
+        total_sources: string;
+        active_approved: string;
+        total_chunks: string;
+      }>(
+        `SELECT
+           (SELECT count(*) FROM public.ans_knowledge_sources) AS total_sources,
+           (SELECT count(*) FROM public.ans_knowledge_sources
+              WHERE active_in_ai_analysis = true AND review_status = 'approved')
+             AS active_approved,
+           (SELECT count(*) FROM public.ans_knowledge_chunks) AS total_chunks`
+      );
+      knowledge.totalSources = Number(rows[0]?.total_sources ?? 0);
+      knowledge.activeApprovedSources = Number(rows[0]?.active_approved ?? 0);
+      knowledge.totalChunks = Number(rows[0]?.total_chunks ?? 0);
     } catch (e: any) {
       knowledge.ok = false;
       knowledge.detail = e?.message ?? "knowledge count failed";

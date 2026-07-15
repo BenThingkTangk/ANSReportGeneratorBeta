@@ -9,6 +9,7 @@ import {
   SOURCE_COLUMNS,
   type RagChangeAction,
 } from "../../_ragDb.js";
+import { invalidateKnowledgeCaches } from "../../_knowledgeInvalidate.js";
 
 /**
  * GET    /api/admin/knowledge/:id — get single source + chunk summary + versions
@@ -208,6 +209,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         req
       );
 
+      // Activation/archival/edits change what the AI may cite — refresh caches.
+      invalidateKnowledgeCaches();
+
       return res.status(200).json({ success: true, data: updated });
     }
 
@@ -243,6 +247,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         { id: user.id, email: user.email },
         req
       );
+
+      // A deleted source (and its cascaded links) must drop out of the AI path.
+      invalidateKnowledgeCaches();
 
       return res.status(200).json({ success: true, deleted: id });
     }
