@@ -115,8 +115,9 @@ export function AdminGuard({ children }: AdminGuardProps) {
                 href="/#/admin/login"
                 className="text-sm"
                 style={{ color: "var(--color-brand-cyan)", textDecoration: "none" }}
+                data-testid="admin-guard-signin"
               >
-                Sign in with admin email →
+                Sign in →
               </a>
             )}
           </div>

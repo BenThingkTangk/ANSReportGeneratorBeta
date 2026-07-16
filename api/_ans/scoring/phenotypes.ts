@@ -279,38 +279,61 @@ function detectAdrenergicImpairment(ctx: PhenotypeContext): PhenotypeFlag | Bloc
   };
 }
 
+/**
+ * COLOMBO-RULE-1.11 — "There is no parasympathetic withdrawal."
+ *
+ * Per Dr. Colombo's recorded clinical instruction (April 28 2026 Zoom, cue
+ * ~01:05:52–01:07:00): a fall in parasympathetic (RFa) activity during Valsalva
+ * or on standing is ALWAYS normal physiology — "there is no bottom to how far
+ * down they can go … it's always normal as long as it's going down." Therefore
+ * a decreasing RFa on standing/Valsalva must NEVER be surfaced as a dysfunction.
+ *
+ * This detector no longer emits a dysfunction flag for that pattern. When
+ * resting and standing RFa are both available it returns an INFORMATIONAL flag
+ * (present:false, so it is excluded from every present-filtered summary, the
+ * clinician "why" panel, and Ask ATOM) that simply documents the expected
+ * physiologic RFa fall. It never asserts pathology. Genuine reduced-vagal /
+ * cardiovagal impairment is detected independently by detectCardiovagalImpairment
+ * (E:I, Valsalva, 30:15 ratios) — this change does not alter those thresholds.
+ */
 function detectParasympatheticWithdrawal(ctx: PhenotypeContext): PhenotypeFlag | BlockedClaim {
   const study = ctx.study;
   const restRfa = study.sympatheticParasympathetic.restingRfa.value;
   const standRfa = study.sympatheticParasympathetic.standingRfa.value;
   if (restRfa == null || standRfa == null) {
+    // Not a "blocked dysfunction" — there is no dysfunction to block. Still
+    // record that the informational physiology note could not be rendered so the
+    // Data-Quality panel stays transparent about missing spectral inputs.
     return {
-      claim: "Parasympathetic withdrawal",
+      claim: "Parasympathetic response on standing (informational, not a dysfunction)",
       missingFields: [
         ...(restRfa == null ? ["sympatheticParasympathetic.restingRfa"] : []),
         ...(standRfa == null ? ["sympatheticParasympathetic.standingRfa"] : []),
       ],
       explanation:
-        "Parasympathetic withdrawal not evaluated: resting and/or standing RFa missing.",
+        "Expected physiologic RFa change on standing not shown: resting and/or standing RFa missing. Per COLOMBO-RULE-1.11 an RFa fall on standing is normal and is never flagged as a dysfunction.",
     } as BlockedClaim;
   }
-  // Withdrawal pattern: standing RFa noticeably lower than baseline (>20% drop).
-  const drop = restRfa > 0 ? (restRfa - standRfa) / restRfa : 0;
-  const present = drop >= 0.20;
+  // COLOMBO-RULE-1.11: an RFa fall on standing/Valsalva is normal — never a
+  // dysfunction. `present` is unconditionally false; a decrease is documented as
+  // expected physiology, and a rise is simply noted.
+  const delta = restRfa > 0 ? (restRfa - standRfa) / restRfa : 0;
+  const fell = standRfa <= restRfa;
   return {
     id: "parasympathetic_withdrawal",
-    label: "Pattern consistent with parasympathetic withdrawal",
-    present,
+    label: "Parasympathetic response on standing (expected physiology)",
+    present: false,
     criteria: [
       {
-        description: "Standing RFa decreased ≥ 20% from resting",
-        met: present,
+        description:
+          "Per COLOMBO-RULE-1.11, a fall in RFa on standing/Valsalva is normal physiology — never a dysfunction.",
+        met: false,
         sourceField: "sympatheticParasympathetic.restingRfa / standingRfa",
       },
     ],
-    rationale: present
-      ? `Standing RFa fell ${(drop * 100).toFixed(0)}% from resting (${restRfa.toFixed(2)} → ${standRfa.toFixed(2)}).`
-      : `RFa change on standing (${(drop * 100).toFixed(0)}%) does not meet withdrawal threshold.`,
+    rationale: fell
+      ? `Standing RFa was ${(delta * 100).toFixed(0)}% below resting (${restRfa.toFixed(2)} → ${standRfa.toFixed(2)}). Per COLOMBO-RULE-1.11 this is expected, normal parasympathetic behavior on standing — not "parasympathetic withdrawal" and not a dysfunction.`
+      : `Standing RFa did not fall (${restRfa.toFixed(2)} → ${standRfa.toFixed(2)}). Either way, per COLOMBO-RULE-1.11 an RFa fall on standing is normal and is never flagged as a dysfunction.`,
     sourceFields: [
       "sympatheticParasympathetic.restingRfa",
       "sympatheticParasympathetic.standingRfa",
@@ -325,6 +348,102 @@ function detectParasympatheticWithdrawal(ctx: PhenotypeContext): PhenotypeFlag |
         study.sympatheticParasympathetic.standingRfa,
       ],
     ),
+  };
+}
+
+/**
+ * COLOMBO-RULE-2.7 — Baroreceptor reflex dysfunction (Valsalva BP rise < 10%).
+ *
+ * Dr. Colombo's recorded instruction (April 28 2026 Zoom, cue ~01:09:50–01:10:01):
+ *   "Valsalva blood pressure, if it does not go up 10%, that's indicating the risk
+ *    for baroreceptor reflex dysfunction compared to resting baseline."
+ *
+ * STRICT SAFETY GATE: this reflex requires a real Valsalva-strain systolic BP and
+ * a real baseline systolic BP. The .ans binary does NOT carry beat-to-beat BP, so
+ * these values are only trustworthy when they are GENUINELY EXTRACTED from the
+ * paired vendor report / PDF OCR or the device's own recorded cuff fields — never
+ * computed, estimated, filename-derived, or inferred from ECG. This detector:
+ *   - fires ONLY when BOTH baseline.bp.sbp and valsalva.bp.sbp are present AND
+ *     from an authoritative BP source at confidence ≥ 0.5;
+ *   - otherwise emits a BlockedClaim → the UI shows "not assessed";
+ *   - NEVER infers BP from raw ECG (there is no ECG→BP source in the pipeline, so
+ *     an ECG-only study can never satisfy the gate), and rejects computed/estimated.
+ * It does not change any existing threshold; it only adds this gated flag.
+ *
+ * Authoritative sources: the genuinely-in-file AnsStudy ExtractionSource values
+ * that carry real BP (`ascii_section`, `binary_double`, `binary_labview_i64`),
+ * plus the forward-compat vendor/OCR/measured provenance names used when a paired
+ * report's BP is wired directly into the study. `computed`, `estimated`,
+ * `filename`, and `missing` are always rejected.
+ */
+const BARO_MIN_CONFIDENCE = 0.5;
+const BARO_AUTHORITATIVE_SOURCES = new Set([
+  // forward-compat: paired vendor report / OCR / device-measured provenance
+  "vendor_reported",
+  "ocr",
+  "measured",
+  // current AnsStudy in-file sources that carry genuinely-extracted BP
+  "ascii_section",
+  "binary_double",
+  "binary_labview_i64",
+]);
+
+function bpSourceIsAuthoritative(p: FieldProvenance | undefined): boolean {
+  if (!p) return false;
+  if (!BARO_AUTHORITATIVE_SOURCES.has(p.source as string)) return false;
+  return (p.confidence ?? 0) >= BARO_MIN_CONFIDENCE;
+}
+
+function detectBaroreflexDysfunction(ctx: PhenotypeContext): PhenotypeFlag | BlockedClaim {
+  const study = ctx.study;
+  const baseSbpField = study.baseline?.bp?.sbp;
+  const valsalvaSbpField = study.valsalva?.bp?.sbp;
+  const baseSbp = baseSbpField?.value ?? null;
+  const valsalvaSbp = valsalvaSbpField?.value ?? null;
+
+  // Gate 1: both values must exist AND be from an authoritative BP source
+  // (vendor/OCR/measured) at sufficient confidence. Never infer from ECG.
+  const baseOk = baseSbp != null && bpSourceIsAuthoritative(baseSbpField?.provenance);
+  const valsalvaOk = valsalvaSbp != null && bpSourceIsAuthoritative(valsalvaSbpField?.provenance);
+  if (!baseOk || !valsalvaOk) {
+    const missingFields: string[] = [];
+    if (!baseOk) missingFields.push("baseline.bp.sbp (vendor/OCR, conf ≥ 0.5)");
+    if (!valsalvaOk) missingFields.push("valsalva.bp.sbp (vendor/OCR, conf ≥ 0.5)");
+    return {
+      claim: "Baroreceptor reflex dysfunction (Valsalva BP rise < 10%)",
+      missingFields,
+      explanation:
+        "Baroreflex not assessed: requires vendor-reported/OCR systolic BP for both resting baseline and Valsalva strain at sufficient confidence. The .ans file does not carry beat-to-beat BP, and BP is never inferred from ECG.",
+    } as BlockedClaim;
+  }
+
+  // COLOMBO-RULE-2.7: risk when Valsalva SBP does not rise ≥ 10% over baseline.
+  const risePct = baseSbp! > 0 ? (valsalvaSbp! - baseSbp!) / baseSbp! : 0;
+  const present = risePct < 0.10;
+  const confidence = strictConfidence(
+    minConfidence([
+      baseSbpField!.provenance.confidence ?? 0,
+      valsalvaSbpField!.provenance.confidence ?? 0,
+    ]),
+    [baseSbpField, valsalvaSbpField],
+  );
+  return {
+    id: "baroreflex_dysfunction",
+    label: "Pattern consistent with baroreceptor reflex dysfunction risk",
+    present,
+    criteria: [
+      {
+        description:
+          "Valsalva systolic BP rise < 10% vs resting baseline (COLOMBO-RULE-2.7)",
+        met: present,
+        sourceField: "baseline.bp.sbp / valsalva.bp.sbp",
+      },
+    ],
+    rationale: present
+      ? `Valsalva systolic BP rose only ${(risePct * 100).toFixed(0)}% over baseline (${baseSbp!.toFixed(0)} → ${valsalvaSbp!.toFixed(0)} mmHg), below the 10% expected rise — a risk marker for baroreceptor reflex dysfunction. Vendor/OCR-sourced BP.`
+      : `Valsalva systolic BP rose ${(risePct * 100).toFixed(0)}% over baseline (${baseSbp!.toFixed(0)} → ${valsalvaSbp!.toFixed(0)} mmHg), meeting the ≥ 10% expected rise.`,
+    sourceFields: ["baseline.bp.sbp", "valsalva.bp.sbp"],
+    confidence,
   };
 }
 
@@ -426,6 +545,7 @@ const DETECTORS = [
   detectCardiovagalImpairment,
   detectAdrenergicImpairment,
   detectParasympatheticWithdrawal,
+  detectBaroreflexDysfunction,
   detectSympatheticExcess,
   detectPossibleCanRisk,
 ];

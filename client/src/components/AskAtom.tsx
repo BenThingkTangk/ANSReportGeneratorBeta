@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Send, Plus, Square, RotateCcw, CornerUpLeft, User, Stethoscope, Mic, Volume2 } from "lucide-react";
+import { X, Send, Plus, Square, RotateCcw, CornerUpLeft, User, Stethoscope, Mic, Volume2, VolumeX } from "lucide-react";
 import { AtomLogo } from "./AtomLogo";
 import { AtomMarkdown } from "./AtomMarkdown";
 import { apiRequest } from "@/lib/queryClient";
@@ -192,6 +192,9 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
   const [streaming, setStreaming] = useState(false);
   const [retryable, setRetryable] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  // Global mute: when on, voice-originated answers are NOT spoken automatically
+  // and any in-flight speech is stopped. Manual "Play" is still available.
+  const [muted, setMuted] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -200,11 +203,23 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
   const idRef = useRef(0);
   // Text already typed when the mic was pressed, so dictation appends instead of clobbering it.
   const baseInputRef = useRef("");
+  // True while the current input was produced by dictation, so the resulting
+  // answer is auto-spoken. Reset the moment the user types manually.
+  const dictatedRef = useRef(false);
+  // Mirror `muted` into a ref so the reveal-timer callback reads the live value
+  // without being re-created on every toggle.
+  const mutedRef = useRef(false);
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
 
   // PHI (patient/physician names) stripped client-side before any text is spoken or sent to TTS.
   const redactTerms = useMemo(() => phiTermsFromReport(report), [report]);
   const voice = useAtomVoice({
-    onTranscript: (text) => setInput((baseInputRef.current + text).trimStart()),
+    onTranscript: (text) => {
+      dictatedRef.current = true;
+      setInput((baseInputRef.current + text).trimStart());
+    },
   });
 
   const nextId = () => `m${idRef.current++}`;
@@ -248,8 +263,17 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
     }
   };
 
-  // Progressive reveal: reveal the response word-by-word so long answers stream in.
-  const startReveal = (fullText: string, citations: string[]) => {
+  // Speak an answer aloud (server Atom voice, browser fallback). PHI terms are
+  // stripped before synthesis. Marks the message as the actively-speaking one.
+  const speakMessage = (id: string, content: string) => {
+    setSpeakingId(id);
+    voice.speak(content, redactTerms);
+  };
+
+  // Progressive reveal: reveal the response word-by-word so long answers stream
+  // in. When `autoSpeak` (the question came from the mic) and not muted, the
+  // finished answer is read aloud in the configured Atom voice.
+  const startReveal = (fullText: string, citations: string[], autoSpeak = false) => {
     const id = nextId();
     setMessages(prev => [...prev, { id, role: "assistant", content: "", status: "streaming", citations } as ChatMessage].slice(-10));
     setStreaming(true);
@@ -266,6 +290,9 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
         clearReveal();
         setStreaming(false);
         setMessages(prev => prev.map(m => (m.id === id ? { ...m, content: fullText, status: "done" } : m)));
+        if (autoSpeak && !mutedRef.current && fullText.trim()) {
+          speakMessage(id, fullText);
+        }
       } else {
         const partial = tokens.slice(0, idx).join("");
         setMessages(prev => prev.map(m => (m.id === id ? { ...m, content: partial } : m)));
@@ -273,7 +300,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
     }, 22);
   };
 
-  const runQuery = async (base: ChatMessage[]) => {
+  const runQuery = async (base: ChatMessage[], fromVoice = false) => {
     setRetryable(false);
     setLoading(true);
     const controller = new AbortController();
@@ -297,7 +324,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
       if (!data?.success || !data?.message) throw new Error(data?.error || "No response");
       const citations = dedupeCitations([...(data.citations ?? []), ...(data.webCitations ?? [])]);
       setLoading(false);
-      startReveal(stripProvenanceMarkers(String(data.message)), citations);
+      startReveal(stripProvenanceMarkers(String(data.message)), citations, fromVoice);
     } catch (e) {
       abortRef.current = null;
       setLoading(false);
@@ -320,13 +347,17 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
     }
   };
 
-  const sendMessage = (text: string) => {
+  const sendMessage = (text: string, fromVoice?: boolean) => {
     const t = text.trim();
     if (!t || loading || streaming) return;
+    // Voice origin: explicit arg wins; otherwise infer from whether the current
+    // input was dictated. Reset the flag so the next turn starts fresh.
+    const spoken = fromVoice ?? dictatedRef.current;
+    dictatedRef.current = false;
     const next = [...messages, { id: nextId(), role: "user" as const, content: t }].slice(-10);
     setMessages(next);
     setInput("");
-    runQuery(next);
+    runQuery(next, spoken);
   };
 
   // Cancel: abort the request and/or stop the reveal, keeping any partial text.
@@ -378,8 +409,16 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
       voice.stopSpeaking();
       return;
     }
-    setSpeakingId(msg.id);
-    voice.speak(msg.content, redactTerms);
+    speakMessage(msg.id, msg.content);
+  };
+
+  // Global mute toggle: silence auto-spoken answers and stop any current speech.
+  const toggleMute = () => {
+    setMuted(prev => {
+      const next = !prev;
+      if (next) voice.stopSpeaking();
+      return next;
+    });
   };
 
   // Branch back: rewind to an earlier question, restoring its text for editing.
@@ -419,7 +458,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
         onClick={() => setOpen(o => !o)}
         whileHover={{ scale: 1.08 }}
         whileTap={{ scale: 0.95 }}
-        className={`fixed right-4 sm:right-6 w-12 h-12 sm:w-14 sm:h-14 rounded-full ${
+        className={`no-print fixed right-4 sm:right-6 w-12 h-12 sm:w-14 sm:h-14 rounded-full ${
           controlled ? "hidden sm:flex" : "flex"
         } items-center justify-center shadow-xl z-50 group`}
         style={{
@@ -451,7 +490,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             transition={{ type: "spring", stiffness: 360, damping: 30 }}
-            className="fixed right-3 sm:right-6 w-[min(340px,calc(100vw-1.5rem))] sm:w-[380px] rounded-2xl flex flex-col overflow-hidden z-50"
+            className="no-print fixed right-3 sm:right-6 w-[min(340px,calc(100vw-1.5rem))] sm:w-[380px] rounded-2xl flex flex-col overflow-hidden z-50"
             style={{
               bottom: "calc(env(safe-area-inset-bottom, 0px) + 5rem)",
               height: "min(560px, calc(100vh - 140px))",
@@ -477,9 +516,23 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                 <p className="text-[10px] text-muted-foreground">Powered by ATOM</p>
               </div>
               <button
+                onClick={toggleMute}
+                className="touch-target p-1.5 rounded-lg hover:bg-card/80 transition-colors"
+                data-testid="atom-mute-toggle"
+                aria-pressed={muted}
+                aria-label={muted ? "Unmute Atom voice" : "Mute Atom voice"}
+                title={muted ? "Voice muted — click to unmute" : "Mute Atom voice"}
+              >
+                {muted ? (
+                  <VolumeX className="w-3.5 h-3.5" style={{ color: "hsl(0 70% 68%)" }} />
+                ) : (
+                  <Volume2 className="w-3.5 h-3.5 text-muted-foreground" />
+                )}
+              </button>
+              <button
                 onClick={reset}
                 disabled={messages.length === 0 && !retryable}
-                className="p-1.5 rounded-lg hover:bg-card/80 transition-colors disabled:opacity-30"
+                className="touch-target p-1.5 rounded-lg hover:bg-card/80 transition-colors disabled:opacity-30"
                 data-testid="ask-atom-reset"
                 aria-label="New chat"
                 title="New chat"
@@ -492,7 +545,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                   voice.stopListening();
                   setOpen(false);
                 }}
-                className="p-1.5 rounded-lg hover:bg-card/80 transition-colors"
+                className="touch-target p-1.5 rounded-lg hover:bg-card/80 transition-colors"
                 data-testid="ask-atom-close"
                 aria-label="Close"
               >
@@ -515,7 +568,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                   <button
                     key={r}
                     onClick={() => setMode(r)}
-                    className="px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1 transition-colors"
+                    className="touch-target px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1 transition-colors"
                     style={
                       mode === r
                         ? { background: "hsl(185 85% 42%)", color: "white" }
@@ -523,6 +576,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                     }
                     data-testid={`atom-mode-${r}`}
                     aria-pressed={mode === r}
+                    aria-label={r === "patient" ? "Patient assistant mode" : "Clinician assistant mode"}
                   >
                     {r === "patient" ? <User className="w-3 h-3" /> : <Stethoscope className="w-3 h-3" />}
                     {r === "patient" ? "Patient" : "Clinician"}
@@ -582,7 +636,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                     {prompts.map((p, i) => (
                       <button
                         key={i}
-                        onClick={() => sendMessage(p)}
+                        onClick={() => sendMessage(p, false)}
                         className="text-left text-xs px-3 py-2.5 rounded-xl transition-colors hover:border-[hsl(185_85%_42%/0.4)]"
                         style={{
                           background: "hsl(210 18% 12%)",
@@ -603,7 +657,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                   <div key={msg.id} className="group flex gap-1.5 justify-end items-start">
                     <button
                       onClick={() => branchFrom(i)}
-                      className="mt-1 p-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                      className="touch-target mt-1 p-1 rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex-shrink-0"
                       style={{ color: "hsl(210 10% 55%)" }}
                       title="Edit & branch from here"
                       aria-label="Edit and branch from here"
@@ -653,7 +707,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                         <div className="flex items-center gap-1.5 px-1">
                           <button
                             onClick={() => handleSpeak(msg)}
-                            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md transition-colors hover:brightness-125"
+                            className="touch-target flex items-center gap-1 text-[10px] px-2 py-1 rounded-md transition-colors hover:brightness-125"
                             style={
                               speakingId === msg.id && voice.speaking
                                 ? {
@@ -722,7 +776,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                   {followUps.map((q, i) => (
                     <button
                       key={i}
-                      onClick={() => sendMessage(q)}
+                      onClick={() => sendMessage(q, false)}
                       className="text-[10px] px-2.5 py-1.5 rounded-full transition-colors hover:brightness-125"
                       style={{
                         background: "hsl(185 85% 42% / 0.08)",
@@ -742,9 +796,10 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                 <div className="flex justify-center pt-1">
                   <button
                     onClick={retry}
-                    className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-lg transition-colors hover:brightness-125"
+                    className="touch-target flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-lg transition-colors hover:brightness-125"
                     style={{ background: "hsl(210 18% 13%)", border: "1px solid hsl(210 15% 20%)", color: "hsl(210 10% 75%)" }}
                     data-testid="atom-retry"
+                    aria-label="Retry"
                   >
                     <RotateCcw className="w-3 h-3" /> Retry
                   </button>
@@ -787,7 +842,11 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                 ref={inputRef}
                 type="text"
                 value={input}
-                onChange={e => setInput(e.target.value)}
+                onChange={e => {
+                  // Manual typing overrides any prior dictation → treat as text-origin.
+                  dictatedRef.current = false;
+                  setInput(e.target.value);
+                }}
                 onKeyDown={e => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -802,6 +861,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                       : "Ask about this patient…"
                 }
                 disabled={busy}
+                aria-label={mode === "patient" ? "Ask about your results" : "Ask about this patient"}
                 className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/50 min-w-0 disabled:opacity-60"
                 data-testid="ask-atom-input"
                 style={{ color: "hsl(200 20% 92%)" }}
@@ -809,7 +869,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
               <button
                 onClick={handleMicClick}
                 disabled={busy || !voice.supportsListening}
-                className="w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105 disabled:opacity-40 flex-shrink-0"
+                className="touch-target w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105 disabled:opacity-40 flex-shrink-0"
                 style={
                   voice.listening
                     ? { background: "hsl(0 55% 42%)" }
@@ -850,7 +910,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
               {busy ? (
                 <button
                   onClick={cancel}
-                  className="w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105"
+                  className="touch-target w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105"
                   style={{ background: "hsl(0 55% 42%)" }}
                   data-testid="ask-atom-stop"
                   aria-label="Stop"
@@ -862,7 +922,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                 <button
                   onClick={() => sendMessage(input)}
                   disabled={!input.trim()}
-                  className="w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105 disabled:opacity-40"
+                  className="touch-target w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105 disabled:opacity-40"
                   style={{ background: "hsl(185 85% 42%)" }}
                   data-testid="ask-atom-send"
                   aria-label="Send"

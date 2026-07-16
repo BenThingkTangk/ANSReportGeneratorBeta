@@ -1,10 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import {
-  createSupabaseAdmin,
-  getAuthUser,
-  setCorsHeaders,
-  handleError,
-} from "./_supabase.js";
+import { getAuthUser, setCorsHeaders, handleError } from "./_supabase.js";
+import { ragQuery } from "./_ragDb.js";
 import { parseStudy } from "./_ans/parseStudy.js";
 import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
 import { buildExplainedReport } from "./_buildExplanations.js";
@@ -21,9 +17,9 @@ import type { DiagnosticSummary } from "../shared/diagnosticSummary.js";
  *   - reportRef: free-form, NO PHI (used for audit only)
  *   - evidenceEnabledOverride: boolean (super-admin previews)
  *
- * Returns ExplainedReport. Public-safe response — never includes private
- * bucket paths. Citations to private files surface only via the dedicated
- * signed-URL endpoint.
+ * Returns ExplainedReport. Public-safe response — never includes private file
+ * bytes. Citations to private files surface only via the dedicated admin-gated
+ * streaming endpoint (api/admin/source-file).
  *
  * Auth: requires an authenticated user (any role). Public landing pages that
  * need to preview an explanation should call this through an authenticated
@@ -71,9 +67,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     // Audit trail — no PHI. Tracks who generated explanations, which sources
-    // were cited, and which rules fired.
+    // were cited, and which rules fired. Written to the AUTHORITATIVE Akamai
+    // PostgreSQL store (ans_report_explanations) via ../_ragDb — NOT Supabase —
+    // so the append-only run log lives with the knowledge it references.
     try {
-      const admin = createSupabaseAdmin();
       const sourceIds = Array.from(
         new Set(
           explained.items.flatMap((it) => it.evidence.map((e) => e.sourceId))
@@ -89,20 +86,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         (it) => it.mode === "rule-based"
       ).length;
 
-      await admin.from("ans_report_explanations").insert({
-        report_ref: body?.reportRef ?? null,
-        scoring_version: explained.scoringVersion,
-        evidence_enabled: explained.evidenceEnabled,
-        num_bullets: explained.items.length,
-        num_with_evidence: numWithEvidence,
-        num_rule_based: numRuleBased,
-        source_ids: sourceIds,
-        rule_keys: ruleKeys,
-        generated_by: user.id,
-      });
+      await ragQuery(
+        `INSERT INTO public.ans_report_explanations
+           (report_ref, scoring_version, evidence_enabled, num_bullets,
+            num_with_evidence, num_rule_based, source_ids, rule_keys, generated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::uuid[], $8::text[], $9)`,
+        [
+          body?.reportRef ?? null,
+          explained.scoringVersion,
+          explained.evidenceEnabled,
+          explained.items.length,
+          numWithEvidence,
+          numRuleBased,
+          sourceIds,
+          ruleKeys,
+          user.id,
+        ]
+      );
     } catch (e) {
       // Audit failure must not break the response.
-      console.warn("[explanations] audit insert failed", e);
+      console.warn("[explanations] audit insert failed", (e as Error)?.message ?? "unknown");
     }
 
     return res.status(200).json({ success: true, data: explained });

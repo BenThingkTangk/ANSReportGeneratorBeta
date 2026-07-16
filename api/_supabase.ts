@@ -5,16 +5,141 @@
  */
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { VercelRequest } from "@vercel/node";
-import { requireGateway } from "./_adminGateway.js";
+import { isGatewayConfigured, gatewayStatus } from "./_adminGateway.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type UserRole = "super_admin" | "clinical_admin" | "reviewer" | "viewer";
 
 export interface AdminUser {
-  id: string;
+  /**
+   * Supabase auth user id, or `null` when the request was authorized purely by
+   * the env-configured admin gateway (username + password). In gateway mode
+   * there is no per-user Supabase identity, so ownership/audit columns
+   * (`added_by`, `last_updated_by`, `actor_id`) are written as NULL — they are
+   * nullable FKs to auth.users(id) ON DELETE SET NULL.
+   */
+  id: string | null;
   email: string;
   role: UserRole;
+}
+
+// ── Backend configuration (server-only Supabase env) ─────────────────────────
+
+/**
+ * Read a Supabase env var, tolerating stray surrounding whitespace / a trailing
+ * newline. Values pasted into the Vercel dashboard or piped via
+ * `echo … | vercel env add` very commonly acquire a leading/trailing "\n" or
+ * space. A trailing newline on SUPABASE_URL corrupts every constructed REST URL
+ * (`https://ref.supabase.co\n/rest/v1/…`) so the underlying fetch fails with a
+ * bare `TypeError: fetch failed`; the same class of bug already bit the admin
+ * gateway. Normalising on read fixes it generically. Returns undefined when
+ * unset or blank so the "configured" check stays honest.
+ */
+function readSupabaseEnv(name: string): string | undefined {
+  const raw = process.env[name];
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length ? trimmed : undefined;
+}
+
+export function supabaseUrl(): string | undefined {
+  return readSupabaseEnv("SUPABASE_URL");
+}
+export function supabaseServiceRoleKey(): string | undefined {
+  return readSupabaseEnv("SUPABASE_SERVICE_ROLE_KEY");
+}
+
+export interface BackendConfigStatus {
+  configured: boolean;
+  /** Secret-free, human-readable reason when not configured. */
+  detail?: string;
+  /** Env var NAMES that need attention — names only, never values. */
+  missing?: string[];
+}
+
+/**
+ * Precise, NON-SECRET status of the knowledge/RAG database backend env.
+ * Reports which variable NAME is missing or malformed without ever exposing a
+ * value, so the API/UI can surface an actionable configuration message instead
+ * of a raw `TypeError: fetch failed`.
+ */
+export function backendConfigStatus(): BackendConfigStatus {
+  const url = supabaseUrl();
+  const key = supabaseServiceRoleKey();
+  const missing: string[] = [];
+  if (!url) missing.push("SUPABASE_URL");
+  if (!key) missing.push("SUPABASE_SERVICE_ROLE_KEY");
+  if (missing.length) {
+    return {
+      configured: false,
+      missing,
+      detail: `Missing server environment variable(s): ${missing.join(", ")}.`,
+    };
+  }
+  // URL must be a well-formed absolute http(s) URL, else fetch() throws opaquely.
+  try {
+    const parsed = new URL(url as string);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return {
+        configured: false,
+        missing: ["SUPABASE_URL"],
+        detail: "SUPABASE_URL must be an absolute https:// URL.",
+      };
+    }
+  } catch {
+    return {
+      configured: false,
+      missing: ["SUPABASE_URL"],
+      detail: "SUPABASE_URL is not a valid URL.",
+    };
+  }
+  return { configured: true };
+}
+
+/**
+ * True when a caught error is a transport/connectivity failure (unreachable
+ * host, DNS, refused, reset, timeout, TLS) rather than a legitimate query
+ * error. Inspects both the message and the PostgREST `details` (which carries
+ * the underlying cause for a swallowed fetch rejection) plus any `code`.
+ */
+export function isBackendUnreachable(err: unknown): boolean {
+  const e = (err ?? {}) as {
+    message?: string;
+    details?: string;
+    code?: string;
+    cause?: { code?: string; message?: string };
+  };
+  const haystack = `${e.message ?? ""} ${e.details ?? ""} ${e.cause?.message ?? ""}`;
+  const code = `${e.code ?? ""} ${e.cause?.code ?? ""}`;
+  return (
+    /fetch failed|network|failed to fetch|socket hang up|tls|certificate/i.test(haystack) ||
+    /ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|UND_ERR/i.test(
+      `${haystack} ${code}`
+    )
+  );
+}
+
+/**
+ * Map a Supabase/PostgREST failure to a precise, SECRET-FREE API error.
+ * Transport failures → 503 with an actionable message naming SUPABASE_URL
+ * (never the value). Genuine query errors keep their (non-secret) PostgREST
+ * message with a 400. The verbose PostgREST `details`/stack are never forwarded
+ * to the client.
+ */
+export function backendError(
+  err: { message?: string; details?: string; code?: string } | Error
+): Error & { statusCode: number } {
+  if (isBackendUnreachable(err)) {
+    return Object.assign(
+      new Error(
+        "Cannot reach the knowledge database backend. Verify SUPABASE_URL points to the correct, active Supabase project (transport error contacting Supabase)."
+      ),
+      { statusCode: 503 }
+    );
+  }
+  const message = (err as { message?: string })?.message || "Database query failed";
+  return Object.assign(new Error(message), { statusCode: 400 });
 }
 
 // ── Singleton service-role client ────────────────────────────────────────────
@@ -23,12 +148,16 @@ let _adminClient: SupabaseClient | null = null;
 
 export function createSupabaseAdmin(): SupabaseClient {
   if (_adminClient) return _adminClient;
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) {
-    throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+  const cfg = backendConfigStatus();
+  if (!cfg.configured) {
+    // 503 (not 500): this is an environment/configuration state, and the
+    // message names the offending variable without exposing any value.
+    throw Object.assign(
+      new Error(`Supabase backend is not configured: ${cfg.detail}`),
+      { statusCode: 503 }
+    );
   }
-  _adminClient = createClient(url, key, {
+  _adminClient = createClient(supabaseUrl() as string, supabaseServiceRoleKey() as string, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
   return _adminClient;
@@ -101,13 +230,31 @@ export async function requireRole(
   let user: { id: string; email?: string } | null = null;
 
   if ("headers" in reqOrSupabase) {
-    // Perimeter check FIRST: when the env-configured admin gateway is enabled,
-    // every request must carry a valid gateway session cookie before we even
-    // look at the Supabase identity. No-op when the gateway is unconfigured, so
-    // magic-link-only deployments are unaffected. This sits IN FRONT of Supabase
-    // RLS — it never replaces it.
-    requireGateway(reqOrSupabase as VercelRequest);
-    user = (await getAuthUser(reqOrSupabase as VercelRequest)) as any;
+    const req = reqOrSupabase as VercelRequest;
+
+    // Primary path: the env-configured admin gateway (username + password) is
+    // the sole, authoritative admin entry point for this deployment. A valid
+    // signed gateway session cookie authorizes as super_admin — the highest
+    // role — which satisfies every admin route's role gate. No Supabase
+    // magic-link identity is required or consulted in this mode.
+    if (isGatewayConfigured()) {
+      const gw = gatewayStatus(req);
+      if (!gw.authenticated) {
+        throw Object.assign(
+          new Error("Admin gateway authentication required"),
+          { statusCode: 401 }
+        );
+      }
+      const role: UserRole = "super_admin";
+      if (!allowedRoles.includes(role)) {
+        throw Object.assign(new Error("Forbidden"), { statusCode: 403 });
+      }
+      return { id: null, email: gw.sub ?? "", role };
+    }
+
+    // Legacy fallback (gateway unconfigured — e.g. local dev / older
+    // deployments): resolve identity from the Supabase Bearer token and RLS.
+    user = (await getAuthUser(req)) as any;
   } else {
     const { data } = await (reqOrSupabase as SupabaseClient).auth.getUser();
     user = data.user as any;

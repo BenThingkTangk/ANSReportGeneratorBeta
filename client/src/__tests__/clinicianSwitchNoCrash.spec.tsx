@@ -200,4 +200,29 @@ describe("Patient -> Clinician switch does not blank the app (THIRD FINAL-QA)", 
     ).not.toThrow();
     cleanup();
   });
+
+  it("exposes an Export/print button that triggers window.print and hides chrome from print", async () => {
+    const { render, screen, fireEvent, cleanup } = await import(
+      "@testing-library/react"
+    );
+    const { ReportDashboard } = await import("../components/ReportDashboard");
+
+    const printSpy = vi.fn();
+    (window as any).print = printSpy;
+
+    const { container } = render(
+      <ReportDashboard report={report} ansStudy={ansStudy} onReset={() => {}} />,
+    );
+
+    // Export button present and wired to native print-to-PDF.
+    const exportBtn = screen.getByTestId("button-export-report");
+    expect(exportBtn).toBeTruthy();
+    fireEvent.click(exportBtn);
+    expect(printSpy).toHaveBeenCalledTimes(1);
+
+    // Interactive chrome (top bar) is marked no-print so exports omit it.
+    expect(container.querySelector(".no-print")).toBeTruthy();
+
+    cleanup();
+  });
 });

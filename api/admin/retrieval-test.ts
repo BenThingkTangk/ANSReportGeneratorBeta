@@ -1,10 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import {
-  createSupabaseFromRequest,
-  requireRole,
-  setCorsHeaders,
-  handleError,
-} from "../_supabase.js";
+import { requireRole, setCorsHeaders, handleError } from "../_supabase.js";
+import { ragQuery, ragBackendError } from "../_ragDb.js";
 
 /**
  * POST /api/admin/retrieval-test
@@ -17,10 +13,10 @@ import {
  * answer, without going through the chat.
  *
  * Ranking is deterministic term-overlap (no embeddings column exists yet), so
- * the score breakdown is fully explainable in the UI. RLS still applies: the
- * request-scoped Supabase client only sees chunks the caller's role may read,
- * and we additionally filter to active+approved sources so the test reflects
- * what the live AI path would actually retrieve.
+ * the score breakdown is fully explainable in the UI. It reads the AUTHORITATIVE
+ * Akamai PostgreSQL store (humanos-ans-rag-pg) via ../_ragDb — the SAME store
+ * the live AI path retrieves from — and filters to active+approved sources so
+ * the test reflects exactly what real report grounding would surface.
  *
  * Body: { query: string, limit?: number, activeOnly?: boolean }
  */
@@ -70,8 +66,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ success: false, error: "POST only" });
 
-  const supabase = createSupabaseFromRequest(req);
-
   try {
     await requireRole(req, ["super_admin", "clinical_admin", "reviewer"]);
 
@@ -95,27 +89,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Pull candidate chunks joined to their source. We over-fetch (bounded) and
     // rank in-process so the score breakdown is explainable. Postgres full-text
     // could pre-filter, but the corpus is small and this keeps behavior honest.
-    let q = supabase
-      .from("ans_knowledge_chunks")
-      .select(
-        `
-          id, source_id, chunk_index, content, tokens,
-          source:ans_knowledge_sources!inner (
-            id, title, authors, year, publication_type,
-            active_in_ai_analysis, review_status
-          )
-        `,
-      )
-      .limit(2000);
-
-    if (activeOnly) {
-      q = q
-        .eq("source.active_in_ai_analysis", true)
-        .eq("source.review_status", "approved");
+    // json_build_object nests the source so the mapping below is unchanged.
+    let data: Array<Record<string, any>>;
+    try {
+      const result = await ragQuery<Record<string, any>>(
+        `SELECT c.id, c.source_id, c.chunk_index, c.content, c.tokens,
+                json_build_object(
+                  'id', s.id,
+                  'title', s.title,
+                  'authors', s.authors,
+                  'year', s.year,
+                  'publication_type', s.publication_type,
+                  'active_in_ai_analysis', s.active_in_ai_analysis,
+                  'review_status', s.review_status
+                ) AS source
+           FROM public.ans_knowledge_chunks c
+           JOIN public.ans_knowledge_sources s ON s.id = c.source_id
+          ${activeOnly ? "WHERE s.active_in_ai_analysis = true AND s.review_status = 'approved'" : ""}
+          LIMIT 2000`
+      );
+      data = result.rows;
+    } catch (dbErr) {
+      throw ragBackendError(dbErr);
     }
-
-    const { data, error } = await q;
-    if (error) throw error;
 
     const ranked = (data ?? [])
       .map((row: any) => {

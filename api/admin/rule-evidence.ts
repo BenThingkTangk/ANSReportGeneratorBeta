@@ -1,13 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { requireRole, setCorsHeaders, handleError } from "../_supabase.js";
 import {
-  createSupabaseAdmin,
-  requireRole,
-  logAudit,
-  setCorsHeaders,
-  handleError,
-  createSupabaseFromRequest,
-} from "../_supabase.js";
-import { clearEvidenceCache } from "../_evidenceRetrieval.js";
+  ragQuery,
+  logRagAudit,
+  ragBackendError,
+} from "../_ragDb.js";
+import { invalidateKnowledgeCaches } from "../_knowledgeInvalidate.js";
 
 /**
  * /api/admin/rule-evidence
@@ -17,35 +15,69 @@ import { clearEvidenceCache } from "../_evidenceRetrieval.js";
  *         — create a new rule->source mapping
  * DELETE ?id=                  — remove a mapping
  *
+ * Backed by Akamai Managed PostgreSQL (humanos-ans-rag-pg) via ../_ragDb — the
+ * SAME authoritative store the AI evidence retriever reads — NOT Supabase, so a
+ * newly-created/removed link is reflected in report grounding (after the caches
+ * are invalidated) with no split-brain. Auth is enforced FIRST via the admin
+ * gateway session. Every statement is parameterized.
+ *
  * Roles: super_admin & clinical_admin for write, +reviewer for read.
  */
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
   if (req.method === "OPTIONS") return res.status(200).end();
-
-  const supabase = createSupabaseFromRequest(req);
 
   try {
     if (req.method === "GET") {
       await requireRole(req, ["super_admin", "clinical_admin", "reviewer"]);
       const { rule_type, rule_key } = req.query as Record<string, string>;
 
-      let q = createSupabaseAdmin()
-        .from("ans_rule_evidence_links")
-        .select(
-          `id, rule_type, rule_key, evidence_quote, page_ref, notes, created_at, updated_at,
-           source:ans_knowledge_sources!inner (
-             id, title, authors, year, publication_type, url, file_path,
-             active_in_ai_analysis, review_status
-           )`
-        )
-        .order("created_at", { ascending: false });
+      // Nest the source object in-SQL (json_build_object → parsed by pg) so the
+      // response shape exactly matches what the admin page consumes.
+      const conds: string[] = [];
+      const params: unknown[] = [];
+      let i = 1;
+      if (rule_type) {
+        conds.push(`l.rule_type = $${i++}`);
+        params.push(rule_type);
+      }
+      if (rule_key) {
+        conds.push(`l.rule_key = $${i++}`);
+        params.push(rule_key);
+      }
+      const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
 
-      if (rule_type) q = q.eq("rule_type", rule_type);
-      if (rule_key) q = q.eq("rule_key", rule_key);
+      let data: Array<Record<string, unknown>>;
+      try {
+        const result = await ragQuery(
+          `SELECT l.id, l.rule_type, l.rule_key, l.evidence_quote, l.page_ref,
+                  l.notes, l.created_at, l.updated_at,
+                  json_build_object(
+                    'id', s.id,
+                    'title', s.title,
+                    'authors', s.authors,
+                    'year', s.year,
+                    'publication_type', s.publication_type,
+                    'url', s.url,
+                    'file_path', s.file_path,
+                    'active_in_ai_analysis', s.active_in_ai_analysis,
+                    'review_status', s.review_status
+                  ) AS source
+             FROM public.ans_rule_evidence_links l
+             JOIN public.ans_knowledge_sources s ON s.id = l.source_id
+             ${where}
+            ORDER BY l.created_at DESC`,
+          params
+        );
+        data = result.rows;
+      } catch (dbErr) {
+        throw ragBackendError(dbErr);
+      }
 
-      const { data, error } = await q;
-      if (error) throw Object.assign(new Error(error.message), { statusCode: 400 });
       return res.status(200).json({ success: true, data });
     }
 
@@ -65,88 +97,113 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .status(400)
           .json({ success: false, error: "rule_type must be finding|phenotype|domain" });
       }
-
-      const admin = createSupabaseAdmin();
-      // Validate the source exists and is approved+active before linking.
-      const { data: src, error: srcErr } = await admin
-        .from("ans_knowledge_sources")
-        .select("id, active_in_ai_analysis, review_status")
-        .eq("id", source_id)
-        .single();
-      if (srcErr || !src) {
+      // A non-uuid source_id can never match a row; treat as not found (never a
+      // 500 from an invalid-uuid cast).
+      if (!UUID_RE.test(String(source_id))) {
         return res.status(404).json({ success: false, error: "source not found" });
       }
-      if (!src.active_in_ai_analysis || src.review_status !== "approved") {
-        return res.status(400).json({
-          success: false,
-          error:
-            "source must be active_in_ai_analysis=true AND review_status='approved' before linking",
-        });
-      }
 
-      const { data, error } = await admin
-        .from("ans_rule_evidence_links")
-        .insert({
-          rule_type,
-          rule_key,
-          source_id,
-          evidence_quote: body.evidence_quote ?? null,
-          page_ref: body.page_ref ?? null,
-          notes: body.notes ?? null,
-          added_by: user.id,
-        })
-        .select()
-        .single();
+      let created: Record<string, unknown>;
+      try {
+        // Validate the source exists and is approved+active before linking.
+        const srcRes = await ragQuery<{
+          id: string;
+          active_in_ai_analysis: boolean;
+          review_status: string;
+        }>(
+          `SELECT id, active_in_ai_analysis, review_status
+             FROM public.ans_knowledge_sources WHERE id = $1`,
+          [source_id]
+        );
+        const src = srcRes.rows[0];
+        if (!src) {
+          return res.status(404).json({ success: false, error: "source not found" });
+        }
+        if (!src.active_in_ai_analysis || src.review_status !== "approved") {
+          return res.status(400).json({
+            success: false,
+            error:
+              "source must be active_in_ai_analysis=true AND review_status='approved' before linking",
+          });
+        }
 
-      if (error) {
-        if (error.code === "23505") {
+        const insRes = await ragQuery(
+          `INSERT INTO public.ans_rule_evidence_links
+             (rule_type, rule_key, source_id, evidence_quote, page_ref, notes, added_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING id, rule_type, rule_key, source_id, evidence_quote, page_ref,
+                     notes, created_at, updated_at`,
+          [
+            rule_type,
+            rule_key,
+            source_id,
+            body.evidence_quote ?? null,
+            body.page_ref ?? null,
+            body.notes ?? null,
+            user.id,
+          ]
+        );
+        created = insRes.rows[0] as Record<string, unknown>;
+      } catch (dbErr) {
+        // Unique-violation → the mapping already exists (409, not a raw 400).
+        if ((dbErr as { code?: string })?.code === "23505") {
           return res
             .status(409)
             .json({ success: false, error: "mapping already exists" });
         }
-        throw Object.assign(new Error(error.message), { statusCode: 400 });
+        throw ragBackendError(dbErr);
       }
 
-      await logAudit(
-        supabase,
+      await logRagAudit(
         "rule_evidence.create",
         "ans_rule_evidence_links",
-        data.id,
+        created.id as string,
         null,
         { rule_type, rule_key, source_id },
+        { id: user.id, email: user.email },
         req
       );
-      clearEvidenceCache();
-      return res.status(201).json({ success: true, data });
+      invalidateKnowledgeCaches();
+      return res.status(201).json({ success: true, data: created });
     }
 
     if (req.method === "DELETE") {
-      await requireRole(req, ["super_admin"]);
+      const user = await requireRole(req, ["super_admin"]);
       const id = (req.query.id as string) || "";
       if (!id) {
         return res.status(400).json({ success: false, error: "id required" });
       }
-      const admin = createSupabaseAdmin();
-      const { data: existing } = await admin
-        .from("ans_rule_evidence_links")
-        .select("*")
-        .eq("id", id)
-        .maybeSingle();
-      const { error } = await admin
-        .from("ans_rule_evidence_links")
-        .delete()
-        .eq("id", id);
-      if (error) throw Object.assign(new Error(error.message), { statusCode: 400 });
-      await logAudit(
-        supabase,
+      if (!UUID_RE.test(id)) {
+        return res.status(404).json({ success: false, error: "not found" });
+      }
+
+      let existing: Record<string, unknown> | null;
+      try {
+        const cur = await ragQuery(
+          `SELECT id, rule_type, rule_key, source_id, evidence_quote, page_ref,
+                  notes, created_at, updated_at
+             FROM public.ans_rule_evidence_links WHERE id = $1`,
+          [id]
+        );
+        existing = (cur.rows[0] as Record<string, unknown>) ?? null;
+        await ragQuery(
+          "DELETE FROM public.ans_rule_evidence_links WHERE id = $1",
+          [id]
+        );
+      } catch (dbErr) {
+        throw ragBackendError(dbErr);
+      }
+
+      await logRagAudit(
         "rule_evidence.delete",
         "ans_rule_evidence_links",
         id,
-        existing ?? null,
+        existing,
         null,
+        { id: user.id, email: user.email },
         req
       );
-      clearEvidenceCache();
+      invalidateKnowledgeCaches();
       return res.status(200).json({ success: true });
     }
 

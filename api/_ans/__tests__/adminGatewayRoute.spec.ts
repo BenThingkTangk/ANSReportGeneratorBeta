@@ -1,0 +1,305 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import gatewayHandler from "../../admin-gateway.js";
+import { requireRole } from "../../_supabase.js";
+import {
+  hashPassword,
+  signSession,
+  GATEWAY_COOKIE,
+  _resetRateLimit,
+} from "../../_adminGateway.js";
+
+/**
+ * Admin perimeter gateway — HTTP route + route-protection integration.
+ *
+ * Proves the env-configured username/password gateway is the real, enforced
+ * admin auth path (NOT the removed Supabase magic-link flow):
+ *   - valid credentials mint a signed HttpOnly/Secure/SameSite session cookie;
+ *   - wrong username AND wrong password both fail with the same generic 401;
+ *   - repeated failures trip a rate-limit lockout (429 + Retry-After);
+ *   - logout clears the cookie;
+ *   - requireRole() authorizes admin APIs off the gateway cookie alone and
+ *     rejects unauthenticated / under-privileged requests;
+ *   - no secret (password, hash, or session secret) ever appears in a response.
+ *
+ * Pure handler-level drive with mock req/res — no network, no Supabase.
+ */
+
+const USERNAME = "op-admin";
+const PASSWORD = "S3cure-Gateway-Pass!";
+const SECRET = "unit-test-session-secret-please-ignore";
+
+function mockRes() {
+  const res: any = {
+    _status: 200,
+    _json: undefined as any,
+    _sent: undefined as any,
+    _headers: {} as Record<string, string>,
+    status(c: number) { this._status = c; return this; },
+    json(p: any) { this._json = p; return this; },
+    send(p: any) { this._sent = p; return this; },
+    setHeader(k: string, v: any) { this._headers[String(k)] = String(v); return this; },
+    getHeader(k: string) { return this._headers[String(k)]; },
+    end() { return this; },
+  };
+  return res;
+}
+
+function mockReq(
+  method: string,
+  opts: { body?: any; cookie?: string; xff?: string } = {},
+): any {
+  const headers: Record<string, string> = {};
+  if (opts.cookie) headers.cookie = opts.cookie;
+  if (opts.xff) headers["x-forwarded-for"] = opts.xff;
+  return { method, body: opts.body, headers, cookies: {}, socket: { remoteAddress: "127.0.0.1" } };
+}
+
+/** Extract the gateway token minted into a Set-Cookie header, if any. */
+function cookieTokenFrom(res: ReturnType<typeof mockRes>): string | null {
+  const sc = res._headers["Set-Cookie"];
+  if (!sc) return null;
+  const m = sc.match(new RegExp(`${GATEWAY_COOKIE}=([^;]*)`));
+  return m ? m[1] : null;
+}
+
+describe("admin gateway route — login / lockout / logout / protection", () => {
+  const prev = {
+    u: process.env.ADMIN_GATEWAY_USERNAME,
+    h: process.env.ADMIN_GATEWAY_PASSWORD_HASH,
+    s: process.env.ADMIN_SESSION_SECRET,
+    max: process.env.ADMIN_GATEWAY_MAX_ATTEMPTS,
+  };
+
+  beforeAll(() => {
+    process.env.ADMIN_GATEWAY_USERNAME = USERNAME;
+    process.env.ADMIN_GATEWAY_PASSWORD_HASH = hashPassword(PASSWORD);
+    process.env.ADMIN_SESSION_SECRET = SECRET;
+    process.env.ADMIN_GATEWAY_MAX_ATTEMPTS = "5";
+  });
+
+  afterAll(() => {
+    const restore = (k: string, v: string | undefined) =>
+      v === undefined ? delete (process.env as any)[k] : ((process.env as any)[k] = v);
+    restore("ADMIN_GATEWAY_USERNAME", prev.u);
+    restore("ADMIN_GATEWAY_PASSWORD_HASH", prev.h);
+    restore("ADMIN_SESSION_SECRET", prev.s);
+    restore("ADMIN_GATEWAY_MAX_ATTEMPTS", prev.max);
+  });
+
+  beforeEach(() => _resetRateLimit());
+
+  it("accepts valid credentials and mints a hardened session cookie", async () => {
+    const res = mockRes();
+    await gatewayHandler(mockReq("POST", { body: { username: USERNAME, password: PASSWORD } }), res);
+    expect(res._status).toBe(200);
+    expect(res._json).toMatchObject({ success: true, authenticated: true });
+
+    const sc = res._headers["Set-Cookie"];
+    expect(sc).toContain(`${GATEWAY_COOKIE}=`);
+    expect(sc).toContain("HttpOnly");
+    expect(sc).toContain("Secure");
+    expect(sc).toMatch(/SameSite=Lax/i);
+    expect(sc).toContain("Path=/");
+    // The minted cookie is a signed token, never the plaintext password/secret.
+    const token = cookieTokenFrom(res)!;
+    expect(token.length).toBeGreaterThan(0);
+    expect(token).not.toContain(PASSWORD);
+    expect(token).not.toContain(SECRET);
+  });
+
+  it("rejects a wrong password with a generic 401 (no enumeration)", async () => {
+    const res = mockRes();
+    await gatewayHandler(mockReq("POST", { body: { username: USERNAME, password: "nope" } }), res);
+    expect(res._status).toBe(401);
+    expect(res._json.success).toBe(false);
+    expect(res._json.error).toMatch(/invalid username or password/i);
+    expect(res._headers["Set-Cookie"]).toBeUndefined();
+  });
+
+  it("rejects a wrong username with the SAME generic 401", async () => {
+    const res = mockRes();
+    await gatewayHandler(mockReq("POST", { body: { username: "someone-else", password: PASSWORD } }), res);
+    expect(res._status).toBe(401);
+    expect(res._json.error).toMatch(/invalid username or password/i);
+  });
+
+  it("requires both fields", async () => {
+    const res = mockRes();
+    await gatewayHandler(mockReq("POST", { body: { username: USERNAME } }), res);
+    expect(res._status).toBe(400);
+    expect(res._json.success).toBe(false);
+  });
+
+  it("locks out after repeated failures (429 + Retry-After)", async () => {
+    // Distinct IP so the shared limiter starts clean for this case.
+    const ip = "203.0.113.7";
+    let last = mockRes();
+    for (let i = 0; i < 4; i++) {
+      last = mockRes();
+      await gatewayHandler(mockReq("POST", { body: { username: USERNAME, password: "bad" }, xff: ip }), last);
+      expect(last._status).toBe(401);
+    }
+    // 5th failure hits the threshold → lockout.
+    const locked = mockRes();
+    await gatewayHandler(mockReq("POST", { body: { username: USERNAME, password: "bad" }, xff: ip }), locked);
+    expect(locked._status).toBe(429);
+    expect(Number(locked._json.retryAfterSec)).toBeGreaterThan(0);
+    expect(locked._headers["Retry-After"]).toBeTruthy();
+
+    // Even the correct password is refused while locked out.
+    const stillLocked = mockRes();
+    await gatewayHandler(mockReq("POST", { body: { username: USERNAME, password: PASSWORD }, xff: ip }), stillLocked);
+    expect(stillLocked._status).toBe(429);
+  });
+
+  it("GET reports configured + authenticated state from the cookie", async () => {
+    const unauth = mockRes();
+    await gatewayHandler(mockReq("GET"), unauth);
+    expect(unauth._json).toMatchObject({ configured: true, authenticated: false });
+
+    const token = signSession(USERNAME, SECRET);
+    const auth = mockRes();
+    await gatewayHandler(mockReq("GET", { cookie: `${GATEWAY_COOKIE}=${token}` }), auth);
+    expect(auth._json).toMatchObject({ configured: true, authenticated: true });
+  });
+
+  it("DELETE clears the session cookie (logout)", async () => {
+    const res = mockRes();
+    await gatewayHandler(mockReq("DELETE"), res);
+    expect(res._status).toBe(200);
+    expect(res._headers["Set-Cookie"]).toMatch(/Max-Age=0/);
+  });
+
+  it("requireRole authorizes admin APIs off a valid gateway cookie", async () => {
+    const token = signSession(USERNAME, SECRET);
+    const req = mockReq("GET", { cookie: `${GATEWAY_COOKIE}=${token}` });
+    const admin = await requireRole(req, ["super_admin", "clinical_admin"]);
+    expect(admin.role).toBe("super_admin");
+    expect(admin.id).toBeNull(); // no per-user Supabase identity in gateway mode
+    expect(admin.email).toBe(USERNAME);
+  });
+
+  it("requireRole rejects a request with no gateway cookie (401)", async () => {
+    await expect(requireRole(mockReq("GET"), ["super_admin"])).rejects.toMatchObject({ statusCode: 401 });
+  });
+
+  it("requireRole forbids when super_admin is not an allowed role (403)", async () => {
+    const token = signSession(USERNAME, SECRET);
+    const req = mockReq("GET", { cookie: `${GATEWAY_COOKIE}=${token}` });
+    await expect(requireRole(req, ["reviewer"])).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("requireRole rejects a tampered/forged cookie (401)", async () => {
+    const forged = signSession(USERNAME, "attacker-guessed-secret");
+    const req = mockReq("GET", { cookie: `${GATEWAY_COOKIE}=${forged}` });
+    await expect(requireRole(req, ["super_admin"])).rejects.toMatchObject({ statusCode: 401 });
+  });
+
+  it("never leaks the password, hash, or session secret in any response", async () => {
+    const res = mockRes();
+    await gatewayHandler(mockReq("POST", { body: { username: USERNAME, password: PASSWORD } }), res);
+    const serialized = JSON.stringify(res._json) + JSON.stringify(res._headers);
+    expect(serialized).not.toContain(PASSWORD);
+    expect(serialized).not.toContain(SECRET);
+    expect(serialized).not.toContain(process.env.ADMIN_GATEWAY_PASSWORD_HASH as string);
+  });
+});
+
+/**
+ * Regression: an externally-generated (LITERAL) scrypt hash must verify through
+ * the ACTUAL deployed route, and stray whitespace / newlines in the configured
+ * env values must NOT reject a valid credential.
+ *
+ * Why a literal hash: the suite above sets ADMIN_GATEWAY_PASSWORD_HASH via
+ * `hashPassword()`, so a hash-format/param drift between hashPassword() and
+ * verifyPassword() would be masked (both move together). Pinning a hash the test
+ * did NOT generate — produced offline with the documented params
+ * (scrypt N=16384 r=8 p=1, keylen 64, base64), exactly as an operator would —
+ * locks the on-the-wire stored format the route must accept.
+ *
+ * Why the whitespace cases: env values pasted into the Vercel dashboard or added
+ * via `echo … | vercel env add` routinely gain a trailing "\n" or surrounding
+ * spaces. That silently broke the exact-match username check and (for a LEADING
+ * newline) the scrypt hash prefix, so a correct password 401'd in production.
+ */
+describe("admin gateway route — literal hash + whitespace-tolerant env parsing", () => {
+  // password: "Literal-Test-Pass-2026!" — hash generated offline with a fixed
+  // salt via crypto.scryptSync(pw, salt, 64, {N:16384,r:8,p:1}); base64 encoded.
+  const LITERAL_USER = "admin";
+  const LITERAL_PASSWORD = "Literal-Test-Pass-2026!";
+  const LITERAL_HASH =
+    "scrypt$16384$8$1$Zm9vYmFyc2FsdDEyMzQ1Ng==$6dO+ZNtw2UhZ+BuztBapSSDBOcTw30qSP2Kpk0dZaf87Ez0o6Z4JOiMmgjrX2NmbPBIm5zALjxt79Z/Wm9SQcA==";
+  const LITERAL_SECRET = "literal-regression-session-secret";
+
+  const prev = {
+    u: process.env.ADMIN_GATEWAY_USERNAME,
+    h: process.env.ADMIN_GATEWAY_PASSWORD_HASH,
+    s: process.env.ADMIN_SESSION_SECRET,
+  };
+
+  afterAll(() => {
+    const restore = (k: string, v: string | undefined) =>
+      v === undefined ? delete (process.env as any)[k] : ((process.env as any)[k] = v);
+    restore("ADMIN_GATEWAY_USERNAME", prev.u);
+    restore("ADMIN_GATEWAY_PASSWORD_HASH", prev.h);
+    restore("ADMIN_SESSION_SECRET", prev.s);
+  });
+
+  beforeEach(() => _resetRateLimit());
+
+  function setEnv(user: string, hash: string, secret: string) {
+    process.env.ADMIN_GATEWAY_USERNAME = user;
+    process.env.ADMIN_GATEWAY_PASSWORD_HASH = hash;
+    process.env.ADMIN_SESSION_SECRET = secret;
+  }
+
+  it("accepts a valid password against a LITERAL externally-generated scrypt hash", async () => {
+    setEnv(LITERAL_USER, LITERAL_HASH, LITERAL_SECRET);
+    const res = mockRes();
+    await gatewayHandler(
+      mockReq("POST", { body: { username: LITERAL_USER, password: LITERAL_PASSWORD } }),
+      res,
+    );
+    expect(res._status).toBe(200);
+    expect(res._json).toMatchObject({ success: true, authenticated: true });
+    expect(res._headers["Set-Cookie"]).toContain(`${GATEWAY_COOKIE}=`);
+  });
+
+  it("rejects a wrong password against the LITERAL hash (generic 401)", async () => {
+    setEnv(LITERAL_USER, LITERAL_HASH, LITERAL_SECRET);
+    const res = mockRes();
+    await gatewayHandler(
+      mockReq("POST", { body: { username: LITERAL_USER, password: "wrong-password" } }),
+      res,
+    );
+    expect(res._status).toBe(401);
+    expect(res._json.error).toMatch(/invalid username or password/i);
+    expect(res._headers["Set-Cookie"]).toBeUndefined();
+  });
+
+  it("authenticates despite stray whitespace/newlines in the configured env values", async () => {
+    // Simulate exactly how Vercel-pasted values get corrupted: a trailing newline
+    // on the username, a LEADING+trailing newline on the hash, and surrounding
+    // spaces on the secret. The submitted username is the clean "admin".
+    setEnv(`${LITERAL_USER}\n`, `\n${LITERAL_HASH}\n`, `  ${LITERAL_SECRET}  `);
+    const res = mockRes();
+    await gatewayHandler(
+      mockReq("POST", { body: { username: LITERAL_USER, password: LITERAL_PASSWORD } }),
+      res,
+    );
+    expect(res._status).toBe(200);
+    expect(res._json).toMatchObject({ success: true, authenticated: true });
+    expect(res._headers["Set-Cookie"]).toContain(`${GATEWAY_COOKIE}=`);
+  });
+
+  it("still rejects a wrong password when env values carry whitespace (no weakening)", async () => {
+    setEnv(`${LITERAL_USER}\n`, `\n${LITERAL_HASH}\n`, `  ${LITERAL_SECRET}  `);
+    const res = mockRes();
+    await gatewayHandler(
+      mockReq("POST", { body: { username: LITERAL_USER, password: "still-wrong" } }),
+      res,
+    );
+    expect(res._status).toBe(401);
+    expect(res._headers["Set-Cookie"]).toBeUndefined();
+  });
+});

@@ -209,14 +209,18 @@ interface MultiParameterGraphical {
   lfaTrend: TimeSeries;
   rfaTrend: TimeSeries;
   scatter: {
-    baselineLFa: number;
-    baselineRFa: number;
-    dbRFa: number;
-    valsalvaLFa: number;
-    standLFa: number;
-    standRFa: number;
-    rfaChangeValsalvaPct: number;
-    rfaChangeStandPct: number;
+    // null = that phase's spectral is not clinically trusted (untrusted computed
+    // estimate / missing). The response-map charts MUST omit the patient point,
+    // bars, deltas, and percentage analyses and render an unavailable state —
+    // never plot or derive from a substituted 0.
+    baselineLFa: number | null;
+    baselineRFa: number | null;
+    dbRFa: number | null;
+    valsalvaLFa: number | null;
+    standLFa: number | null;
+    standRFa: number | null;
+    rfaChangeValsalvaPct: number | null;
+    rfaChangeStandPct: number | null;
   };
   coupling: CardioRespiratoryWindow[];
   wavelet: { type: string; cycles: number; spectralUpdateSec: number };
@@ -857,8 +861,13 @@ function analyzePhase(
     return {
       phase: phaseName, label,
       duration: formatDuration(durationSec), durationSec,
-      meanHR: 0, rangeHR: 0, FRF: 0, LFa: 0, RFa: 0, SB: 0,
-      HRV_SDNN: 0, HRV_RMSSD: 0,
+      // Absent values must never surface as a fabricated 0. Emit null for every
+      // metric that could not be computed from <4 beats; the provenance tags
+      // (unavail) already mark these unavailable, and the UI renders "—".
+      meanHR: null as unknown as number, rangeHR: null as unknown as number,
+      FRF: null as unknown as number, LFa: null as unknown as number,
+      RFa: null as unknown as number, SB: null as unknown as number,
+      HRV_SDNN: null as unknown as number, HRV_RMSSD: null as unknown as number,
       provenance: unavail,
     };
   }
@@ -1154,7 +1163,7 @@ function computeWellness(
   // ---- 4. Orthostatic Response ----
   const standRFaScore = signedBandScore(fRFa, RFa_n.lo * 0.5, RFa_n.hi, { highPenalty: 1.2 });
   const standLFaScore = signedBandScore(fLFa, LFa_n.lo, LFa_n.hi * 1.4, { lowPenalty: 1.2 });
-  const hrDelta = F.meanHR - A.meanHR;
+  const hrDelta = (Number.isFinite(F.meanHR) && Number.isFinite(A.meanHR)) ? F.meanHR - A.meanHR : 0;
   let hrDeltaScore: number;
   if (hrDelta < 0) hrDeltaScore = 20;               // HR drop on stand = chronotropic failure
   else if (hrDelta < 5) hrDeltaScore = 40;
@@ -1179,14 +1188,18 @@ function computeWellness(
   ];
 
   // ---- 5. HRV Reserve ----
+  // A phase with too few beats now carries HRV_SDNN=null (never a fabricated 0);
+  // average only over phases that actually produced a finite SDNN so a missing
+  // phase can neither drag the mean toward 0 nor become NaN.
   const expectedSDNN = age < 36 ? 55 : age < 56 ? 45 : 35;
-  const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
+  const finiteSdnns = phases.map(p => p.HRV_SDNN).filter((v): v is number => Number.isFinite(v));
+  const avgSDNN = finiteSdnns.length ? finiteSdnns.reduce((s, v) => s + v, 0) / finiteSdnns.length : 0;
   let sdnnScore = avgSDNN >= expectedSDNN
     ? Math.min(100, 100 + (avgSDNN - expectedSDNN) * 0.25)
     : Math.max(10, 100 * Math.pow(avgSDNN / expectedSDNN, 0.8));
   sdnnScore = Math.round(sdnnScore * 10) / 10;
-  const sdnns = phases.map(p => p.HRV_SDNN);
-  const sdnnSpread = Math.max(...sdnns) - Math.min(...sdnns);
+  const sdnns = finiteSdnns;
+  const sdnnSpread = sdnns.length ? Math.max(...sdnns) - Math.min(...sdnns) : 0;
   const spreadScore = sdnnSpread < 5 ? 40 : sdnnSpread > 60 ? 65 : Math.min(100, 40 + sdnnSpread * 1.5);
   const s5 = Math.round((sdnnScore * 0.70 + spreadScore * 0.30) * 10) / 10;
   const s5Drivers: WellnessDriver[] = [
@@ -1410,7 +1423,8 @@ function computeBodyImpact(
 
   // --- Immune (HRV/SDNN proxy): SDNN is ECG-derived (consensus tier) — always
   //     supported. --------------------------------------------------------------
-  const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
+  const immFiniteSdnns = phases.map(p => p.HRV_SDNN).filter((v): v is number => Number.isFinite(v));
+  const avgSDNN = immFiniteSdnns.length ? immFiniteSdnns.reduce((s, v) => s + v, 0) / immFiniteSdnns.length : 0;
   let imm = 0;
   if (avgSDNN < 30) imm -= 25;
   else if (avgSDNN < 45) imm -= 10;
@@ -1639,9 +1653,16 @@ function computeMultiParameterGraphical(
       name: phaseLabels[s.name], label: s.label, startSec: s.start, endSec: s.end,
     }));
     const A = phaseEvents[0], B = phaseEvents[1], D = phaseEvents[3], F = phaseEvents[5];
-    const aRFa = nz(A.RFa);
-    const rfaChangeValsalvaPct = aRFa > 0 ? ((nz(D.RFa) - aRFa) / aRFa) * 100 : 0;
-    const rfaChangeStandPct = aRFa > 0 ? ((nz(F.RFa) - aRFa) / aRFa) * 100 : 0;
+    // Per-phase trust (see main builder): null untrusted phase spectral so the
+    // response-map charts omit patient points/deltas instead of plotting a 0.
+    const trusted0 = (p: PhaseMetrics | undefined): boolean =>
+      !!(p && p.provenance && mayInterpretClinically(p.provenance.LFa) &&
+         mayInterpretClinically(p.provenance.RFa));
+    const tLFa0 = (p: PhaseMetrics | undefined): number | null => (trusted0(p) ? nz(p!.LFa) : null);
+    const tRFa0 = (p: PhaseMetrics | undefined): number | null => (trusted0(p) ? nz(p!.RFa) : null);
+    const aRFa0 = tRFa0(A);
+    const rfaChangeValsalvaPct = aRFa0 != null && aRFa0 > 0 && tRFa0(D) != null ? ((tRFa0(D)! - aRFa0) / aRFa0) * 100 : null;
+    const rfaChangeStandPct = aRFa0 != null && aRFa0 > 0 && tRFa0(F) != null ? ((tRFa0(F)! - aRFa0) / aRFa0) * 100 : null;
     return {
       ecgAvailable: false,
       totalSec,
@@ -1651,12 +1672,12 @@ function computeMultiParameterGraphical(
       lfaTrend: { t: [], v: [] },
       rfaTrend: { t: [], v: [] },
       scatter: {
-        baselineLFa: nz(A.LFa), baselineRFa: nz(A.RFa),
-        dbRFa: nz(B.RFa),
-        valsalvaLFa: nz(D.LFa),
-        standLFa: nz(F.LFa), standRFa: nz(F.RFa),
-        rfaChangeValsalvaPct: Math.round(rfaChangeValsalvaPct * 10) / 10,
-        rfaChangeStandPct: Math.round(rfaChangeStandPct * 10) / 10,
+        baselineLFa: tLFa0(A), baselineRFa: tRFa0(A),
+        dbRFa: tRFa0(B),
+        valsalvaLFa: tLFa0(D),
+        standLFa: tLFa0(F), standRFa: tRFa0(F),
+        rfaChangeValsalvaPct: rfaChangeValsalvaPct == null ? null : Math.round(rfaChangeValsalvaPct * 10) / 10,
+        rfaChangeStandPct: rfaChangeStandPct == null ? null : Math.round(rfaChangeStandPct * 10) / 10,
       },
       coupling: [],
       wavelet: { type: "n/a", cycles: 0, spectralUpdateSec: 0 },
@@ -1688,9 +1709,26 @@ function computeMultiParameterGraphical(
 
   // --- Scatter + % change ---
   const A = phaseEvents[0], B = phaseEvents[1], D = phaseEvents[3], F = phaseEvents[5];
-  const aRFa = nz(A.RFa);
-  const rfaChangeValsalvaPct = aRFa > 0 ? ((nz(D.RFa) - aRFa) / aRFa) * 100 : 0;
-  const rfaChangeStandPct = aRFa > 0 ? ((nz(F.RFa) - aRFa) / aRFa) * 100 : 0;
+  // Per-phase trust: a phase's spectral is only a real patient value when THAT
+  // phase's own provenance is clinically interpretable. Untrusted (computed
+  // estimate / missing) → null so the response-map charts omit the point/bar/
+  // delta rather than plot a substituted 0 or a bogus -100% derived from it.
+  const trusted = (p: PhaseMetrics | undefined): boolean =>
+    !!(p && p.provenance && mayInterpretClinically(p.provenance.LFa) &&
+       mayInterpretClinically(p.provenance.RFa));
+  const tLFa = (p: PhaseMetrics | undefined): number | null => (trusted(p) ? nz(p!.LFa) : null);
+  const tRFa = (p: PhaseMetrics | undefined): number | null => (trusted(p) ? nz(p!.RFa) : null);
+  const aRFaTrusted = tRFa(A);
+  // % change is only meaningful when BOTH the baseline and the challenge phase
+  // are trusted; otherwise null (the chart shows "not assessed").
+  const rfaChangeValsalvaPct =
+    aRFaTrusted != null && aRFaTrusted > 0 && tRFa(D) != null
+      ? ((tRFa(D)! - aRFaTrusted) / aRFaTrusted) * 100
+      : null;
+  const rfaChangeStandPct =
+    aRFaTrusted != null && aRFaTrusted > 0 && tRFa(F) != null
+      ? ((tRFa(F)! - aRFaTrusted) / aRFaTrusted) * 100
+      : null;
 
   // --- Coupling windows (4 panels: Baseline / DB / Valsalva / Stand) ---
   const testClock = parseTestStartClockSec(data);
@@ -1717,12 +1755,12 @@ function computeMultiParameterGraphical(
     lfaTrend: lfa,
     rfaTrend: rfa,
     scatter: {
-      baselineLFa: nz(A.LFa), baselineRFa: nz(A.RFa),
-      dbRFa: nz(B.RFa),
-      valsalvaLFa: nz(D.LFa),
-      standLFa: nz(F.LFa), standRFa: nz(F.RFa),
-      rfaChangeValsalvaPct: Math.round(rfaChangeValsalvaPct * 10) / 10,
-      rfaChangeStandPct: Math.round(rfaChangeStandPct * 10) / 10,
+      baselineLFa: tLFa(A), baselineRFa: tRFa(A),
+      dbRFa: tRFa(B),
+      valsalvaLFa: tLFa(D),
+      standLFa: tLFa(F), standRFa: tRFa(F),
+      rfaChangeValsalvaPct: rfaChangeValsalvaPct == null ? null : Math.round(rfaChangeValsalvaPct * 10) / 10,
+      rfaChangeStandPct: rfaChangeStandPct == null ? null : Math.round(rfaChangeStandPct * 10) / 10,
     },
     coupling,
     wavelet: { type: "normalized cmorl", cycles: 5, spectralUpdateSec: 4 },
@@ -2107,27 +2145,45 @@ export function generateColomboReport(
   // unavailable. This keeps types sound (raw = numbers) while the gate holds.
   const phaseEventsRaw: PhaseMetrics[] = phaseEvents.map((p) => ({ ...p }));
 
-  if (!spectralAvailable) {
-    // Explicitly mark spectral fields unavailable across all phases so the UI
-    // renders "Not assessed" and downstream numeric logic can't coerce them.
-    for (const ph of phaseEvents) {
-      (ph as unknown as { LFa: number | null }).LFa = null;
-      (ph as unknown as { RFa: number | null }).RFa = null;
-      (ph as unknown as { SB: number | null }).SB = null;
-      if (ph.provenance) {
-        ph.provenance.LFa = unavailableProvenance("LFa", "Proprietary spectral aggregate is not reproducible from the raw .ans; vendor value available only in the signed PDF.");
-        ph.provenance.RFa = unavailableProvenance("RFa", "Proprietary spectral aggregate is not reproducible from the raw .ans; vendor value available only in the signed PDF.");
-        ph.provenance.SB = unavailableProvenance("SB", "Sympathovagal balance depends on unavailable LFa/RFa.");
-      }
+  // PER-PHASE trust gate. A phase's spectral value is only usable for a clinical
+  // comparison when THAT phase's OWN provenance is clinically interpretable
+  // (vendor_reported / measured) — NOT merely because the baseline was
+  // vendor-reported. In the paired-PDF path only baseline (A) receives the
+  // vendor's verbatim LFa/RFa/SB; the challenge phases (B deep-breathing, D
+  // Valsalva, F stand) stay `computed` estimates (often collapsed to 0). Reading
+  // those as real challenge responses is exactly what fabricated "Low
+  // parasympathetic response to DB", "abnormal responses across all autonomic
+  // challenges", and the 0.00 patient points on the age/response-map charts.
+  const phaseSpectralTrusted = (p: PhaseMetrics | undefined): boolean =>
+    !!(p && p.provenance && mayInterpretClinically(p.provenance.LFa) &&
+       mayInterpretClinically(p.provenance.RFa));
+
+  // Null EVERY phase whose OWN spectral provenance is not clinically trusted, so
+  // the report model (and every chart/table/age-map/response-map that reads
+  // phaseEvents[].LFa/RFa/SB) can never plot or derive a patient value, delta, or
+  // percentage from an untrusted/zeroed estimate. This holds in BOTH paths:
+  //   • raw ECG (no vendor): all phases untrusted → all nulled (prior behavior).
+  //   • baseline-only vendor PDF: A trusted (kept), B/D/E/F untrusted → nulled.
+  for (const ph of phaseEvents) {
+    if (phaseSpectralTrusted(ph)) continue; // keep genuinely vendor/measured phases
+    (ph as unknown as { LFa: number | null }).LFa = null;
+    (ph as unknown as { RFa: number | null }).RFa = null;
+    (ph as unknown as { SB: number | null }).SB = null;
+    if (ph.provenance) {
+      ph.provenance.LFa = unavailableProvenance("LFa", "Proprietary spectral aggregate is not reproducible from the raw .ans for this phase; a vendor value is available only where the signed PDF reports it.");
+      ph.provenance.RFa = unavailableProvenance("RFa", "Proprietary spectral aggregate is not reproducible from the raw .ans for this phase; a vendor value is available only where the signed PDF reports it.");
+      ph.provenance.SB = unavailableProvenance("SB", "Sympathovagal balance depends on unavailable LFa/RFa for this phase.");
     }
   }
-
-  // Numeric accessors that are safe under the availability gate. When spectral
-  // is unavailable these return null so no comparison can silently treat a
-  // fabricated 0 as a real low value.
+  // Baseline accessors keep the study-level gate (baseline provenance IS what
+  // spectralAvailable checks). Challenge accessors additionally require the
+  // phase's own trusted provenance.
   const sLFa = (p: PhaseMetrics): number | null => (spectralAvailable ? (p.LFa as number) : null);
   const sRFa = (p: PhaseMetrics): number | null => (spectralAvailable ? (p.RFa as number) : null);
   const sSB = (p: PhaseMetrics): number | null => (spectralAvailable ? (p.SB as number) : null);
+  // Challenge-phase accessors: null unless the phase itself is trusted.
+  const cLFa = (p: PhaseMetrics): number | null => (phaseSpectralTrusted(p) ? (p.LFa as number) : null);
+  const cRFa = (p: PhaseMetrics): number | null => (phaseSpectralTrusted(p) ? (p.RFa as number) : null);
 
   // Classify patient-reported (or computed) Ewing ratios
   const age = data.age;
@@ -2168,8 +2224,11 @@ export function generateColomboReport(
   // < 50 cutoff already used by the syncope-risk indications.
   const BRADYCARDIA_BPM = 50;
   const bradycardia = A.meanHR > 0 && A.meanHR < BRADYCARDIA_BPM;
-  const hrDelta = F.meanHR - A.meanHR;
-  const POTS = A.meanHR > 0 && hrDelta >= 30;
+  // HR delta is meaningful only when BOTH baseline and stand HR were computable
+  // (a phase with too few beats now carries meanHR=null, not a fabricated 0).
+  const hrDeltaAssessable = Number.isFinite(A.meanHR) && Number.isFinite(F.meanHR);
+  const hrDelta = hrDeltaAssessable ? F.meanHR - A.meanHR : 0;
+  const POTS = A.meanHR > 0 && hrDeltaAssessable && hrDelta >= 30;
   // FRF norm band is the single source of truth (Colombo 0.09–0.15 Hz). FRF is
   // a proprietary [P] framing — gate it on spectral availability too.
   const highFRF = spectralAvailable && B.FRF > COLOMBO_NORMS.FRF.hi;
@@ -2180,8 +2239,11 @@ export function generateColomboReport(
   // "low" finding. This is what previously produced the spurious Parasympathetic
   // Excess / Advanced Autonomic Neuropathy on a raw ECG-only file.
   const A_SB = sSB(A), A_RFa = sRFa(A), A_LFa = sLFa(A);
-  const B_RFa = sRFa(B);
-  const D_LFa = sLFa(D);
+  // Challenge phases require their OWN trusted provenance (see cLFa/cRFa) — a
+  // baseline-only vendor report leaves B/D/F as computed estimates that must not
+  // drive challenge findings.
+  const B_RFa = cRFa(B);
+  const D_LFa = cLFa(D);
   // Standing (F) spectral is only usable when the STAND phase's OWN provenance is
   // clinically interpretable — not when only the baseline was vendor-reported and
   // the standing values are computed estimates. sF*() enforce that.
@@ -2253,21 +2315,29 @@ export function generateColomboReport(
   phaseFindings.push({ phase: "INITIAL BASELINE", indication: "Indication of balance in the patient's Autonomic Nervous System (ANS) and protection of the heart", findings: baselineFindings });
 
   const dbFindings: string[] = [];
-  // lfaD/rfaD/lfaF are null when spectral is unavailable so the impression
-  // counting below can't treat a missing value as "Abnormal".
-  const lfaD = spectralAvailable ? classify(D.LFa as number, LFa_n.lo, LFa_n.hi) : null;
-  const rfaD = spectralAvailable ? classify(D.RFa as number, RFa_n.lo, RFa_n.hi) : null;
-  const lfaF = spectralAvailable ? classify(F.LFa as number, LFa_n.lo, LFa_n.hi) : null;
-  if (spectralAvailable) {
+  // Challenge classifications require the PHASE'S OWN trusted provenance. When
+  // only the baseline was vendor-reported, B (deep breathing) and D (Valsalva)
+  // stay computed estimates and MUST NOT be classified as real responses — they
+  // are null so the impression counting below can't treat them as "Abnormal".
+  const dbSpectralTrusted = phaseSpectralTrusted(B);
+  const valsalvaSpectralTrusted = phaseSpectralTrusted(D);
+  const lfaD = valsalvaSpectralTrusted ? classify(D.LFa as number, LFa_n.lo, LFa_n.hi) : null;
+  const rfaD = valsalvaSpectralTrusted ? classify(D.RFa as number, RFa_n.lo, RFa_n.hi) : null;
+  const lfaF = standSpectralAvailable ? classify(F.LFa as number, LFa_n.lo, LFa_n.hi) : null;
+  if (dbSpectralTrusted) {
     if (highFRF) {
       dbFindings.push(`NOTE: Fundamental Respiratory Frequency (FRF) is high during DB (${B.FRF.toFixed(2)} Hz; Normal: 0.09–0.15) which may artificially reduce the parasympathetic measure. High FRF may be associated with upper respiratory or pulmonary disorder and anxiety. Consider treating the patient and retesting to obtain the true interpretation for the DB phase.`);
     }
     if (dbRFaLow) dbFindings.push("Low parasympathetic response (RFa) to DB suggesting possible autonomic dysfunction");
     else dbFindings.push("Normal parasympathetic response (RFa) to DB");
+  } else {
+    dbFindings.push("Deep-breathing spectral response (RFa) not assessed — phase spectral values are not reproducible from this recording (baseline-only vendor data).");
+  }
+  if (valsalvaSpectralTrusted) {
     dbFindings.push(`${lfaD!.severity === "Normal" ? "Normal" : lfaD!.label} sympathetic response (LFa) to Valsalva`);
     dbFindings.push(`${rfaD!.severity === "Normal" ? "Normal" : rfaD!.label} parasympathetic response (RFa) to Valsalva`);
   } else {
-    dbFindings.push("Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed — not reproducible from this recording.");
+    dbFindings.push("Valsalva spectral response (LFa/RFa) not assessed — phase spectral values are not reproducible from this recording (baseline-only vendor data).");
   }
   // The E/I ratio is the cardiovagal Ewing measure of the Deep-Breathing phase —
   // ECG-derived and always computed, so it is a SUPPORTED observation reported
@@ -2287,7 +2357,7 @@ export function generateColomboReport(
   phaseFindings.push({ phase: "DEEP BREATHING (DB) AND VALSALVA RESPONSES", indication: "Detection of early signs of autonomic dysfunction and chronic disease", findings: dbFindings });
 
   const standFindings: string[] = [];
-  if (spectralAvailable) {
+  if (standSpectralAvailable) {
     standFindings.push(`${lfaF!.severity === "Normal" ? "Normal" : lfaF!.label} sympathetic response (LFa) to stand`);
     if (preSyncopeRisk) standFindings.push('A higher peak sympathetic response (LFa) to stand compared to the response during Valsalva suggesting a possible risk of pre-syncope [Check "HR" and "Trends" plot and EKG Report to rule out ectopy]');
     if (vasovagalRisk) standFindings.push("Relatively higher parasympathetic activation (RFa) compared to sympathetic activation (LFa) throughout the test suggesting risk of possible vasovagal pre-syncope");
@@ -2314,8 +2384,29 @@ export function generateColomboReport(
   if (valsalvaAbnormal) challenges.push("the sympathetic response (LFa) during Valsalva is abnormal");
   if (standAbnormal) challenges.push("the response to standing is abnormal");
   const abnormalChallengeCount = challenges.length;
+  // Whether ANY challenge phase (DB/Valsalva/Stand) had provenance-complete
+  // spectral (or a supported ECG/BP-derived standing finding) that could ground
+  // an "abnormal challenge response" claim. In the baseline-only vendor-PDF path
+  // all three challenge spectral blocks are computed estimates → challenges were
+  // NOT assessed, and we must NOT claim abnormal responses.
+  const challengeSpectralAssessed =
+    dbSpectralTrusted || valsalvaSpectralTrusted || standSpectralAvailable;
+  const standHrOrBpAssessed = POTS || orthostaticHypotension;
+  const challengesAssessed = challengeSpectralAssessed || standHrOrBpAssessed;
   let overall: string;
-  if (!spectralAvailable) {
+  if (spectralAvailable && !challengesAssessed) {
+    // Baseline spectral is vendor-reported, but every autonomic CHALLENGE
+    // (DB/Valsalva/Stand) spectral value is an untrusted computed estimate. State
+    // the assessed baseline honestly and that the challenges were not assessed —
+    // never "abnormal responses across ... challenges".
+    const balanceBits: string[] = [];
+    if (A_SB != null) balanceBits.push(`resting sympathovagal balance (LFa/RFa) = ${A_SB.toFixed(2)}`);
+    const hrNote = bradycardia ? ` Resting heart rate is low (${A.meanHR} bpm).` : "";
+    overall =
+      `Baseline sympathetic/parasympathetic values were assessed from the paired vendor report` +
+      (balanceBits.length ? ` (${balanceBits.join(", ")})` : "") +
+      `. The deep-breathing, Valsalva, and standing challenge responses were NOT assessed — their phase spectral values are not reproducible from this recording (baseline-only vendor data), so no abnormal challenge response can be asserted.${hrNote} Cardiovagal Ewing ratios and heart-rate/phase timing are ECG-derived and reported separately. Clinician review of the full vendor report is advised.`;
+  } else if (!spectralAvailable) {
     // With only ECG-derived HR + Ewing ratios, we can only report those
     // supported observations — never an autonomic-dysfunction grading that
     // depends on spectral challenge responses.
@@ -2334,7 +2425,15 @@ export function generateColomboReport(
   } else if (abnormalChallengeCount === 0) overall = "No significant abnormalities in autonomic challenges — normal autonomic function.";
   else if (abnormalChallengeCount === 1) overall = `Abnormal responses to autonomic challenges (DB, Valsalva, or standing) suggest autonomic dysfunction. Since only ${challenges[0]}, mild autonomic dysfunction is possible.`;
   else if (abnormalChallengeCount === 2) overall = "Abnormal responses to multiple autonomic challenges suggest moderate autonomic dysfunction.";
-  else overall = "Abnormal responses across all autonomic challenges suggest advanced autonomic dysfunction.";
+  // NARRATIVE CONSISTENCY (QA merge-blocker): the "advanced autonomic dysfunction"
+  // wording may ONLY appear when the deterministic, completeness-gated pattern
+  // detector actually set advancedAutonomicDysfunction. Otherwise the impression
+  // would contradict the clinician synopsis ("No Colombo dysfunction pattern met
+  // detection criteria"). When 3 challenges are abnormal but the AAD pattern was
+  // NOT met (e.g. counts driven by heuristics without the PE+SW co-occurrence AAD
+  // requires), describe the findings without asserting the AAD grade.
+  else if (advancedAutonomicDysfunction) overall = "Abnormal responses across all autonomic challenges, together with the parasympathetic-excess plus sympathetic-withdrawal pattern, are consistent with advanced autonomic dysfunction.";
+  else overall = "Abnormal responses across multiple autonomic challenges (deep breathing, Valsalva, and standing) — clinician review is advised. No single Colombo dysfunction pattern met detection criteria on the assessed data.";
 
   // Clinician DISCUSSION TOPICS — NON-PRESCRIPTIVE.
   //
@@ -2592,7 +2691,7 @@ export function generateColomboReport(
     spectralAvailable,
     bpAvailable,
     respiratoryFrequency: spectralAvailable ? A.FRF : null,
-    rPeakCount: phaseEvents.reduce((n, p) => n + Math.round(p.meanHR * p.durationSec / 60), 0),
+    rPeakCount: phaseEvents.reduce((n, p) => n + (Number.isFinite(p.meanHR) && Number.isFinite(p.durationSec) ? Math.round(p.meanHR * p.durationSec / 60) : 0), 0),
     generatedAt: new Date().toISOString(),
     multiParameter,
     indications,

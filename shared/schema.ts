@@ -205,17 +205,22 @@ export interface MultiParameterGraphical {
   lfaTrend: TimeSeries;
   /** RFa (parasympathetic) trend — rolling wavelet power. */
   rfaTrend: TimeSeries;
-  /** Per-phase LFa/RFa scatter points with age-banded normal regions. */
+  /**
+   * Per-phase LFa/RFa scatter points with age-banded normal regions.
+   * null = that phase's spectral is not clinically trusted (untrusted computed
+   * estimate / missing). Response-map charts MUST render an unavailable state and
+   * omit the patient point/bar/delta/percentage — never plot or derive from a 0.
+   */
   scatter: {
-    baselineLFa: number;      // A
-    baselineRFa: number;      // A
-    dbRFa: number;            // B
-    valsalvaLFa: number;      // D
-    standLFa: number;         // F
-    standRFa: number;         // F
+    baselineLFa: number | null;   // A
+    baselineRFa: number | null;   // A
+    dbRFa: number | null;         // B
+    valsalvaLFa: number | null;   // D
+    standLFa: number | null;      // F
+    standRFa: number | null;      // F
     /** % change A→D for Valsalva and A→F for Stand RFa, for the Excess panel. */
-    rfaChangeValsalvaPct: number;
-    rfaChangeStandPct: number;
+    rfaChangeValsalvaPct: number | null;
+    rfaChangeStandPct: number | null;
   };
   /** Per-phase cardio-respiratory coupling windows (60 s each for Baseline/DB/Valsalva; 90 s for Stand). */
   coupling: CardioRespiratoryWindow[];

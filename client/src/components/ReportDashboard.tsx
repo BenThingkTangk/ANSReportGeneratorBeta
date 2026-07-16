@@ -16,7 +16,7 @@ import { AtomLogo } from "./AtomLogo";
 import { ThemeToggle } from "./ThemeToggle";
 import { ViewToggle } from "./ViewToggle";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Printer } from "lucide-react";
 import { PhysioPSPulseNodeLogo } from "./brand/PhysioPSPulseNodeLogo";
 
 interface ReportDashboardProps {
@@ -44,9 +44,9 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
 
   return (
     <div className="ps-bg-deep min-h-screen">
-      {/* Top bar */}
+      {/* Top bar — interactive chrome; excluded from print/PDF export. */}
       <div
-        className="sticky top-0 z-40 px-4 py-3 flex items-center justify-between gap-4"
+        className="no-print sticky top-0 z-40 px-4 py-3 flex items-center justify-between gap-4"
         style={{
           background: "hsl(var(--background) / 0.9)",
           backdropFilter: "blur(12px)",
@@ -56,7 +56,7 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
         <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={onReset}
-            className="p-2 rounded-lg hover:bg-card/80 transition-colors flex-shrink-0"
+            className="touch-target p-2 rounded-lg hover:bg-card/80 transition-colors flex-shrink-0"
             data-testid="button-back"
             aria-label="Back"
           >
@@ -87,7 +87,7 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
               which is shown from `sm` up). */}
           <button
             onClick={() => setAskOpen(o => !o)}
-            className="sm:hidden w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+            className="touch-target sm:hidden w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
             style={{
               background: "linear-gradient(135deg, hsl(185 85% 35%), hsl(185 85% 48%))",
               boxShadow: "0 0 12px hsl(185 85% 42% / 0.4)",
@@ -97,6 +97,20 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
             aria-expanded={askOpen}
           >
             <AtomLogo size={18} color="white" />
+          </button>
+          {/* Export the current report via native print-to-PDF. Renders exactly
+              what is on screen (charts, provenance, confidence, test date,
+              abnormal-only findings, ECG strip) with dedicated print CSS so
+              nothing clips. */}
+          <button
+            onClick={() => window.print()}
+            className="touch-target w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 hover:bg-card/80 transition-colors"
+            style={{ border: "1px solid hsl(var(--border))" }}
+            data-testid="button-export-report"
+            aria-label="Export report as PDF"
+            title="Export / print report"
+          >
+            <Printer className="w-4 h-4 text-muted-foreground" />
           </button>
           <ViewToggle role={role} onChange={setRole} />
           <ThemeToggle />

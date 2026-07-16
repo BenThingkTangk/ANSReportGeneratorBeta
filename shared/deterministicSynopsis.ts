@@ -176,8 +176,12 @@ function activePatterns(report: Partial<ANSReport>): {
 
   if (p.parasympatheticExcess)
     push("an over-active rest-and-digest response", "parasympathetic excess (PE)");
+  // COLOMBO-RULE-1.11: never use the phrase "parasympathetic withdrawal" — an RFa
+  // fall on standing is normal physiology. This flag is a LOW RESTING RFa finding
+  // (genuinely reduced resting vagal tone), a distinct concept; label it as such
+  // without the forbidden phrase. The underlying threshold is unchanged.
   if (p.parasympatheticWithdrawal)
-    push("a reduced rest-and-digest reserve", "parasympathetic withdrawal (PW)");
+    push("a reduced rest-and-digest reserve at rest", "low resting parasympathetic (vagal) tone");
   if (p.sympatheticExcess)
     push("a heightened fight-or-flight response", "sympathetic excess (SE)");
   if (p.sympatheticWithdrawal || p.maskedSW)

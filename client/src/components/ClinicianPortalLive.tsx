@@ -63,7 +63,9 @@ function ClinicianViewToggle({
           key={v}
           onClick={() => onChange(v)}
           data-testid={`clinician-view-${v}`}
-          className="relative px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors"
+          aria-pressed={view === v}
+          aria-label={v === "vendor" ? "Vendor Familiar view" : "HumanOS Advanced view"}
+          className="touch-target relative px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors"
           style={{ color: view === v ? "white" : "hsl(210 10% 50%)", zIndex: 1 }}
         >
           {view === v && (
@@ -134,7 +136,10 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
             A paired vendor report is attached. Switch between the vendor's familiar
             P&amp;S layout (verbatim values) and the HumanOS analysis.
           </div>
-          <ClinicianViewToggle view={view} onChange={setView} />
+          {/* Interactive toggle — never printed (QA #5). */}
+          <div className="no-print">
+            <ClinicianViewToggle view={view} onChange={setView} />
+          </div>
         </div>
       )}
 

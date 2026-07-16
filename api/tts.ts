@@ -18,11 +18,39 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
  * Failure:   JSON { success: false, error }  → client falls back to browser TTS
  */
 
-// Fixed Atom voice. Not a secret, but pinned server-side so the client cannot override it.
-const VOICE_ID = "gs0tAILXbY5DNrJrsM6F";
-const ELEVENLABS_URL = `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`;
+// The Atom voice is configured server-side via ELEVENLABS_VOICE_ID so the
+// client can never choose or override it. A pinned default keeps existing
+// deployments working when the env var is unset. The voice id is not a secret;
+// the API key (ELEVENLABS_API_KEY) is, and it never leaves the server.
+const DEFAULT_VOICE_ID = "gs0tAILXbY5DNrJrsM6F";
 const MODEL_ID = "eleven_turbo_v2_5";
 const MAX_CHARS = 5000;
+const REQUEST_TIMEOUT_MS = 15_000;
+
+// Best-effort per-instance, per-IP rate limit. Like the admin-gateway limiter
+// this is not a global counter across Vercel instances, but it throttles bursts
+// against a warm instance and bounds cost/abuse of the paid TTS vendor.
+const TTS_WINDOW_MS = 60_000;
+const TTS_MAX_PER_WINDOW = 30;
+const _ttsHits = new Map<string, number[]>();
+
+function ttsRetryAfter(ip: string): number {
+  const now = Date.now();
+  const hits = (_ttsHits.get(ip) ?? []).filter((t) => now - t < TTS_WINDOW_MS);
+  if (hits.length >= TTS_MAX_PER_WINDOW) {
+    return Math.max(1, Math.ceil((TTS_WINDOW_MS - (now - hits[0]!)) / 1000));
+  }
+  hits.push(now);
+  _ttsHits.set(ip, hits);
+  return 0;
+}
+
+function ttsClientIp(req: VercelRequest): string {
+  const xff = req.headers["x-forwarded-for"];
+  if (typeof xff === "string" && xff.length) return xff.split(",")[0]!.trim();
+  if (Array.isArray(xff) && xff.length) return String(xff[0]).trim();
+  return req.socket?.remoteAddress ?? "unknown";
+}
 
 /** Strip markdown + redact generic PHI so nothing identifying is spoken or sent to ElevenLabs. */
 function redactForSpeech(input: string): string {
@@ -55,6 +83,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).json({ success: false, error: "POST only" });
 
   try {
+    const retryAfter = ttsRetryAfter(ttsClientIp(req));
+    if (retryAfter > 0) {
+      res.setHeader("Retry-After", String(retryAfter));
+      return res.status(429).json({ success: false, error: "Too many requests" });
+    }
+
     const apiKey = process.env.ELEVENLABS_API_KEY;
     if (!apiKey) {
       // 501 → client treats the feature as unconfigured and uses the browser fallback.
@@ -74,19 +108,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const text = redactForSpeech(rawText).slice(0, MAX_CHARS);
     if (!text) return res.status(400).json({ success: false, error: "No text to speak" });
 
-    const r = await fetch(ELEVENLABS_URL, {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text,
-        model_id: MODEL_ID,
-        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-      }),
-    });
+    const voiceId = process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID;
+    const url = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`;
+
+    // Bound the upstream call so a slow/hung vendor can't stall the serverless
+    // invocation; abort surfaces as a caught error → safe 500 + browser fallback.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let r: Awaited<ReturnType<typeof fetch>>;
+    try {
+      r = await fetch(url, {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          Accept: "audio/mpeg",
+        },
+        body: JSON.stringify({
+          text,
+          model_id: MODEL_ID,
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!r.ok) {
       const detail = await r.text();

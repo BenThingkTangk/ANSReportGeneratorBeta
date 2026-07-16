@@ -22,6 +22,12 @@ export function BuildInfo() {
   const clientSha = typeof __BUILD_COMMIT_SHORT__ !== "undefined" ? __BUILD_COMMIT_SHORT__ : "dev";
   const clientTime = typeof __BUILD_TIME__ !== "undefined" ? __BUILD_TIME__ : "dev";
 
+  // Suppress the footer entirely when build metadata is unknown ("dev") so an
+  // export/print never shows a meaningless "build unknown"/"build dev" badge.
+  // (QA merge-blocker #5.) The badge is also interactive chrome → never printed.
+  const buildMetaKnown = clientSha !== "dev" && clientSha !== "unknown" && !!clientSha;
+  if (!buildMetaKnown) return null;
+
   useEffect(() => {
     if (!expanded || serverInfo || loading) return;
     setLoading(true);
@@ -47,6 +53,7 @@ export function BuildInfo() {
 
   return (
     <div
+      className="no-print"
       style={{
         position: "fixed",
         bottom: 8,

@@ -426,6 +426,33 @@ body {
   }
   .no-default-hover-elevate {}
   .no-default-active-elevate {}
+
+  /* ------------------------------------------------------------------------ */
+  /* Touch-target expansion (WCAG 2.5.5 / iOS HIG ≥44×44 CSS px).             */
+  /*                                                                          */
+  /* We enlarge the control's OWN box (min-width/min-height), not an          */
+  /* ::after overlay — a pseudo-element is never part of the element's border */
+  /* box, so `getBoundingClientRect()` / Playwright `boundingBox()` stay at   */
+  /* the visual size and the effective hit region is NOT enlarged (the exact  */
+  /* bug: computed min-width/height remained `auto`). Growing the element's   */
+  /* own min box makes the measured, hittable rect ≥44px.                     */
+  /*                                                                          */
+  /* Gated on `(pointer: coarse)` so mouse/desktop keep their compact size    */
+  /* (no visual bloat); only touch/pen pointers get the 44px floor. Centering */
+  /* keeps the glyph/label in the middle of the grown box, and because these  */
+  /* controls live in flex rows/toggle pills the extra size reflows cleanly   */
+  /* with no overlap. min-width is a no-op for text tabs already wider than   */
+  /* 44px (only their height grows).                                          */
+  .touch-target { position: relative; }
+  @media (pointer: coarse) {
+    .touch-target {
+      min-width: 44px;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
 }
 
 /* ============================================================================ */
@@ -765,4 +792,76 @@ body {
    future signal-flow utilities should be silenced too) */
 @media (prefers-reduced-motion: reduce) {
   .ps-signal-atmosphere { background-attachment: scroll; }
+}
+
+/* ============================================================================
+   PRINT / PDF EXPORT
+   ----------------------------------------------------------------------------
+   The report is exported via the browser's native print-to-PDF (window.print),
+   which renders exactly what is on screen — no html2canvas rasterization, so no
+   clipped charts and no "unsupported value" surprises. These rules:
+     • hide interactive-only chrome (.no-print) — the back button, view toggle,
+       theme toggle, Ask ATOM launcher/drawer, export button itself;
+     • force a light, ink-friendly surface so provenance/confidence text and the
+       red/blue trend + ECG strokes stay legible on paper;
+     • prevent charts, cards, the ECG strip, and findings from splitting across
+       page breaks (break-inside: avoid);
+     • let recharts SVG scale to the printable width instead of clipping.
+   ========================================================================== */
+@media print {
+  /* Interactive-only chrome never prints. */
+  .no-print { display: none !important; }
+
+  /* Interactive chrome is never part of a printed clinical report: hide all
+     buttons and button-role controls (view toggles, Explain toggles, Ask ATOM
+     controls, export/print controls, retry buttons). Opt back in with
+     .print-keep for the rare control that must appear on paper. (QA #5) */
+  button:not(.print-keep),
+  [role="button"]:not(.print-keep) {
+    display: none !important;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    color: #0b0b0f !important;
+  }
+
+  /* Neutralize the deep-space gradients + glass blur for paper. */
+  .ps-bg-deep,
+  .ps-signal-atmosphere {
+    background: #ffffff !important;
+  }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+
+  /* Sticky top bars must not float over content on paper. */
+  .sticky { position: static !important; }
+
+  /* Keep clinical units intact across page breaks. */
+  .print-block,
+  .recharts-responsive-container,
+  svg,
+  section,
+  article,
+  figure,
+  table {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Recharts: let the SVG use the full printable width, never clip. */
+  .recharts-responsive-container { width: 100% !important; }
+  .recharts-wrapper, .recharts-surface { max-width: 100% !important; }
+
+  /* Expand any scroll containers so nothing is hidden behind overflow. */
+  .overflow-auto, .overflow-y-auto, .overflow-x-auto, .overflow-hidden {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  @page { margin: 12mm; }
 }

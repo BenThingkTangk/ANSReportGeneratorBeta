@@ -40,16 +40,40 @@ export const GATEWAY_COOKIE = "hos_admin_gw";
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 /**
+ * Read a gateway env var, tolerating stray surrounding whitespace / a trailing
+ * newline. Values pasted into the Vercel dashboard or piped via
+ * `echo … | vercel env add` very commonly acquire a leading/trailing "\n" or
+ * space. That whitespace silently breaks the exact-match username check
+ * (`safeEquals`) and — for a LEADING newline — the scrypt hash prefix parse, so
+ * a perfectly valid password would be rejected. Normalising on read fixes this
+ * generically for every consumer. Returns undefined when unset or blank so the
+ * "configured" check stays correct. The submitted password is never trimmed
+ * (passwords may legitimately contain leading/trailing spaces).
+ */
+function readGatewayEnv(name: string): string | undefined {
+  const raw = process.env[name];
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length ? trimmed : undefined;
+}
+
+export function gatewayUsername(): string | undefined {
+  return readGatewayEnv("ADMIN_GATEWAY_USERNAME");
+}
+export function gatewayPasswordHash(): string | undefined {
+  return readGatewayEnv("ADMIN_GATEWAY_PASSWORD_HASH");
+}
+export function gatewaySecret(): string | undefined {
+  return readGatewayEnv("ADMIN_SESSION_SECRET");
+}
+
+/**
  * The gateway is only enforced when all three secrets are present. This keeps
  * the change backwards-compatible: unconfigured deployments behave exactly as
  * before (magic-link only).
  */
 export function isGatewayConfigured(): boolean {
-  return Boolean(
-    process.env.ADMIN_GATEWAY_USERNAME &&
-      process.env.ADMIN_GATEWAY_PASSWORD_HASH &&
-      process.env.ADMIN_SESSION_SECRET
-  );
+  return Boolean(gatewayUsername() && gatewayPasswordHash() && gatewaySecret());
 }
 
 function sessionTtlSeconds(): number {
@@ -303,7 +327,7 @@ export function requireGateway(req: VercelRequest): void {
   if (!isGatewayConfigured()) return;
   const token = readGatewayToken(req);
   const session = token
-    ? verifySession(token, process.env.ADMIN_SESSION_SECRET as string)
+    ? verifySession(token, gatewaySecret() as string)
     : null;
   if (!session) {
     throw Object.assign(new Error("Admin gateway authentication required"), {
@@ -323,7 +347,7 @@ export function gatewayStatus(req: VercelRequest): GatewayStatus {
   if (!isGatewayConfigured()) return { configured: false, authenticated: false };
   const token = readGatewayToken(req);
   const session = token
-    ? verifySession(token, process.env.ADMIN_SESSION_SECRET as string)
+    ? verifySession(token, gatewaySecret() as string)
     : null;
   return {
     configured: true,

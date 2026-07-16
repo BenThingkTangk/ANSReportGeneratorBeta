@@ -75,6 +75,7 @@ export type PhenotypeFlagId =
   | "parasympathetic_withdrawal"
   | "sympathetic_excess"
   | "possible_can_risk"
+  | "baroreflex_dysfunction"
   | "insufficient_data";
 
 export interface PhenotypeFlag {

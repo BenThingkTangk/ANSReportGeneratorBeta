@@ -23,7 +23,7 @@ export function ThemeToggle() {
       onClick={() => setTheme(next)}
       aria-label={`Switch to ${next} mode`}
       data-testid="theme-toggle"
-      className="relative inline-flex items-center justify-center w-9 h-9 rounded-lg border border-border/40 bg-card/50 hover:bg-card/80 transition-colors text-muted-foreground hover:text-foreground"
+      className="touch-target relative inline-flex items-center justify-center w-9 h-9 rounded-lg border border-border/40 bg-card/50 hover:bg-card/80 transition-colors text-muted-foreground hover:text-foreground"
     >
       {mounted ? (
         isDark ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />

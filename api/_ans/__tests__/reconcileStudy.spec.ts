@@ -166,19 +166,22 @@ describe("reconcileStudyWithReport — S2-1 backfill", () => {
   });
 });
 
-describe("engine consistency — S2-2", () => {
-  it("scoring engine can evaluate parasympathetic-withdrawal AFTER reconciliation (was blocked before)", () => {
+describe("engine consistency — S2-2 (COLOMBO-RULE-1.11)", () => {
+  it("never asserts 'parasympathetic withdrawal' as a dysfunction, before OR after reconciliation", () => {
+    // COLOMBO-RULE-1.11: an RFa fall on standing/Valsalva is normal physiology.
+    // The phenotype must never be `present:true`, whether spectral fields are
+    // missing (backfilled from the report) or supplied.
     const before = computeDiagnosticSummary(studyWithMissingSp());
-    const blockedBefore = before.unsafeOrUnsupportedClaimsBlocked.some(
-      b => /parasympathetic withdrawal/i.test(b.claim),
-    );
-    expect(blockedBefore).toBe(true);
+    const pwBefore = before.phenotypeFlags.find(f => f.id === "parasympathetic_withdrawal");
+    if (pwBefore) expect(pwBefore.present).toBe(false);
 
     const reconciled = reconcileStudyWithReport(studyWithMissingSp(), jillReport());
     const after = computeDiagnosticSummary(reconciled);
-    const stillBlocked = after.unsafeOrUnsupportedClaimsBlocked.some(
-      b => /parasympathetic withdrawal/i.test(b.claim),
-    );
-    expect(stillBlocked).toBe(false);
+    const pwAfter = after.phenotypeFlags.find(f => f.id === "parasympathetic_withdrawal");
+    // After reconciliation the spectral fields are backfilled, so the detector
+    // now renders the informational physiology note — still never a dysfunction.
+    expect(pwAfter).toBeDefined();
+    expect(pwAfter!.present).toBe(false);
+    expect(pwAfter!.rationale).toMatch(/COLOMBO-RULE-1\.11/);
   });
 });
