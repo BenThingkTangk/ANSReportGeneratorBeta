@@ -146,3 +146,59 @@ describe("QA merge-blockers — narrative consistency on the spectral-available 
     }
   });
 });
+
+describe("QA round-3 — baseline-only vendor PDF (raw-ECG fixture + Jill baseline spectral)", () => {
+  // The EXACT QA repro: upload the raw-ECG fixture AND attach the Jill vendor PDF.
+  // Only the baseline (A) gets vendor spectral; challenge phases B/D/F stay
+  // untrusted computed estimates (often 0). This is the path that produced the
+  // contradictory summary + the 0.00 age-chart patient points.
+  const VENDOR = { LFa: 0.91, RFa: 5.13, SB: 0.18, SBP: 92, DBP: 55 };
+  let report: any;
+
+  it("loads the fixture+vendor report (baseline spectral available, challenges not)", async () => {
+    const json = await invokeHandler(fixtureBytes!, "deidentified_waveform.ans", VENDOR);
+    report = json.report;
+    expect(report).toBeTruthy();
+    expect(report.spectralAvailable).toBe(true); // baseline A is vendor_reported
+  });
+
+  it("A) overall impression NEVER claims abnormal responses across challenges", () => {
+    const impression = report.overallImpression.toLowerCase();
+    expect(impression).not.toContain("abnormal responses across");
+    expect(impression).not.toContain("across multiple autonomic challenges");
+    // It must state the challenges were not assessed.
+    expect(impression).toMatch(/not assessed|were not assessed/);
+  });
+
+  it("B) challenge phases B/D/F carry NULL spectral (never a fabricated 0)", () => {
+    const byPhase: Record<string, any> = {};
+    for (const p of report.phaseEvents) byPhase[p.phase] = p;
+    for (const key of ["DeepBreathing-B", "Valsalva-D", "Stand-F"]) {
+      const p = byPhase[key];
+      expect(p.LFa === null || p.LFa === undefined).toBe(true);
+      expect(p.RFa === null || p.RFa === undefined).toBe(true);
+      expect(p.SB === null || p.SB === undefined).toBe(true);
+    }
+    // Baseline A keeps the valid vendor values.
+    expect(byPhase["Baseline-A"].LFa).toBeCloseTo(0.91, 2);
+    expect(byPhase["Baseline-A"].RFa).toBeCloseTo(5.13, 2);
+  });
+
+  it("B) scatter model nulls untrusted challenge phases + % deltas (no zero/-100%)", () => {
+    const s = report.multiParameter.scatter;
+    expect(s.baselineLFa).toBeCloseTo(0.91, 2);
+    expect(s.baselineRFa).toBeCloseTo(5.13, 2);
+    expect(s.dbRFa).toBeNull();
+    expect(s.valsalvaLFa).toBeNull();
+    expect(s.standLFa).toBeNull();
+    expect(s.standRFa).toBeNull();
+    expect(s.rfaChangeValsalvaPct).toBeNull();
+    expect(s.rfaChangeStandPct).toBeNull();
+  });
+
+  it("no phase-specific low-response finding is derived from the untrusted challenges", () => {
+    const blob = JSON.stringify(report.phaseFindings ?? []).toLowerCase();
+    expect(blob).not.toContain("low parasympathetic response (rfa) to db");
+    expect(blob).toMatch(/not assessed/);
+  });
+});

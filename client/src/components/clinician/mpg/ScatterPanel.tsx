@@ -95,17 +95,53 @@ export function ScatterPanel({ mpg, patientAge, spectralAvailable }: ScatterPane
   );
 }
 
+// --- Inline "not assessed" body for a response-map card whose phase spectral
+//     is not clinically trusted (missing / untrusted computed estimate). We omit
+//     the patient point, bars, deltas, %s, and any pathology label. -----------
+function UnavailableInline({ note }: { note?: string }) {
+  return (
+    <div
+      className="flex flex-col items-center justify-center text-center rounded-lg border border-dashed border-border/40 bg-background/30 py-8 px-4"
+      style={{ minHeight: 180 }}
+      data-testid="response-map-unavailable"
+    >
+      <div className="text-[11px] font-medium text-muted-foreground">Not assessed</div>
+      <div className="text-[10px] text-muted-foreground/70 mt-1 max-w-[240px] leading-relaxed">
+        {note ?? "This phase's spectral value is not reproducible from the recording (baseline-only vendor data). No patient value is plotted."}
+      </div>
+    </div>
+  );
+}
+
 // --- 1. Baseline LFa vs RFa ------------------------------------------------
 
 function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
   const x = mpg.scatter.baselineLFa;
   const y = mpg.scatter.baselineRFa;
+  if (x == null || y == null) {
+    return (
+      <MiniCard title="Baseline LFa vs RFa" chartKey="baselineLfaRfa" testId="chart-baseline-lfa-rfa">
+        <UnavailableInline note="Baseline sympathetic/parasympathetic values were not assessed for this recording." />
+      </MiniCard>
+    );
+  }
   const ratio = y > 0 ? x / y : 0;
+  // Measurement interpretation of the resting LFa/RFa ratio — NOT a diagnosis.
+  // A low ratio here reflects reduced sympathetic modulation / relative
+  // parasympathetic dominance; it is not the same as an "advanced dysfunction"
+  // Colombo pattern (which requires PE + SW co-occurrence). Label the region by
+  // the measurement, not a diagnosis-like grade.
+  const ratioRegionLabel =
+    ratio >= 0.4 && ratio <= 1.0
+      ? "Low-normal resting balance (ratio 0.4–1.0)"
+      : ratio < 0.4
+        ? "Low ratio — reduced sympathetic modulation / relative parasympathetic dominance"
+        : "Sympathetic-leaning resting balance (ratio > 1.0)";
 
   return (
     <MiniCard
       title="Baseline LFa vs RFa"
-      subtitle={`LFa/RFa = ${ratio.toFixed(2)} (resting balance)`}
+      subtitle={`LFa/RFa = ${ratio.toFixed(2)} (resting balance) — ${ratioRegionLabel}`}
       chartKey="baselineLfaRfa"
       testId="chart-baseline-lfa-rfa"
     >
@@ -145,8 +181,8 @@ function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
       </ResponsiveContainer>
       <LegendRow
         items={[
-          { swatch: "hsl(140 60% 55% / 0.30)", label: "Low-normal window (ratio 0.4–1.0)" },
-          { swatch: "hsl(0 72% 62%)", label: "Advanced dysfunction (ratio < 0.4)" },
+          { swatch: "hsl(140 60% 55% / 0.30)", label: "Low-normal resting balance (ratio 0.4–1.0)" },
+          { swatch: "hsl(0 72% 62%)", label: "Ratio < 0.4 — reduced sympathetic modulation (measurement, not a diagnosis)" },
         ]}
       />
     </MiniCard>
@@ -157,6 +193,13 @@ function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
 
 function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }) {
   const val = mpg.scatter.dbRFa;
+  if (val == null) {
+    return (
+      <MiniCard title="Deep Breathing RFa vs Age" chartKey="deepBreathingRfa" testId="chart-db-rfa">
+        <UnavailableInline note="Deep-breathing parasympathetic response (RFa) was not assessed — phase spectral is not reproducible from this recording." />
+      </MiniCard>
+    );
+  }
   const band = dbRfaNormalBand(age);
   const inBand = val >= band.lo && val <= band.hi;
 
@@ -233,6 +276,13 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
 
 function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }) {
   const val = mpg.scatter.valsalvaLFa;
+  if (val == null) {
+    return (
+      <MiniCard title="Valsalva LFa vs Age" chartKey="valsalvaLfa" testId="chart-valsalva-lfa">
+        <UnavailableInline note="Valsalva sympathetic response (LFa) was not assessed — phase spectral is not reproducible from this recording." />
+      </MiniCard>
+    );
+  }
   const band = valsalvaLfaNormalBand(age);
   const inBand = val >= band.lo && val <= band.hi;
 
@@ -307,10 +357,20 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
 // --- 4. Stand Response -----------------------------------------------------
 
 function StandResponse({ mpg }: { mpg: MultiParameterGraphical }) {
+  const standLFa = mpg.scatter.standLFa;
+  const standRFa = mpg.scatter.standRFa;
+  if (standLFa == null && standRFa == null) {
+    return (
+      <MiniCard title="Stand Response (Phase F)" chartKey="standResponse" testId="chart-stand-response">
+        <UnavailableInline note="Standing sympathetic/parasympathetic response was not assessed — phase spectral is not reproducible from this recording." />
+      </MiniCard>
+    );
+  }
+  // Only plot the bars whose value is a trusted patient number (never a 0 fill-in).
   const data = [
-    { label: "Stand LFa", value: mpg.scatter.standLFa, target: 3.0 },
-    { label: "Stand RFa", value: mpg.scatter.standRFa, target: 1.5 },
-  ];
+    standLFa != null ? { label: "Stand LFa", value: standLFa, target: 3.0 } : null,
+    standRFa != null ? { label: "Stand RFa", value: standRFa, target: 1.5 } : null,
+  ].filter(Boolean) as { label: string; value: number; target: number }[];
 
   const maxV = Math.max(...data.map((d) => Math.max(d.value, d.target))) * 1.3;
 
@@ -374,10 +434,19 @@ function RfaExcess({ mpg }: { mpg: MultiParameterGraphical }) {
   const valsalva = mpg.scatter.rfaChangeValsalvaPct;
   const stand = mpg.scatter.rfaChangeStandPct;
 
+  if (valsalva == null && stand == null) {
+    return (
+      <MiniCard title="RFa Analysis — Parasympathetic Excess" chartKey="rfaExcess" testId="chart-rfa-excess">
+        <UnavailableInline note="RFa % change on challenge was not assessed — challenge phase spectral is not reproducible from this recording, so no percentage change is derived." />
+      </MiniCard>
+    );
+  }
+  // Only include a bar whose % change came from trusted baseline + phase spectral
+  // (never a -100% derived from a substituted 0).
   const data = [
-    { label: "Valsalva (A→D)", value: valsalva, expected: -40, expectedLabel: "expected: ≤ -30%" },
-    { label: "Stand (A→F)",    value: stand,    expected: -50, expectedLabel: "expected: ≤ -40%" },
-  ];
+    valsalva != null ? { label: "Valsalva (A→D)", value: valsalva, expected: -40, expectedLabel: "expected: ≤ -30%" } : null,
+    stand != null ? { label: "Stand (A→F)", value: stand, expected: -50, expectedLabel: "expected: ≤ -40%" } : null,
+  ].filter(Boolean) as { label: string; value: number; expected: number; expectedLabel: string }[];
 
   const maxAbs = Math.max(100, ...data.map((d) => Math.abs(d.value)));
 
