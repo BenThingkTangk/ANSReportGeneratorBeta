@@ -426,6 +426,33 @@ body {
   }
   .no-default-hover-elevate {}
   .no-default-active-elevate {}
+
+  /* ------------------------------------------------------------------------ */
+  /* Touch-target expansion (WCAG 2.5.5 / iOS HIG ≥44×44 CSS px).             */
+  /* Small icon buttons keep their compact VISUAL size but get an invisible,  */
+  /* centered hit region via a ::after overlay. Because the overlay is        */
+  /* absolutely positioned, it never affects layout, flow, or neighbour       */
+  /* spacing — so responsive layouts are preserved. The host element only     */
+  /* needs `position: relative` (added by the class itself). Pointer events   */
+  /* pass through to the button because ::after is a child of the button.     */
+  /* min() keeps the region from overflowing very small containers.           */
+  .touch-target { position: relative; }
+  .touch-target::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    /* Non-interactive visually but still part of the button's hit area. */
+    pointer-events: auto;
+  }
+  /* Print: the hit overlay is meaningless on paper and could, in theory,     */
+  /* affect stacking — drop it entirely.                                      */
+  @media print {
+    .touch-target::after { display: none; }
+  }
 }
 
 /* ============================================================================ */

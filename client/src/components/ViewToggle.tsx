@@ -13,13 +13,17 @@ export function ViewToggle({ role, onChange }: ViewToggleProps) {
       className="inline-flex rounded-xl p-1 gap-1"
       style={{ background: "hsl(210 18% 10%)", border: "1px solid hsl(210 15% 18%)" }}
       data-testid="view-toggle"
+      role="group"
+      aria-label="Report audience"
     >
       {(["patient", "clinician"] as ViewerRole[]).map(r => (
         <button
           key={r}
           onClick={() => onChange(r)}
           data-testid={`toggle-${r}`}
-          className="relative px-4 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize"
+          aria-pressed={role === r}
+          aria-label={r === "patient" ? "Patient view" : "Clinician view"}
+          className="touch-target relative px-4 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize"
           style={{
             color: role === r ? "white" : "hsl(210 10% 50%)",
             zIndex: 1,

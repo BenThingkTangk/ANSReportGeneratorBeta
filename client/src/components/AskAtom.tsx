@@ -517,7 +517,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
               </div>
               <button
                 onClick={toggleMute}
-                className="p-1.5 rounded-lg hover:bg-card/80 transition-colors"
+                className="touch-target p-1.5 rounded-lg hover:bg-card/80 transition-colors"
                 data-testid="atom-mute-toggle"
                 aria-pressed={muted}
                 aria-label={muted ? "Unmute Atom voice" : "Mute Atom voice"}
@@ -532,7 +532,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
               <button
                 onClick={reset}
                 disabled={messages.length === 0 && !retryable}
-                className="p-1.5 rounded-lg hover:bg-card/80 transition-colors disabled:opacity-30"
+                className="touch-target p-1.5 rounded-lg hover:bg-card/80 transition-colors disabled:opacity-30"
                 data-testid="ask-atom-reset"
                 aria-label="New chat"
                 title="New chat"
@@ -545,7 +545,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                   voice.stopListening();
                   setOpen(false);
                 }}
-                className="p-1.5 rounded-lg hover:bg-card/80 transition-colors"
+                className="touch-target p-1.5 rounded-lg hover:bg-card/80 transition-colors"
                 data-testid="ask-atom-close"
                 aria-label="Close"
               >
@@ -568,7 +568,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                   <button
                     key={r}
                     onClick={() => setMode(r)}
-                    className="px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1 transition-colors"
+                    className="touch-target px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1 transition-colors"
                     style={
                       mode === r
                         ? { background: "hsl(185 85% 42%)", color: "white" }
@@ -576,6 +576,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                     }
                     data-testid={`atom-mode-${r}`}
                     aria-pressed={mode === r}
+                    aria-label={r === "patient" ? "Patient assistant mode" : "Clinician assistant mode"}
                   >
                     {r === "patient" ? <User className="w-3 h-3" /> : <Stethoscope className="w-3 h-3" />}
                     {r === "patient" ? "Patient" : "Clinician"}
@@ -656,7 +657,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                   <div key={msg.id} className="group flex gap-1.5 justify-end items-start">
                     <button
                       onClick={() => branchFrom(i)}
-                      className="mt-1 p-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                      className="touch-target mt-1 p-1 rounded-md opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex-shrink-0"
                       style={{ color: "hsl(210 10% 55%)" }}
                       title="Edit & branch from here"
                       aria-label="Edit and branch from here"
@@ -706,7 +707,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                         <div className="flex items-center gap-1.5 px-1">
                           <button
                             onClick={() => handleSpeak(msg)}
-                            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md transition-colors hover:brightness-125"
+                            className="touch-target flex items-center gap-1 text-[10px] px-2 py-1 rounded-md transition-colors hover:brightness-125"
                             style={
                               speakingId === msg.id && voice.speaking
                                 ? {
@@ -795,9 +796,10 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                 <div className="flex justify-center pt-1">
                   <button
                     onClick={retry}
-                    className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-lg transition-colors hover:brightness-125"
+                    className="touch-target flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-lg transition-colors hover:brightness-125"
                     style={{ background: "hsl(210 18% 13%)", border: "1px solid hsl(210 15% 20%)", color: "hsl(210 10% 75%)" }}
                     data-testid="atom-retry"
+                    aria-label="Retry"
                   >
                     <RotateCcw className="w-3 h-3" /> Retry
                   </button>
@@ -859,6 +861,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                       : "Ask about this patient…"
                 }
                 disabled={busy}
+                aria-label={mode === "patient" ? "Ask about your results" : "Ask about this patient"}
                 className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/50 min-w-0 disabled:opacity-60"
                 data-testid="ask-atom-input"
                 style={{ color: "hsl(200 20% 92%)" }}
@@ -866,7 +869,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
               <button
                 onClick={handleMicClick}
                 disabled={busy || !voice.supportsListening}
-                className="w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105 disabled:opacity-40 flex-shrink-0"
+                className="touch-target w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105 disabled:opacity-40 flex-shrink-0"
                 style={
                   voice.listening
                     ? { background: "hsl(0 55% 42%)" }
@@ -907,7 +910,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
               {busy ? (
                 <button
                   onClick={cancel}
-                  className="w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105"
+                  className="touch-target w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105"
                   style={{ background: "hsl(0 55% 42%)" }}
                   data-testid="ask-atom-stop"
                   aria-label="Stop"
@@ -919,7 +922,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                 <button
                   onClick={() => sendMessage(input)}
                   disabled={!input.trim()}
-                  className="w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105 disabled:opacity-40"
+                  className="touch-target w-8 h-8 rounded-lg flex items-center justify-center transition-all hover:scale-105 disabled:opacity-40"
                   style={{ background: "hsl(185 85% 42%)" }}
                   data-testid="ask-atom-send"
                   aria-label="Send"

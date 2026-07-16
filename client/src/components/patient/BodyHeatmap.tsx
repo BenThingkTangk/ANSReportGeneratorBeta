@@ -259,7 +259,13 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                 >
                   <title>{`${imp.system} — ${qualitativeStatus(imp)}`}</title>
                   {def.organs(color)}
-                  {/* Transparent hit area + focus/selection ring */}
+                  {/* Transparent hit area + focus/selection ring. These SVG
+                      hotspots are small at 390px (viewBox scaled to ~128px), but
+                      WCAG 2.5.5 is satisfied via the equivalent control: each
+                      region has a matching full-width, ≥44px list row beside the
+                      figure (data-testid `body-row-*`) that performs the same
+                      toggle. Reshaping the anatomical hit paths would distort the
+                      figure, so the equivalent-control exception is used. */}
                   <g
                     fill="transparent"
                     stroke={ring ? "hsl(0 0% 100%)" : "none"}
@@ -343,7 +349,8 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   onMouseEnter={() => setActive(sys.system)}
                   onMouseLeave={() => setActive((a) => (a === sys.system ? null : a))}
                   aria-pressed={isSelected}
-                  className="w-full text-left rounded-md px-1.5 py-1 -mx-1.5 space-y-1 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-white/40 hover:bg-white/[0.04]"
+                  aria-label={`${sys.system}: ${qualitativeStatus(sys)}`}
+                  className="w-full min-h-[44px] flex flex-col justify-center text-left rounded-md px-1.5 py-1 -mx-1.5 space-y-1 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-white/40 hover:bg-white/[0.04]"
                   style={isSelected ? { background: "hsl(0 0% 100% / 0.06)" } : undefined}
                   data-testid={`body-row-${sys.system}`}
                 >

@@ -56,7 +56,7 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
         <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={onReset}
-            className="p-2 rounded-lg hover:bg-card/80 transition-colors flex-shrink-0"
+            className="touch-target p-2 rounded-lg hover:bg-card/80 transition-colors flex-shrink-0"
             data-testid="button-back"
             aria-label="Back"
           >
@@ -87,7 +87,7 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
               which is shown from `sm` up). */}
           <button
             onClick={() => setAskOpen(o => !o)}
-            className="sm:hidden w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+            className="touch-target sm:hidden w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
             style={{
               background: "linear-gradient(135deg, hsl(185 85% 35%), hsl(185 85% 48%))",
               boxShadow: "0 0 12px hsl(185 85% 42% / 0.4)",
@@ -104,7 +104,7 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
               nothing clips. */}
           <button
             onClick={() => window.print()}
-            className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 hover:bg-card/80 transition-colors"
+            className="touch-target w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 hover:bg-card/80 transition-colors"
             style={{ border: "1px solid hsl(var(--border))" }}
             data-testid="button-export-report"
             aria-label="Export report as PDF"
