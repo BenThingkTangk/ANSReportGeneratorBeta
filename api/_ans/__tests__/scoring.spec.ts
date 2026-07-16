@@ -298,6 +298,14 @@ describe("computeDiagnosticSummary — deterministic scoring", () => {
     it("phenotype labels use 'pattern consistent with…' phrasing only", () => {
       for (const f of summary.phenotypeFlags) {
         if (f.id === "insufficient_data") continue;
+        // COLOMBO-RULE-1.11: the parasympathetic-withdrawal detector is now an
+        // informational, never-present physiology note (an RFa fall on standing
+        // is normal), so it intentionally does NOT use dysfunction-assertion
+        // phrasing. Only flags that can be asserted (present-capable) must.
+        if (f.id === "parasympathetic_withdrawal") {
+          expect(f.present).toBe(false);
+          continue;
+        }
         expect(f.label.toLowerCase()).toMatch(/pattern consistent with/);
       }
     });

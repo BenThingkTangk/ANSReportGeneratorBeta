@@ -5,26 +5,20 @@
  * the paired VENDOR-reported baseline spectral values, so the clinician EVIDENCE
  * panel and the patient view cannot contradict for the same metrics.
  *
- * THE PROBLEM (live QA): the deterministic engine derives the
- * `parasympathetic_withdrawal` hypothesis from the .ans's ESTIMATED resting→standing
- * RFa. When a signed vendor report establishes a NORMAL baseline RFa with a LOW
- * sympathovagal balance driven by LOW / low-normal LFa, that estimate-based
- * "withdrawal" hypothesis is incompatible with the vendor source of truth (which
- * shows a *relative parasympathetic dominance* / reduced sympathetic modulation,
- * not a fall in parasympathetic activity). The patient finding correctly reads
- * "Relative Parasympathetic Dominance" while the clinician evidence still read
- * "parasympathetic withdrawal" — a contradiction.
+ * COLOMBO-RULE-1.11 ("there is no parasympathetic withdrawal"): a fall in RFa on
+ * standing/Valsalva is always normal physiology and must never be surfaced as a
+ * dysfunction. The primary scoring detector (detectParasympatheticWithdrawal) now
+ * enforces this and never emits `present:true`. This reconciliation step is a
+ * defense-in-depth backstop: whatever the source, any `parasympathetic_withdrawal`
+ * flag that arrives here `present:true` is neutralized (present → false) and
+ * annotated with the rule, so the clinician EVIDENCE panel, the patient view, and
+ * Ask ATOM can never present it as a dysfunction.
  *
- * THE FIX (generic, no patient hardcoding): when vendor metrics establish
- * normal-RFa + low-SB-from-low-LFa, INVALIDATE the low/medium-confidence
- * deterministic withdrawal hypothesis (present → false) and annotate WHY, citing
- * the vendor source. Provenance separation is preserved: we do not silently
- * rewrite deterministic numbers — we mark the hypothesis not-supported by the
- * higher-authority paired source and record that in its rationale/criteria.
- *
- * A HIGH-confidence deterministic withdrawal finding (genuinely measured, not an
- * estimate) is left untouched — we only override estimate-driven low/medium
- * hypotheses that the vendor source directly contradicts.
+ * When paired vendor metrics are available and establish normal-RFa + low-SB from
+ * low/low-normal LFa, the annotation additionally names the *relative
+ * parasympathetic dominance* physiology so the clinician sees the correct read.
+ * Provenance separation is preserved: deterministic numbers are never rewritten —
+ * only the pattern's present/criteria/rationale are corrected.
  */
 import { COLOMBO_NORMS, classifyLowSbDriver } from "../../shared/colomboNorms.js";
 import type { DiagnosticSummary, PhenotypeFlag } from "../../shared/diagnosticSummary.js";
@@ -36,54 +30,58 @@ export interface VendorBaselineSpectral {
 }
 
 /**
- * Reconcile a diagnostic summary's phenotype flags against vendor baseline
- * spectral values. Returns a NEW summary (inputs untouched) with the
- * parasympathetic-withdrawal hypothesis invalidated when the vendor source shows
- * normal RFa + a low SB driven by low/low-normal LFa. No-op when vendor spectral
- * is absent, when RFa is not normal, or when the driver is genuine excess/mixed.
+ * Reconcile a diagnostic summary's phenotype flags. Returns a NEW summary
+ * (inputs untouched). Per COLOMBO-RULE-1.11 any `parasympathetic_withdrawal`
+ * flag arriving `present:true` is neutralized (present → false) regardless of
+ * confidence or source — an RFa fall on standing is normal physiology, never a
+ * dysfunction. When paired vendor metrics establish normal RFa + low SB from
+ * low/low-normal LFa, the annotation additionally names the relative
+ * parasympathetic dominance physiology.
  */
 export function reconcilePhenotypesWithVendor(
   summary: DiagnosticSummary,
   vendor: VendorBaselineSpectral | undefined,
 ): DiagnosticSummary {
-  if (!vendor) return summary;
-  const lfa = typeof vendor.LFa === "number" ? vendor.LFa : null;
-  const rfa = typeof vendor.RFa === "number" ? vendor.RFa : null;
+  const lfa = vendor && typeof vendor.LFa === "number" ? vendor.LFa : null;
+  const rfa = vendor && typeof vendor.RFa === "number" ? vendor.RFa : null;
   const sb =
-    typeof vendor.SB === "number"
+    vendor && typeof vendor.SB === "number"
       ? vendor.SB
       : lfa != null && rfa != null && rfa !== 0
         ? lfa / rfa
         : null;
-  if (rfa == null || sb == null) return summary;
 
-  // Only act when the vendor establishes: RFa within normal band, SB low, and the
-  // low ratio is driven by reduced sympathetic modulation (not genuine PE).
-  const rfaNormal = rfa >= COLOMBO_NORMS.RFa.lo && rfa <= COLOMBO_NORMS.RFa.hi;
-  const sbLow = sb < COLOMBO_NORMS.SB.lo;
-  const driver = classifyLowSbDriver(lfa, rfa);
-  const shouldInvalidateWithdrawal =
-    rfaNormal && sbLow && driver === "reduced-sympathetic";
-  if (!shouldInvalidateWithdrawal) return summary;
+  // Optional richer annotation when the vendor pair establishes relative
+  // parasympathetic dominance (normal RFa + low SB driven by low/low-normal LFa).
+  const vendorShowsDominance =
+    rfa != null &&
+    sb != null &&
+    rfa >= COLOMBO_NORMS.RFa.lo &&
+    rfa <= COLOMBO_NORMS.RFa.hi &&
+    sb < COLOMBO_NORMS.SB.lo &&
+    classifyLowSbDriver(lfa, rfa) === "reduced-sympathetic";
 
   let changed = false;
   const flags: PhenotypeFlag[] = summary.phenotypeFlags.map((f) => {
     if (f.id !== "parasympathetic_withdrawal" || !f.present) return f;
-    // Never override a HIGH-confidence (genuinely measured) withdrawal finding.
-    if (f.confidence === "High") return f;
     changed = true;
-    const note =
-      `Invalidated by the paired vendor report: baseline RFa ${rfa.toFixed(2)} bpm² is within ` +
-      `normal limits (${COLOMBO_NORMS.RFa.lo}–${COLOMBO_NORMS.RFa.hi}) and the low sympathovagal ` +
-      `balance (SB ${sb.toFixed(2)}) is driven by low/low-normal LFa` +
-      (lfa != null ? ` (${lfa.toFixed(2)} bpm²)` : "") +
-      `. This is a relative parasympathetic dominance (reduced sympathetic modulation), ` +
-      `not a fall in parasympathetic activity — so the estimate-based withdrawal hypothesis is not supported.`;
+    // COLOMBO-RULE-1.11: never present an RFa fall on standing as a dysfunction.
+    const base =
+      `Per COLOMBO-RULE-1.11, a fall in parasympathetic (RFa) activity on standing/Valsalva ` +
+      `is normal physiology and is never reported as "parasympathetic withdrawal" or a dysfunction.`;
+    const dominanceNote = vendorShowsDominance
+      ? ` The paired vendor report shows baseline RFa ${rfa!.toFixed(2)} bpm² within normal limits ` +
+        `(${COLOMBO_NORMS.RFa.lo}–${COLOMBO_NORMS.RFa.hi}) and a low sympathovagal balance (SB ${sb!.toFixed(2)}) ` +
+        `driven by low/low-normal LFa` +
+        (lfa != null ? ` (${lfa.toFixed(2)} bpm²)` : "") +
+        ` — a relative parasympathetic dominance (reduced sympathetic modulation), not a fall in parasympathetic activity.`
+      : "";
     return {
       ...f,
       present: false,
+      label: "Parasympathetic response on standing (expected physiology)",
       criteria: f.criteria.map((c) => ({ ...c, met: false })),
-      rationale: `${f.rationale} — ${note}`,
+      rationale: `${f.rationale} — ${base}${dominanceNote}`,
     };
   });
 

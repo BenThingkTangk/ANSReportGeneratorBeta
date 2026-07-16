@@ -1,12 +1,14 @@
 /**
  * Cross-source phenotype reconciliation regression.
  *
- * Live QA (build 5570860): the clinician EVIDENCE panel still showed "Pattern
- * consistent with parasympathetic withdrawal" (withdrawal=true) while the patient
- * finding was Relative Parasympathetic Dominance — a contradiction for the same
- * metrics (normal RFa, low SB from low LFa). The deterministic withdrawal
- * hypothesis is estimate-based; when the paired vendor report establishes normal
- * RFa + low SB driven by low LFa, that hypothesis must be invalidated.
+ * COLOMBO-RULE-1.11 ("there is no parasympathetic withdrawal"): a fall in RFa on
+ * standing/Valsalva is normal physiology and must never be surfaced as a
+ * dysfunction. reconcilePhenotypesWithVendor now neutralizes ANY
+ * `parasympathetic_withdrawal` flag arriving present:true — regardless of
+ * confidence or whether vendor spectral is present — so the clinician EVIDENCE
+ * panel, the patient view, and Ask ATOM can never present it as a dysfunction.
+ * When vendor spectral establishes normal RFa + low SB from low LFa, the
+ * annotation additionally names the relative parasympathetic dominance physiology.
  */
 import { describe, it, expect } from "vitest";
 import { reconcilePhenotypesWithVendor } from "../reconcilePhenotypesWithVendor.js";
@@ -34,7 +36,7 @@ describe("reconcilePhenotypesWithVendor", () => {
     const f = out.phenotypeFlags.find((p) => p.id === "parasympathetic_withdrawal")!;
     expect(f.present).toBe(false);
     expect(f.criteria.every((c) => !c.met)).toBe(true);
-    expect(f.rationale).toMatch(/invalidated by the paired vendor report/i);
+    expect(f.rationale).toMatch(/COLOMBO-RULE-1\.11/);
     expect(f.rationale).toMatch(/relative parasympathetic dominance/i);
   });
 
@@ -43,23 +45,26 @@ describe("reconcilePhenotypesWithVendor", () => {
     expect(out.phenotypeFlags[0].present).toBe(false);
   });
 
-  it("does NOT override a HIGH-confidence (genuinely measured) withdrawal finding", () => {
+  it("COLOMBO-RULE-1.11: neutralizes even a HIGH-confidence withdrawal flag (no dysfunction for RFa fall on standing)", () => {
     const out = reconcilePhenotypesWithVendor(summaryWithWithdrawal(true, "High"), NORMAL_RFA_LOW_SB);
-    expect(out.phenotypeFlags[0].present).toBe(true);
+    expect(out.phenotypeFlags[0].present).toBe(false);
   });
 
-  it("does NOT invalidate when the vendor shows GENUINE parasympathetic excess (RFa elevated)", () => {
+  it("COLOMBO-RULE-1.11: neutralizes the withdrawal flag EVEN WITHOUT vendor spectral (rule is absolute)", () => {
+    const out = reconcilePhenotypesWithVendor(summaryWithWithdrawal(true, "Low"), undefined);
+    expect(out.phenotypeFlags[0].present).toBe(false);
+    expect(out.phenotypeFlags[0].rationale).toMatch(/COLOMBO-RULE-1\.11/);
+  });
+
+  it("COLOMBO-RULE-1.11: neutralizes regardless of vendor RFa band (still never a dysfunction)", () => {
+    // Even when the vendor shows elevated RFa, an RFa FALL on standing is not a
+    // dysfunction — the flag must not be present.
     const out = reconcilePhenotypesWithVendor(summaryWithWithdrawal(true, "Low"), { LFa: 2.0, RFa: 15, SB: 0.13 });
-    expect(out.phenotypeFlags[0].present).toBe(true);
+    expect(out.phenotypeFlags[0].present).toBe(false);
   });
 
-  it("no-op when vendor spectral is absent", () => {
-    const s = summaryWithWithdrawal(true, "Low");
+  it("true no-op when there is no present withdrawal flag to neutralize", () => {
+    const s = summaryWithWithdrawal(false, "Low");
     expect(reconcilePhenotypesWithVendor(s, undefined)).toBe(s);
-  });
-
-  it("no-op when RFa is not within the normal band (cannot establish the pattern)", () => {
-    const out = reconcilePhenotypesWithVendor(summaryWithWithdrawal(true, "Low"), { LFa: 0.2, RFa: 0.05, SB: 4 });
-    expect(out.phenotypeFlags[0].present).toBe(true);
   });
 });

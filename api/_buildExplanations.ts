@@ -175,9 +175,13 @@ function patientPhraseForPhenotype(id: string): string {
     case "adrenergic_impairment":
       return "Your blood-pressure regulation looks softer than typical when standing.";
     case "parasympathetic_withdrawal":
-      return "Your rest-and-recover signal is reduced compared to typical.";
+      // COLOMBO-RULE-1.11: this pattern is informational-only (never present); an
+      // RFa fall on standing is normal. Phrase accordingly if it is ever shown.
+      return "Your rest-and-recover signal easing as you stand is a normal, expected response.";
     case "sympathetic_excess":
       return "Your activity-mode signal is running higher than typical.";
+    case "baroreflex_dysfunction":
+      return "Your blood pressure did not rise as much as expected during the strain test, which your physician may want to review.";
     case "possible_can_risk":
       return "Multiple readings combined match a pattern your physician should review carefully.";
     case "insufficient_data":
