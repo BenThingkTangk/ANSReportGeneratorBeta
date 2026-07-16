@@ -134,7 +134,10 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
             A paired vendor report is attached. Switch between the vendor's familiar
             P&amp;S layout (verbatim values) and the HumanOS analysis.
           </div>
-          <ClinicianViewToggle view={view} onChange={setView} />
+          {/* Interactive toggle — never printed (QA #5). */}
+          <div className="no-print">
+            <ClinicianViewToggle view={view} onChange={setView} />
+          </div>
         </div>
       )}
 

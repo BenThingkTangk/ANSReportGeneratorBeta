@@ -857,8 +857,13 @@ function analyzePhase(
     return {
       phase: phaseName, label,
       duration: formatDuration(durationSec), durationSec,
-      meanHR: 0, rangeHR: 0, FRF: 0, LFa: 0, RFa: 0, SB: 0,
-      HRV_SDNN: 0, HRV_RMSSD: 0,
+      // Absent values must never surface as a fabricated 0. Emit null for every
+      // metric that could not be computed from <4 beats; the provenance tags
+      // (unavail) already mark these unavailable, and the UI renders "—".
+      meanHR: null as unknown as number, rangeHR: null as unknown as number,
+      FRF: null as unknown as number, LFa: null as unknown as number,
+      RFa: null as unknown as number, SB: null as unknown as number,
+      HRV_SDNN: null as unknown as number, HRV_RMSSD: null as unknown as number,
       provenance: unavail,
     };
   }
@@ -1154,7 +1159,7 @@ function computeWellness(
   // ---- 4. Orthostatic Response ----
   const standRFaScore = signedBandScore(fRFa, RFa_n.lo * 0.5, RFa_n.hi, { highPenalty: 1.2 });
   const standLFaScore = signedBandScore(fLFa, LFa_n.lo, LFa_n.hi * 1.4, { lowPenalty: 1.2 });
-  const hrDelta = F.meanHR - A.meanHR;
+  const hrDelta = (Number.isFinite(F.meanHR) && Number.isFinite(A.meanHR)) ? F.meanHR - A.meanHR : 0;
   let hrDeltaScore: number;
   if (hrDelta < 0) hrDeltaScore = 20;               // HR drop on stand = chronotropic failure
   else if (hrDelta < 5) hrDeltaScore = 40;
@@ -1179,14 +1184,18 @@ function computeWellness(
   ];
 
   // ---- 5. HRV Reserve ----
+  // A phase with too few beats now carries HRV_SDNN=null (never a fabricated 0);
+  // average only over phases that actually produced a finite SDNN so a missing
+  // phase can neither drag the mean toward 0 nor become NaN.
   const expectedSDNN = age < 36 ? 55 : age < 56 ? 45 : 35;
-  const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
+  const finiteSdnns = phases.map(p => p.HRV_SDNN).filter((v): v is number => Number.isFinite(v));
+  const avgSDNN = finiteSdnns.length ? finiteSdnns.reduce((s, v) => s + v, 0) / finiteSdnns.length : 0;
   let sdnnScore = avgSDNN >= expectedSDNN
     ? Math.min(100, 100 + (avgSDNN - expectedSDNN) * 0.25)
     : Math.max(10, 100 * Math.pow(avgSDNN / expectedSDNN, 0.8));
   sdnnScore = Math.round(sdnnScore * 10) / 10;
-  const sdnns = phases.map(p => p.HRV_SDNN);
-  const sdnnSpread = Math.max(...sdnns) - Math.min(...sdnns);
+  const sdnns = finiteSdnns;
+  const sdnnSpread = sdnns.length ? Math.max(...sdnns) - Math.min(...sdnns) : 0;
   const spreadScore = sdnnSpread < 5 ? 40 : sdnnSpread > 60 ? 65 : Math.min(100, 40 + sdnnSpread * 1.5);
   const s5 = Math.round((sdnnScore * 0.70 + spreadScore * 0.30) * 10) / 10;
   const s5Drivers: WellnessDriver[] = [
@@ -1410,7 +1419,8 @@ function computeBodyImpact(
 
   // --- Immune (HRV/SDNN proxy): SDNN is ECG-derived (consensus tier) — always
   //     supported. --------------------------------------------------------------
-  const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
+  const immFiniteSdnns = phases.map(p => p.HRV_SDNN).filter((v): v is number => Number.isFinite(v));
+  const avgSDNN = immFiniteSdnns.length ? immFiniteSdnns.reduce((s, v) => s + v, 0) / immFiniteSdnns.length : 0;
   let imm = 0;
   if (avgSDNN < 30) imm -= 25;
   else if (avgSDNN < 45) imm -= 10;
@@ -2168,8 +2178,11 @@ export function generateColomboReport(
   // < 50 cutoff already used by the syncope-risk indications.
   const BRADYCARDIA_BPM = 50;
   const bradycardia = A.meanHR > 0 && A.meanHR < BRADYCARDIA_BPM;
-  const hrDelta = F.meanHR - A.meanHR;
-  const POTS = A.meanHR > 0 && hrDelta >= 30;
+  // HR delta is meaningful only when BOTH baseline and stand HR were computable
+  // (a phase with too few beats now carries meanHR=null, not a fabricated 0).
+  const hrDeltaAssessable = Number.isFinite(A.meanHR) && Number.isFinite(F.meanHR);
+  const hrDelta = hrDeltaAssessable ? F.meanHR - A.meanHR : 0;
+  const POTS = A.meanHR > 0 && hrDeltaAssessable && hrDelta >= 30;
   // FRF norm band is the single source of truth (Colombo 0.09–0.15 Hz). FRF is
   // a proprietary [P] framing — gate it on spectral availability too.
   const highFRF = spectralAvailable && B.FRF > COLOMBO_NORMS.FRF.hi;
@@ -2334,7 +2347,15 @@ export function generateColomboReport(
   } else if (abnormalChallengeCount === 0) overall = "No significant abnormalities in autonomic challenges — normal autonomic function.";
   else if (abnormalChallengeCount === 1) overall = `Abnormal responses to autonomic challenges (DB, Valsalva, or standing) suggest autonomic dysfunction. Since only ${challenges[0]}, mild autonomic dysfunction is possible.`;
   else if (abnormalChallengeCount === 2) overall = "Abnormal responses to multiple autonomic challenges suggest moderate autonomic dysfunction.";
-  else overall = "Abnormal responses across all autonomic challenges suggest advanced autonomic dysfunction.";
+  // NARRATIVE CONSISTENCY (QA merge-blocker): the "advanced autonomic dysfunction"
+  // wording may ONLY appear when the deterministic, completeness-gated pattern
+  // detector actually set advancedAutonomicDysfunction. Otherwise the impression
+  // would contradict the clinician synopsis ("No Colombo dysfunction pattern met
+  // detection criteria"). When 3 challenges are abnormal but the AAD pattern was
+  // NOT met (e.g. counts driven by heuristics without the PE+SW co-occurrence AAD
+  // requires), describe the findings without asserting the AAD grade.
+  else if (advancedAutonomicDysfunction) overall = "Abnormal responses across all autonomic challenges, together with the parasympathetic-excess plus sympathetic-withdrawal pattern, are consistent with advanced autonomic dysfunction.";
+  else overall = "Abnormal responses across multiple autonomic challenges (deep breathing, Valsalva, and standing) — clinician review is advised. No single Colombo dysfunction pattern met detection criteria on the assessed data.";
 
   // Clinician DISCUSSION TOPICS — NON-PRESCRIPTIVE.
   //
@@ -2592,7 +2613,7 @@ export function generateColomboReport(
     spectralAvailable,
     bpAvailable,
     respiratoryFrequency: spectralAvailable ? A.FRF : null,
-    rPeakCount: phaseEvents.reduce((n, p) => n + Math.round(p.meanHR * p.durationSec / 60), 0),
+    rPeakCount: phaseEvents.reduce((n, p) => n + (Number.isFinite(p.meanHR) && Number.isFinite(p.durationSec) ? Math.round(p.meanHR * p.durationSec / 60) : 0), 0),
     generatedAt: new Date().toISOString(),
     multiParameter,
     indications,

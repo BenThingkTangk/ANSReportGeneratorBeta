@@ -74,7 +74,9 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
                 <td className="py-2.5 pr-4 font-medium whitespace-nowrap">{pl.short}</td>
                 <td className="py-2.5 pr-4 tabular-nums text-muted-foreground">{m?.duration ?? "—"}</td>
                 <td className="py-2.5 pr-4 tabular-nums">
-                  {m ? `${Math.round(m.meanHR)} ± ${Math.round(m.rangeHR)}` : "—"}
+                  {m && Number.isFinite(m.meanHR)
+                    ? `${Math.round(m.meanHR)} ± ${Number.isFinite(m.rangeHR) ? Math.round(m.rangeHR) : "—"}`
+                    : "—"}
                 </td>
                 {spectralUnavailable(m) ? (
                   <>

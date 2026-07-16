@@ -22,7 +22,7 @@ export function ColomboExplainer({ chartKey, titleOverride }: ColomboExplainerPr
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-card/50 transition-colors"
+        className="no-print w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-card/50 transition-colors"
         aria-expanded={open}
       >
         <div className="flex items-center gap-2.5 min-w-0">

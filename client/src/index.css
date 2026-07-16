@@ -785,6 +785,15 @@ body {
   /* Interactive-only chrome never prints. */
   .no-print { display: none !important; }
 
+  /* Interactive chrome is never part of a printed clinical report: hide all
+     buttons and button-role controls (view toggles, Explain toggles, Ask ATOM
+     controls, export/print controls, retry buttons). Opt back in with
+     .print-keep for the rare control that must appear on paper. (QA #5) */
+  button:not(.print-keep),
+  [role="button"]:not(.print-keep) {
+    display: none !important;
+  }
+
   html, body {
     background: #ffffff !important;
     color: #0b0b0f !important;

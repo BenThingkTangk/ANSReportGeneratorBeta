@@ -131,7 +131,9 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
                   <td className="py-2.5 pr-4 font-medium whitespace-nowrap">{pl.short}</td>
                   <td className="py-2.5 pr-4 tabular-nums text-muted-foreground">{m?.duration ?? "—"}</td>
                   <td className="py-2.5 pr-4 tabular-nums">
-                    {m ? `${Math.round(m.meanHR)} ± ${Math.round(m.rangeHR)}` : "—"}
+                    {m && Number.isFinite(m.meanHR)
+                      ? `${Math.round(m.meanHR)} ± ${Number.isFinite(m.rangeHR) ? Math.round(m.rangeHR) : "—"}`
+                      : "—"}
                   </td>
                   <SpectralCell m={m} value={m?.FRF} norm={NORMS.FRF} digits={3} />
                   <SpectralCell m={m} value={m?.LFa} norm={NORMS.LFa} />
