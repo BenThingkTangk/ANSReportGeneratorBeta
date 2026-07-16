@@ -50,6 +50,17 @@ export const config = {
 
 const MAX_PDF_BYTES = 30 * 1024 * 1024;
 
+/**
+ * Server-side OCR wall-clock budget. Sits under the function's 120s maxDuration
+ * so the request always returns a response (partial-but-honest if the budget is
+ * hit) instead of the platform killing it, while leaving comfortable headroom
+ * for a normal multi-page scanned report (~45s). Responsiveness is guaranteed by
+ * the OCR pipeline yielding between units of work, not by this cap. Whatever the
+ * OCR read verbatim before the deadline is returned; unresolved fields stay "not
+ * assessed", never guessed.
+ */
+const OCR_DEADLINE_MS = 90_000;
+
 function parseSinglePdf(rawBody: Buffer, contentType: string): { buffer: Buffer; fileName: string } | null {
   const boundaryMatch = contentType.match(/boundary=(.+)$/);
   if (!boundaryMatch) return null;
@@ -168,7 +179,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // The signed Physio PS reports are flat rasters. Rasterize + OCR the pages
     // and lift the vendor's own printed numbers verbatim. Fields OCR cannot read
     // confidently stay ABSENT — never fabricated.
-    const ocr = await ocrPdf(file.buffer);
+    //
+    // OCR is CPU-bound; bound it with a wall-clock deadline and a cancel signal
+    // wired to the client aborting the request (fetch AbortController → socket
+    // close). Either way we return whatever was read verbatim so far and never
+    // guess the rest. The deadline sits under the function's maxDuration (120s).
+    const ac = new AbortController();
+    const onClose = () => ac.abort();
+    req.on("close", onClose);
+    const ocr = await ocrPdf(file.buffer, { deadlineMs: OCR_DEADLINE_MS, signal: ac.signal }).finally(() => {
+      req.off?.("close", onClose);
+    });
     if (!ocr.ocrAvailable) {
       return res.status(200).json({
         success: true,
@@ -185,10 +206,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
+    // Client cancelled mid-OCR: the socket is gone, so don't bother serializing
+    // a body — just stop. (Nothing was committed; the attachment is discarded.)
+    if (ocr.truncated === "cancelled") {
+      return res.end();
+    }
+
     const extraction = parseVendorOcrPages(ocr.pages);
     const metrics = extractionToVendorMetrics(extraction);
     const avgPageConf =
       ocr.pages.reduce((s, p) => s + (p.confidence ?? 0), 0) / Math.max(1, ocr.pages.length);
+
+    const timedOut = ocr.truncated === "deadline";
+    const timeoutNote = timedOut
+      ? " OCR stopped at the time budget; fields not yet read stay unavailable (not guessed) — " +
+        "retry or use a text-layer PDF for the remaining values."
+      : "";
 
     return res.status(200).json({
       success: true,
@@ -196,6 +229,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       textExtracted: false,
       ocrUsed: true,
       source: "ocr",
+      timedOut,
       pageCount: ocr.pages.length,
       ocrConfidence: Math.round(avgPageConf),
       looksLikeVendorReport: extraction.looksLikeVendorReport,
@@ -205,8 +239,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       note: extraction.looksLikeVendorReport
         ? `OCR read ${metrics.length} vendor-reported metric(s) verbatim from the scanned report ` +
           `(mean field confidence ${(extraction.meanConfidence * 100).toFixed(0)}%). ` +
-          `Fields the scan could not resolve confidently are shown as unavailable, not guessed.`
-        : "OCR ran but the pages do not look like a P&S / ANS vendor report; nothing ingested.",
+          `Fields the scan could not resolve confidently are shown as unavailable, not guessed.` +
+          timeoutNote
+        : "OCR ran but the pages do not look like a P&S / ANS vendor report; nothing ingested." + timeoutNote,
     });
   } catch (err: any) {
     console.error("Vendor PDF ingest error:", err);

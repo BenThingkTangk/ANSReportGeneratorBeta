@@ -54,12 +54,79 @@ export interface OcrResult {
   pages: OcrPage[];
   /** Populated when OCR could not run (missing deps, etc.). */
   reason?: string;
+  /**
+   * Set when OCR stopped early because the wall-clock budget was hit or the
+   * caller cancelled. `pages` then holds whatever was read verbatim before the
+   * stop — downstream fields that weren't reached stay ABSENT, never guessed.
+   */
+  truncated?: "deadline" | "cancelled";
 }
 
 /** Default rasterization DPI. 260 is the empirical floor at which the vendor's
  *  small resting-block spectral digits (LFa/RFa/SB) OCR correctly, while keeping
  *  per-request time/memory sane on a serverless runtime. */
 const DEFAULT_DPI = 260;
+
+/**
+ * Default wall-clock budget for a single OCR request. Tesseract WASM + high-DPI
+ * rasterization is CPU-bound and runs on the Node event loop; under `vercel dev`
+ * (one process serving both the Vite client and the API) an unbounded OCR pass
+ * starves the loop and the browser page goes unresponsive. A hard deadline keeps
+ * the request bounded: whatever fields were read verbatim before the budget is
+ * hit are returned; the rest stay ABSENT (honest), never guessed. Callers can
+ * override (e.g. tests use a tiny budget to prove the deadline path).
+ *
+ * NOTE: responsiveness comes from YIELDING between units of work (checkpoint()),
+ * not from a short deadline — the event loop stays live for the whole pass
+ * regardless of duration. So this cap is a generous runaway-guard set above the
+ * time a normal multi-page scanned vendor report needs (empirically ~45s for a
+ * 5-page Physio-PS report incl. the high-DPI summary refine).
+ */
+const DEFAULT_OCR_DEADLINE_MS = 60_000;
+
+/** Options shared by the OCR entry points, incl. cooperative cancellation. */
+export interface OcrRunOpts {
+  dpi?: number;
+  maxPages?: number;
+  summaryDpi?: number;
+  /** Hard wall-clock budget in ms (default DEFAULT_OCR_DEADLINE_MS). */
+  deadlineMs?: number;
+  /** Cooperative cancel — when it aborts, OCR stops at the next checkpoint. */
+  signal?: AbortSignal;
+  /**
+   * Test-only injection seam. Lets a deterministic test drive the deadline /
+   * yield / cancel behaviour without the heavy (and slow, non-mockable via the
+   * anti-bundler dynamic import) real render+OCR stack. Never set in production.
+   */
+  __deps?: {
+    rasterize?: typeof rasterizePdf;
+    makeWorker?: () => Promise<any | null>;
+  };
+}
+
+class OcrAbortError extends Error {
+  constructor(public readonly kind: "deadline" | "cancelled") {
+    super(kind === "deadline" ? "OCR deadline exceeded" : "OCR cancelled");
+    this.name = "OcrAbortError";
+  }
+}
+
+/**
+ * Yield control back to the event loop, and enforce deadline/cancel. Called at
+ * every coarse checkpoint (between pages, between refine cells) so a long OCR
+ * pass NEVER blocks the main thread for more than one unit of work — the browser
+ * stays responsive under `vercel dev`. Throws OcrAbortError when the budget is
+ * spent or the caller aborted, which the orchestrator catches to return a
+ * partial-but-honest result.
+ */
+async function checkpoint(deadline: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new OcrAbortError("cancelled");
+  if (Date.now() >= deadline) throw new OcrAbortError("deadline");
+  // setImmediate drains the microtask queue AND lets pending I/O (Vite asset
+  // requests, HMR) run before the next CPU-heavy recognize() call.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  if (signal?.aborted) throw new OcrAbortError("cancelled");
+}
 
 /**
  * Dynamic import that a bundler CANNOT statically analyze, so esbuild/@vercel/node
@@ -104,7 +171,7 @@ async function externalImport(spec: string): Promise<any> {
  */
 export async function rasterizePdf(
   buffer: Buffer,
-  opts: { dpi?: number; maxPages?: number } = {},
+  opts: { dpi?: number; maxPages?: number; deadlineMs?: number; signal?: AbortSignal } = {},
 ): Promise<Array<{ page: number; png: Buffer; width: number; height: number }>> {
   const dpi = opts.dpi ?? DEFAULT_DPI;
   const scale = dpi / 72;
@@ -169,7 +236,12 @@ export async function rasterizePdf(
 
   const out: Array<{ page: number; png: Buffer; width: number; height: number }> = [];
   const limit = Math.min(doc.numPages, opts.maxPages ?? doc.numPages);
+  // Rendering each page is CPU-bound; yield to the loop between pages so the dev
+  // server stays responsive, and honour any deadline/cancel from the caller.
+  const rasterDeadline = opts.deadlineMs != null ? Date.now() + opts.deadlineMs : Number.POSITIVE_INFINITY;
   for (let p = 1; p <= limit; p++) {
+    if (opts.signal?.aborted || Date.now() >= rasterDeadline) break;
+    if (p > 1) await new Promise<void>((resolve) => setImmediate(resolve));
     const page = await doc.getPage(p);
     const viewport = page.getViewport({ scale });
     const width = Math.ceil(viewport.width);
@@ -256,6 +328,8 @@ async function refineSummaryCells(
   parseMod: any,
   raster: { png: Buffer; width: number; height: number },
   coarse: { text: string; confidence: number; words: OcrWord[] },
+  deadline = Number.POSITIVE_INFINITY,
+  signal?: AbortSignal,
 ): Promise<OcrWord[]> {
   const page: OcrPage = {
     page: 2,
@@ -307,6 +381,11 @@ async function refineSummaryCells(
   const SCALE = 3; // upscale small crops for the OCR engine
 
   for (const { L, y } of rowYs) {
+    // Yield between rows and stop early if the budget is spent / caller cancelled.
+    // Whatever cells were refined so far are still returned (merged below) — the
+    // rest fall back to the coarse high-DPI words, staying honest.
+    if (signal?.aborted || Date.now() >= deadline) break;
+    await new Promise<void>((resolve) => setImmediate(resolve));
     for (const c of cols) {
       const cxCenter = colX[c.key];
       if (cxCenter == null) continue;
@@ -427,11 +506,23 @@ export async function ocrImage(
  */
 export async function ocrPdf(
   buffer: Buffer,
-  opts: { dpi?: number; maxPages?: number; summaryDpi?: number } = {},
+  opts: OcrRunOpts = {},
 ): Promise<OcrResult> {
+  const deadlineMs = opts.deadlineMs ?? DEFAULT_OCR_DEADLINE_MS;
+  const deadline = Date.now() + deadlineMs;
+  const signal = opts.signal;
+
+  const rasterize = opts.__deps?.rasterize ?? rasterizePdf;
+  const makeWorker = opts.__deps?.makeWorker ?? makeOcrWorker;
+
   let rasters: Array<{ page: number; png: Buffer; width: number; height: number }>;
   try {
-    rasters = await rasterizePdf(buffer, opts);
+    rasters = await rasterize(buffer, {
+      dpi: opts.dpi,
+      maxPages: opts.maxPages,
+      deadlineMs,
+      signal,
+    });
   } catch (err: any) {
     return { ocrAvailable: false, pages: [], reason: `rasterize failed: ${err?.message ?? err}` };
   }
@@ -445,7 +536,7 @@ export async function ocrPdf(
 
   // One worker for the whole document — a tesseract WASM worker is expensive to
   // spin up, so we reuse it across pages instead of per-page create/terminate.
-  const worker = await makeOcrWorker();
+  const worker = await makeWorker();
   if (!worker) {
     return {
       ocrAvailable: false,
@@ -455,8 +546,11 @@ export async function ocrPdf(
   }
 
   const pages: OcrPage[] = [];
+  let truncated: OcrResult["truncated"];
   try {
     for (const r of rasters) {
+      // Yield + enforce deadline/cancel BEFORE each CPU-heavy recognize().
+      await checkpoint(deadline, signal);
       const res = await recognizeWith(worker, r.png);
       pages.push({
         page: r.page,
@@ -477,45 +571,71 @@ export async function ocrPdf(
     // ratios keep reading the default-DPI copy — high DPI can crop/miss the
     // ratio header block, so we must NOT discard the default OCR. Best-effort:
     // any failure simply leaves the default pages untouched.
+    //
+    // This refine pass is the single most expensive stage (a 600-DPI re-raster +
+    // ~70 cell crops × 2 thresholds) and is REQUIRED for accurate per-phase grid
+    // values on scanned reports, so we always attempt it when a summary page is
+    // present — but only if there is enough remaining budget to finish it. If the
+    // budget is too low we skip it (rather than blow the deadline) and the grid
+    // simply keeps the coarse base-DPI reads; unresolved cells stay ABSENT, never
+    // guessed. Every row inside refine also checkpoints the deadline/cancel.
     const summaryDpi = opts.summaryDpi ?? 600;
     const baseDpi = opts.dpi ?? DEFAULT_DPI;
-    if (summaryDpi > baseDpi) {
-      const summaryIdx = pages.findIndex((p) => /Numerical\s*Summary/i.test(p.text ?? ""));
-      if (summaryIdx >= 0) {
-        const pageNo = pages[summaryIdx].page;
-        try {
-          const hi = await rasterizePdf(buffer, { dpi: summaryDpi, maxPages: pageNo });
-          const hiRaster = hi.find((r) => r.page === pageNo);
-          if (hiRaster) {
-            const hiRes = await recognizeWith(worker, hiRaster.png);
-            if ((hiRes.words?.length ?? 0) > 0 && /Numerical\s*Summary/i.test(hiRes.text ?? "")) {
-              // Precision cell-crop re-OCR of the grid (best-effort). Needs the
-              // canvas module (for cropping) and the geometry helper.
-              let words = hiRes.words;
-              try {
-                const canvasMod = await externalImport("@napi-rs/canvas");
-                const parseMod = await import("./vendorOcrParse.js");
-                words = await refineSummaryCells(worker, canvasMod, parseMod, hiRaster, hiRes);
-              } catch {
-                /* fall back to coarse high-DPI words */
-              }
-              pages.push({
-                page: pageNo,
-                text: hiRes.text,
-                confidence: hiRes.confidence,
-                words,
-                width: hiRaster.width,
-                height: hiRaster.height,
-              });
+    // Need enough remaining budget for the high-DPI raster + refine, else skip.
+    const REFINE_MIN_BUDGET_MS = 8_000;
+    const budgetLeft = deadline - Date.now();
+    const summaryIdx = pages.findIndex((p) => /Numerical\s*Summary/i.test(p.text ?? ""));
+    if (
+      summaryDpi > baseDpi &&
+      summaryIdx >= 0 &&
+      budgetLeft >= REFINE_MIN_BUDGET_MS &&
+      !signal?.aborted
+    ) {
+      const pageNo = pages[summaryIdx].page;
+      try {
+        const hi = await rasterize(buffer, {
+          dpi: summaryDpi,
+          maxPages: pageNo,
+          deadlineMs: budgetLeft,
+          signal,
+        });
+        const hiRaster = hi.find((r) => r.page === pageNo);
+        if (hiRaster) {
+          await checkpoint(deadline, signal);
+          const hiRes = await recognizeWith(worker, hiRaster.png);
+          if ((hiRes.words?.length ?? 0) > 0 && /Numerical\s*Summary/i.test(hiRes.text ?? "")) {
+            // Precision cell-crop re-OCR of the grid (best-effort). Needs the
+            // canvas module (for cropping) and the geometry helper.
+            let words = hiRes.words;
+            try {
+              const canvasMod = await externalImport("@napi-rs/canvas");
+              const parseMod = await import("./vendorOcrParse.js");
+              words = await refineSummaryCells(worker, canvasMod, parseMod, hiRaster, hiRes, deadline, signal);
+            } catch {
+              /* fall back to coarse high-DPI words */
             }
+            pages.push({
+              page: pageNo,
+              text: hiRes.text,
+              confidence: hiRes.confidence,
+              words,
+              width: hiRaster.width,
+              height: hiRaster.height,
+            });
           }
-        } catch {
-          /* keep default-DPI OCR only */
         }
+      } catch (err) {
+        // A deadline/cancel during refine is not fatal — keep the base pages.
+        if (err instanceof OcrAbortError) truncated = err.kind;
+        /* else keep default-DPI OCR only */
       }
     }
+  } catch (err) {
+    // Deadline/cancel during the base page loop: return the pages read so far.
+    if (err instanceof OcrAbortError) truncated = err.kind;
+    else throw err;
   } finally {
     await worker.terminate();
   }
-  return { ocrAvailable: true, pages };
+  return { ocrAvailable: true, pages, ...(truncated ? { truncated } : {}) };
 }

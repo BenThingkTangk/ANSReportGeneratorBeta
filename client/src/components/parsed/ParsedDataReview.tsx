@@ -16,7 +16,7 @@
  */
 import type { AnsStudy } from "@shared/ansStudy";
 import type { DiagnosticSummary } from "@shared/diagnosticSummary";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { ArrowLeft, RefreshCw, Download, FileCheck2, Sparkles } from "lucide-react";
 
 import { ConfidenceGauge } from "./ConfidenceGauge";
@@ -57,7 +57,11 @@ export function ParsedDataReview({
   onVendorMetrics,
   onVendorExtraction,
 }: Props) {
-  const canGenerate = !!ansStudy && !!file;
+  // Block Generate Report while a vendor PDF is being read/OCR'd, so a report is
+  // never generated from a half-extracted attachment. Clearing the attachment
+  // (cancel/remove) drops the flag and re-enables generation.
+  const [vendorBusy, setVendorBusy] = useState(false);
+  const canGenerate = !!ansStudy && !!file && !vendorBusy;
 
   const handleDownloadJson = useCallback(() => {
     if (!ansStudy) return;
@@ -162,6 +166,8 @@ export function ParsedDataReview({
               type="button"
               onClick={onGenerate}
               disabled={!canGenerate}
+              title={vendorBusy ? "Finishing vendor PDF extraction… cancel it to generate now" : undefined}
+              aria-disabled={!canGenerate}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs uppercase tracking-[0.14em] font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed"
               style={{
                 background: canGenerate
@@ -247,6 +253,7 @@ export function ParsedDataReview({
             onVendorMetrics?.(Object.keys(map).length > 0 ? map : null);
           }}
           onExtraction={(extraction, meta) => onVendorExtraction?.(extraction, meta)}
+          onBusyChange={setVendorBusy}
         />
       </div>
 
