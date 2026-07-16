@@ -14,6 +14,14 @@ dist/
 build_output/
 .vercel
 
+# Local secrets for `vercel dev` / manual QA — NEVER commit real credentials.
+# `.env.example` (placeholders only) is intentionally tracked; everything else
+# that could hold a real value is ignored. `vercel dev` reads `.env`/`.env.build`;
+# `vercel env pull` writes `.env.local` — both must stay untracked.
+.env
+.env.*
+!.env.example
+
 # .ans fixtures contain PHI — never commit
 fixtures/*.ans
 
