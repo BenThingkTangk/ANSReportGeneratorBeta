@@ -766,3 +766,66 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .ps-signal-atmosphere { background-attachment: scroll; }
 }
+
+/* ============================================================================
+   PRINT / PDF EXPORT
+   ----------------------------------------------------------------------------
+   The report is exported via the browser's native print-to-PDF (window.print),
+   which renders exactly what is on screen — no html2canvas rasterization, so no
+   clipped charts and no "unsupported value" surprises. These rules:
+     • hide interactive-only chrome (.no-print) — the back button, view toggle,
+       theme toggle, Ask ATOM launcher/drawer, export button itself;
+     • force a light, ink-friendly surface so provenance/confidence text and the
+       red/blue trend + ECG strokes stay legible on paper;
+     • prevent charts, cards, the ECG strip, and findings from splitting across
+       page breaks (break-inside: avoid);
+     • let recharts SVG scale to the printable width instead of clipping.
+   ========================================================================== */
+@media print {
+  /* Interactive-only chrome never prints. */
+  .no-print { display: none !important; }
+
+  html, body {
+    background: #ffffff !important;
+    color: #0b0b0f !important;
+  }
+
+  /* Neutralize the deep-space gradients + glass blur for paper. */
+  .ps-bg-deep,
+  .ps-signal-atmosphere {
+    background: #ffffff !important;
+  }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+
+  /* Sticky top bars must not float over content on paper. */
+  .sticky { position: static !important; }
+
+  /* Keep clinical units intact across page breaks. */
+  .print-block,
+  .recharts-responsive-container,
+  svg,
+  section,
+  article,
+  figure,
+  table {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Recharts: let the SVG use the full printable width, never clip. */
+  .recharts-responsive-container { width: 100% !important; }
+  .recharts-wrapper, .recharts-surface { max-width: 100% !important; }
+
+  /* Expand any scroll containers so nothing is hidden behind overflow. */
+  .overflow-auto, .overflow-y-auto, .overflow-x-auto, .overflow-hidden {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  @page { margin: 12mm; }
+}

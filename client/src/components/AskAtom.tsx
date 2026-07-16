@@ -458,7 +458,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
         onClick={() => setOpen(o => !o)}
         whileHover={{ scale: 1.08 }}
         whileTap={{ scale: 0.95 }}
-        className={`fixed right-4 sm:right-6 w-12 h-12 sm:w-14 sm:h-14 rounded-full ${
+        className={`no-print fixed right-4 sm:right-6 w-12 h-12 sm:w-14 sm:h-14 rounded-full ${
           controlled ? "hidden sm:flex" : "flex"
         } items-center justify-center shadow-xl z-50 group`}
         style={{
@@ -490,7 +490,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             transition={{ type: "spring", stiffness: 360, damping: 30 }}
-            className="fixed right-3 sm:right-6 w-[min(340px,calc(100vw-1.5rem))] sm:w-[380px] rounded-2xl flex flex-col overflow-hidden z-50"
+            className="no-print fixed right-3 sm:right-6 w-[min(340px,calc(100vw-1.5rem))] sm:w-[380px] rounded-2xl flex flex-col overflow-hidden z-50"
             style={{
               bottom: "calc(env(safe-area-inset-bottom, 0px) + 5rem)",
               height: "min(560px, calc(100vh - 140px))",

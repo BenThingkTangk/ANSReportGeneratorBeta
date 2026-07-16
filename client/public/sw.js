@@ -14,7 +14,10 @@
  * fails loudly (handled by the app's existing resilientUpload error states)
  * rather than serving stale clinical data.
  */
-const VERSION = "humanos-ans-shell-v1";
+// Bump on each shipped web build so the activate handler purges the previous
+// shell cache and clients pick up the latest bundle (v2: Colombo rule 1.11 +
+// baroreflex validator, report print/PDF export, experimental cluster decoder).
+const VERSION = "humanos-ans-shell-v2";
 const SHELL = [
   "./",
   "./index.html",
