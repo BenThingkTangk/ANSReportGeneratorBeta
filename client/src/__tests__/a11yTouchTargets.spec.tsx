@@ -4,18 +4,23 @@
  * Playwright at 390×844 flagged (a) `ask-atom-input` with no accessible name,
  * and (b) several controls below the WCAG 2.5.5 / iOS-HIG 44×44 CSS-px minimum.
  *
- * The visual size of the small icon buttons is intentionally compact, so the
- * hit region is expanded with an invisible, layout-neutral `.touch-target`
- * overlay (see `client/src/index.css`). jsdom has no layout engine, so we cannot
- * measure the rendered 44px box here; instead we assert the *contract* that
- * produces it:
- *   1. every enumerated control carries the `touch-target` class (whose CSS
- *      guarantees the ≥44px ::after hit region), and
+ * Small icon buttons stay visually compact, so under a coarse pointer the
+ * `.touch-target` utility grows the element's OWN min box to ≥44px (see
+ * `client/src/index.css`). jsdom has NO layout engine, so this suite deliberately
+ * asserts only the two things jsdom CAN see:
+ *   1. every enumerated control carries the `touch-target` class, and
  *   2. every enumerated control exposes a non-empty accessible name
- *      (aria-label or text content) — the input's missing label is the headline
+ *      (aria-label or text content) — the input's missing label was the headline
  *      finding.
- * The CSS rule itself is asserted separately by reading index.css so a silent
- * class-name/utility drift can't pass this suite.
+ * It also checks that the shipped CSS grows the element's own min-width/height
+ * (NOT an ::after overlay) under `(pointer: coarse)` — a pseudo-element never
+ * enlarges the measured border box, which was the real bug.
+ *
+ * IMPORTANT: class presence is NOT proof of a 44px hit box (that was the
+ * false-assurance regression). The REAL rendered box is measured in a headless
+ * browser at 390×844 with a coarse pointer by
+ * `api/_ans/__tests__/touchTargetsBrowser.spec.ts` — that is the authoritative
+ * layout test; this one only guards the class+name contract.
  *
  * Uses the de-identified waveform fixture — never PHI. Heavy WebGL/motion libs
  * are stubbed; the voice hook is mocked so the composer renders deterministically.
@@ -121,12 +126,19 @@ describe("a11y — touch targets + accessible names (390×844)", () => {
   });
   afterEach(() => rtlCleanup());
 
-  it("the .touch-target CSS utility defines a ≥44px hit region", () => {
+  it("the .touch-target CSS grows the element's OWN min box ≥44px under coarse pointer", () => {
     const css = readFileSync(path.resolve(__dirname, "../index.css"), "utf8");
-    // The utility must exist and pin both dimensions to at least 44px.
-    expect(css).toMatch(/\.touch-target\s*\{[^}]*position:\s*relative/);
-    expect(css).toMatch(/\.touch-target::after\s*\{[\s\S]*?width:\s*max\(100%,\s*44px\)/);
-    expect(css).toMatch(/\.touch-target::after\s*\{[\s\S]*?height:\s*max\(100%,\s*44px\)/);
+    // Must gate on a coarse pointer (no desktop bloat) and pin the ELEMENT's own
+    // min-width/min-height to ≥44px — NOT an ::after overlay, which never enlarges
+    // the measured border box (the real bug). The authoritative rendered-box
+    // check lives in api/_ans/__tests__/touchTargetsBrowser.spec.ts.
+    const coarse = css.match(/@media\s*\(pointer:\s*coarse\)\s*\{[\s\S]*?\.touch-target\s*\{[\s\S]*?\}/);
+    expect(coarse, "no @media (pointer: coarse) .touch-target rule").toBeTruthy();
+    const block = coarse![0];
+    expect(block).toMatch(/min-width:\s*44px/);
+    expect(block).toMatch(/min-height:\s*44px/);
+    // Guard against the discredited overlay approach silently returning.
+    expect(css).not.toMatch(/\.touch-target::after\s*\{[\s\S]*?width:\s*max\(100%,\s*44px\)/);
   });
 
   it("ask-atom-input has an accessible name (was the reported gap)", async () => {
