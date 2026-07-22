@@ -33,6 +33,24 @@ function classLabel(c: Cls): string {
   return "Within norm";
 }
 
+/** Short human label + color for a metric-provenance method. */
+function provenanceBadge(method: string | undefined): { label: string; color: string } | null {
+  switch (method) {
+    case "vendor_reported":
+      return { label: "Vendor-reported", color: "hsl(160 60% 55%)" };
+    case "derived_from_vendor":
+      return { label: "Derived from vendor", color: "hsl(190 70% 55%)" };
+    case "measured":
+      return { label: "Measured", color: "hsl(160 60% 55%)" };
+    case "computed":
+      return { label: "Computed", color: "hsl(48 90% 60%)" };
+    case "unavailable":
+      return { label: "Not assessed", color: "hsl(var(--muted-foreground))" };
+    default:
+      return null;
+  }
+}
+
 /**
  * Resting baseline panel — surfaces the four key Phase A spectral metrics
  * (LFa, RFa, sympathovagal balance LFa/RFa, FRF) with a clear in/out-of-norm
@@ -53,17 +71,19 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
       ? A.LFa / A.RFa
       : null;
 
+  const prov = A.provenance;
   const cards: {
     label: string;
     value: number | null;
     unit: string;
     norm: { lo: number; hi: number };
     explainer?: string;
+    method?: string;
   }[] = [
-    { label: "LFa (Sympathetic)", value: spectralOk ? A.LFa : null, unit: "bpm²", norm: NORMS.LFa, explainer: "Low-frequency wavelet power at rest" },
-    { label: "RFa (Parasympathetic)", value: spectralOk ? A.RFa : null, unit: "bpm²", norm: NORMS.RFa, explainer: "Respiratory-frequency wavelet power at rest" },
-    { label: "Sympathovagal Balance (LFa/RFa)", value: sb, unit: "", norm: NORMS.SB, explainer: "Resting LFa/RFa balance ratio" },
-    { label: "FRF (Fundamental Respiratory Freq.)", value: spectralOk ? A.FRF : null, unit: "Hz", norm: NORMS.FRF, explainer: "Patient's natural respiratory frequency at rest" },
+    { label: "LFa (Sympathetic)", value: spectralOk ? A.LFa : null, unit: "bpm²", norm: NORMS.LFa, explainer: "Low-frequency wavelet power at rest", method: prov?.LFa?.method },
+    { label: "RFa (Parasympathetic)", value: spectralOk ? A.RFa : null, unit: "bpm²", norm: NORMS.RFa, explainer: "Respiratory-frequency wavelet power at rest", method: prov?.RFa?.method },
+    { label: "Sympathovagal Balance (LFa/RFa)", value: sb, unit: "", norm: NORMS.SB, explainer: "Resting LFa/RFa balance ratio", method: prov?.SB?.method },
+    { label: "FRF (Fundamental Respiratory Freq.)", value: spectralOk ? A.FRF : null, unit: "Hz", norm: NORMS.FRF, explainer: "Patient's natural respiratory frequency at rest", method: prov?.FRF?.method },
   ];
 
   return (
@@ -110,6 +130,20 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
               <div className="mt-1 text-[10px]" style={{ color }}>
                 {cls ? `${classLabel(cls)} · norm ${c.norm.lo}–${c.norm.hi}` : "Not assessed"}
               </div>
+              {(() => {
+                const badge = provenanceBadge(c.method);
+                if (!badge) return null;
+                return (
+                  <div
+                    className="mt-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide"
+                    style={{ color: badge.color, background: `${badge.color.replace(")", " / 0.12)")}` }}
+                    data-testid={`baseline-provenance-${c.label.split(" ")[0].toLowerCase()}`}
+                    data-method={c.method}
+                  >
+                    {badge.label}
+                  </div>
+                );
+              })()}
               {isOut && c.explainer && (
                 <div className="mt-1 text-[10px] text-muted-foreground/70 leading-snug">
                   {c.explainer}

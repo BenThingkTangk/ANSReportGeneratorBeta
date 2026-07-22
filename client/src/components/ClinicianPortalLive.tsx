@@ -15,6 +15,7 @@ import type { VendorReportExtraction } from "@shared/vendorExtraction";
 import { apiRequest } from "@/lib/queryClient";
 import { buildClinicianSynopsis } from "@shared/deterministicSynopsis";
 import { VendorFamiliarReport } from "./clinician/VendorFamiliarReport";
+import { VendorReconciliationBanner } from "./VendorReconciliationBanner";
 import { ClinicianHeader } from "./clinician/ClinicianHeader";
 import { ClinicianSynopsis } from "./clinician/ClinicianSynopsis";
 import { DataQualityPanel } from "./clinician/DataQualityPanel";
@@ -127,6 +128,8 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
       data-testid="clinician-portal"
     >
       <ClinicianHeader report={report} />
+
+      <VendorReconciliationBanner report={report} />
 
       {hasVendor && (
         <div className="flex items-center justify-between gap-3 flex-wrap">

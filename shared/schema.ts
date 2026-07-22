@@ -288,6 +288,16 @@ export interface ANSReport {
   indications?: Indication[];
   /** PR2 — Deterministic scoring + confidence summary (back-compat optional). */
   diagnosticSummary?: import("./diagnosticSummary").DiagnosticSummary;
+  /** Warnings when a paired vendor PDF's identity did NOT reconcile. */
+  vendorReconciliationWarnings?: string[];
+  /** Paired vendor-PDF identity reconciliation status (drives the matched badge). */
+  vendorReconciliation?: {
+    status: "matched" | "mismatch" | "malformed";
+    matchedName?: string;
+    matchedDate?: string;
+    checks?: { name: boolean | null; testDate: boolean | null; dob: boolean | null };
+    reason?: string;
+  };
 }
 
 export interface UploadResponse {

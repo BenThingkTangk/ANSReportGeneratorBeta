@@ -383,7 +383,7 @@ function StandResponse({ mpg }: { mpg: MultiParameterGraphical }) {
             cursor={{ strokeDasharray: "3 3" }}
             contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
           />
-          <Scatter data={data} fill="hsl(244 114 182)">
+          <Scatter data={data} fill="hsl(244 84% 68%)">
             {data.map((d, i) => (
               <Cell key={i} fill={d.label === "Stand LFa" ? "hsl(0 72% 51%)" : "hsl(217 91% 55%)"} />
             ))}

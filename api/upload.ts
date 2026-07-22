@@ -38,6 +38,19 @@ export interface VendorReportedMetrics {
   DBP?: number;
 }
 
+/**
+ * Result of reconciling a paired vendor-PDF's identity against the parsed .ans.
+ * "matched" is the positive status the clinician UI shows as a "Vendor report
+ * matched" badge; the others explain why vendor values were withheld.
+ */
+export interface VendorReconciliationStatus {
+  status: "matched" | "mismatch" | "malformed";
+  matchedName?: string;
+  matchedDate?: string;
+  checks?: { name: boolean | null; testDate: boolean | null; dob: boolean | null };
+  reason?: string;
+}
+
 export const config = {
   api: {
     bodyParser: false,
@@ -293,6 +306,12 @@ interface ANSReport {
    * patients/visits — never silently ignored.
    */
   vendorReconciliationWarnings?: string[];
+  /**
+   * Positive/negative reconciliation status for the paired vendor PDF. Drives
+   * the "Vendor report matched" badge (status="matched") or a mismatch warning.
+   * Absent when no vendor metrics were supplied.
+   */
+  vendorReconciliation?: VendorReconciliationStatus;
 }
 
 // ---- Multipart Parser -------------------------------------------------------
@@ -2485,6 +2504,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // overrides one patient's study with another's vendor numbers.
     let vendorMetrics: VendorReportedMetrics | undefined;
     const vendorWarnings: string[] = [];
+    let vendorReconciliation: VendorReconciliationStatus | undefined;
     const vmHeader = req.headers["x-vendor-metrics"];
     if (typeof vmHeader === "string" && vmHeader.trim()) {
       try {
@@ -2520,19 +2540,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           );
           if (recon.ok) {
             vendorMetrics = candidate;
+            vendorReconciliation = {
+              status: "matched",
+              matchedName: `${patientData.firstName} ${patientData.lastName}`.trim(),
+              matchedDate: patientData.testDate,
+              checks: recon.checks,
+            };
           } else {
             vendorWarnings.push(recon.reason ?? "Vendor report identity could not be reconciled with the uploaded .ans; vendor values were not applied.");
+            vendorReconciliation = { status: "mismatch", checks: recon.checks, reason: recon.reason };
             console.warn("[upload] vendor identity reconciliation FAILED:", recon.reason);
           }
         }
       } catch {
         console.warn("[upload] ignoring malformed x-vendor-metrics header");
         vendorWarnings.push("The paired vendor-metrics payload was malformed and was ignored.");
+        vendorReconciliation = { status: "malformed" };
       }
     }
     const report = generateColomboReport(patientData, vendorMetrics);
     if (vendorWarnings.length > 0) {
       (report as { vendorReconciliationWarnings?: string[] }).vendorReconciliationWarnings = vendorWarnings;
+    }
+    if (vendorReconciliation) {
+      (report as { vendorReconciliation?: typeof vendorReconciliation }).vendorReconciliation = vendorReconciliation;
     }
     // Send only a preview of the raw ECG to the client — the full waveform
     // stays server-side (we'd blow past the Vercel payload limit otherwise).
