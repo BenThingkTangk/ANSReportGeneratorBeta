@@ -277,7 +277,12 @@ export function AdminLayout({ children, title }: AdminLayoutProps) {
             </p>
           )}
           <button
-            onClick={() => signOut()}
+            data-testid="admin-logout"
+            onClick={async () => {
+              await signOut();
+              // Return to the login form after clearing the session.
+              window.location.hash = "#/admin/login";
+            }}
             style={{
               fontSize: 11,
               color: "var(--color-text-muted)",

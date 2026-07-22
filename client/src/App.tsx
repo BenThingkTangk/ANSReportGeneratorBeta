@@ -10,9 +10,9 @@ import NotFound from "@/pages/not-found";
 import { BuildInfo } from "@/components/BuildInfo";
 
 // Admin pages
-// NOTE: the two-step (perimeter gateway → magic-link) login lives in
-// components/AdminGatewayLoginPage.tsx because pages/admin/login.tsx is
-// read-only in this environment. Same route, superset behaviour.
+// NOTE: the admin username/password sign-in lives in
+// components/AdminGatewayLoginPage.tsx; pages/admin/login.tsx re-exports it so
+// there is a single source of truth for the login form.
 import AdminLoginPage from "@/components/AdminGatewayLoginPage";
 import KnowledgePage from "@/pages/admin/knowledge";
 import KnowledgeDetailPage from "@/pages/admin/knowledge/[id]";

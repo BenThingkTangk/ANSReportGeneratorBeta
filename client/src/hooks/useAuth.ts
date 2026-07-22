@@ -1,15 +1,36 @@
 /**
  * client/src/hooks/useAuth.ts
- * Supabase magic-link auth session + admin role lookup via /api/admin/me.
+ *
+ * Cookie-session admin auth. Replaces the former Supabase magic-link flow with a
+ * username/password sign-in backed by an HttpOnly session cookie:
+ *   • POST /api/admin/login    → sets the cookie (username/password)
+ *   • GET  /api/admin/session  → { configured, authenticated, username }
+ *   • POST /api/admin/logout   → clears the cookie
+ *
+ * No tokens or auth state are ever placed in localStorage/sessionStorage — the
+ * browser holds only the HttpOnly cookie, which JS cannot read. Same-origin
+ * fetches send it automatically (credentials: "same-origin").
+ *
+ * The public shape (session/email/role/isAdmin/isLoading + signIn/signOut) is
+ * preserved so AdminGuard, AdminLayout, and every admin page keep working with
+ * no edits. `session` is a lightweight marker object (not a Supabase Session)
+ * purely so existing `!!session` / `session?.access_token` guards stay truthy
+ * for an authenticated admin; the HttpOnly cookie — not this object — carries
+ * the real auth.
  */
 import { useState, useEffect, useCallback } from "react";
-import type { Session } from "@supabase/supabase-js";
-import getSupabase from "@/lib/supabase";
 
 export type UserRole = "super_admin" | "clinical_admin" | "reviewer" | "viewer" | null;
 
+/** Minimal stand-in for the old Supabase Session so existing guards still work. */
+export interface AdminSessionMarker {
+  authenticated: true;
+  /** Legacy field some callers read; cookie is HttpOnly so this is a sentinel. */
+  access_token: "cookie";
+}
+
 export interface AuthState {
-  session: Session | null;
+  session: AdminSessionMarker | null;
   email: string | null;
   role: UserRole;
   isAdmin: boolean;
@@ -18,14 +39,34 @@ export interface AuthState {
 }
 
 export interface UseAuthReturn extends AuthState {
-  signInWithMagicLink: (email: string) => Promise<{ error: string | null }>;
+  /** Username/password sign-in. Returns an error string on failure, else null. */
+  signIn: (username: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
-  refreshRole: () => Promise<void>;
+  refresh: () => Promise<void>;
+}
+
+async function readSession(): Promise<Partial<AuthState>> {
+  const res = await fetch("/api/admin/session", {
+    method: "GET",
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) {
+    return { session: null, email: null, role: null, isAdmin: false };
+  }
+  const json = await res.json();
+  if (json?.authenticated) {
+    return {
+      session: { authenticated: true, access_token: "cookie" },
+      email: json.username ?? "admin",
+      role: "super_admin",
+      isAdmin: true,
+    };
+  }
+  return { session: null, email: null, role: null, isAdmin: false };
 }
 
 export function useAuth(): UseAuthReturn {
-  const supabase = getSupabase();
-
   const [state, setState] = useState<AuthState>({
     session: null,
     email: null,
@@ -35,113 +76,67 @@ export function useAuth(): UseAuthReturn {
     error: null,
   });
 
-  const fetchRole = useCallback(
-    async (session: Session | null) => {
-      if (!session?.access_token) {
-        setState((s) => ({
-          ...s,
-          session: null,
-          email: null,
-          role: null,
-          isAdmin: false,
-          isLoading: false,
-        }));
-        return;
-      }
-
-      try {
-        const res = await fetch("/api/admin/me", {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
-        if (!res.ok) {
-          setState((s) => ({
-            ...s,
-            session,
-            email: session.user?.email ?? null,
-            role: null,
-            isAdmin: false,
-            isLoading: false,
-          }));
-          return;
-        }
-        const json = await res.json();
-        setState({
-          session,
-          email: json.email ?? session.user?.email ?? null,
-          role: json.role ?? null,
-          isAdmin: json.isAdmin ?? false,
-          isLoading: false,
-          error: null,
-        });
-      } catch {
-        setState((s) => ({
-          ...s,
-          session,
-          email: session.user?.email ?? null,
-          role: null,
-          isAdmin: false,
-          isLoading: false,
-        }));
-      }
-    },
-    []
-  );
+  const refresh = useCallback(async () => {
+    try {
+      const next = await readSession();
+      setState((s) => ({ ...s, ...next, isLoading: false, error: null }));
+    } catch {
+      setState((s) => ({
+        ...s,
+        session: null,
+        email: null,
+        role: null,
+        isAdmin: false,
+        isLoading: false,
+      }));
+    }
+  }, []);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      fetchRole(session);
-    });
+    void refresh();
+  }, [refresh]);
 
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      fetchRole(session);
-    });
-
-    return () => subscription.unsubscribe();
-  }, [supabase, fetchRole]);
-
-  const signInWithMagicLink = useCallback(
-    async (email: string): Promise<{ error: string | null }> => {
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          emailRedirectTo: `${window.location.origin}/#/admin`,
-        },
-      });
-      return { error: error?.message ?? null };
+  const signIn = useCallback(
+    async (username: string, password: string): Promise<{ error: string | null }> => {
+      try {
+        const res = await fetch("/api/admin/login", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json?.success) {
+          return { error: json?.error ?? "Sign-in failed. Please try again." };
+        }
+        await refresh();
+        return { error: null };
+      } catch {
+        return { error: "Network error. Please try again." };
+      }
     },
-    [supabase]
+    [refresh],
   );
 
   const signOut = useCallback(async () => {
-    // Clear the perimeter gateway session (HttpOnly cookie) first, then the
-    // Supabase magic-link session. Best-effort: never block sign-out on the
-    // gateway call failing.
     try {
-      await fetch("/api/admin/gateway", {
-        method: "DELETE",
+      await fetch("/api/admin/logout", {
+        method: "POST",
         credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
       });
     } catch {
       /* ignore network errors during logout */
     }
-    await supabase.auth.signOut();
-  }, [supabase]);
+    setState((s) => ({
+      ...s,
+      session: null,
+      email: null,
+      role: null,
+      isAdmin: false,
+      isLoading: false,
+    }));
+  }, []);
 
-  const refreshRole = useCallback(async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    await fetchRole(session);
-  }, [supabase, fetchRole]);
-
-  return {
-    ...state,
-    signInWithMagicLink,
-    signOut,
-    refreshRole,
-  };
+  return { ...state, signIn, signOut, refresh };
 }

@@ -1,27 +1,22 @@
 /**
- * AdminGatewayLoginPage — two-step admin sign-in.
+ * AdminGatewayLoginPage — admin console username/password sign-in.
  *
- * Step 1 (perimeter gateway): when the env-configured username + password-hash
- *   gateway is enabled (GET /api/admin/gateway → { configured: true }), the user
- *   must first pass a username/password check that mints an HttpOnly session
- *   cookie. This is defense-in-depth IN FRONT OF Supabase — it never replaces the
- *   magic-link identity or the RLS-backed role check.
- * Step 2 (magic link): the existing Supabase magic-link email entry. This remains
- *   the authoritative identity layer; RLS + AdminGuard still gate every action.
+ * Replaces the former magic-link email flow. A single polished form takes a
+ * username and password, posts them to /api/admin/login (which validates against
+ * ADMIN_USERNAME / ADMIN_PASSWORD server-side and sets an HttpOnly session
+ * cookie), then routes into the admin console. No email/magic-link UI remains.
  *
- * When the gateway is not configured (or the endpoint is unreachable) the page
- * behaves exactly as before — magic-link only. The gateway is strictly opt-in.
+ * Styling matches the existing HumanOS "Deep Space" admin surfaces (ps-glass,
+ * brand cyan, PhysioPS overline). Accessible labels, password reveal toggle,
+ * Enter-key submit, and loading/error states are all present. Stable
+ * data-testids are exposed for tests.
  *
- * NOTE: this lives under components/ (writable) and is routed from App.tsx. It
- * supersedes pages/admin/login.tsx, which is read-only in this environment. The
- * canonical in-place version is staged at
- * proposed-changes/client/src/pages/admin/login.tsx.
+ * Routed from App.tsx at /admin/login. It keeps its historical filename because
+ * pages/admin/login.tsx exists in the tree; App.tsx imports THIS component.
  */
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
-
-type Phase = "checking" | "gateway" | "magiclink";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -54,118 +49,41 @@ const errorStyle: React.CSSProperties = {
 };
 
 export default function AdminGatewayLoginPage() {
-  const { signInWithMagicLink, isAdmin, session } = useAuth();
+  const { signIn, isAdmin, session } = useAuth();
   const [, navigate] = useLocation();
 
-  // Perimeter-gateway step state.
-  const [phase, setPhase] = useState<Phase>("checking");
-  const [gwUsername, setGwUsername] = useState("");
-  const [gwPassword, setGwPassword] = useState("");
-  const [gwLoading, setGwLoading] = useState(false);
-  const [gwError, setGwError] = useState<string | null>(null);
-  // null = probe not finished / unreachable; true/false = server-reported.
-  const [gatewayConfigured, setGatewayConfigured] = useState<boolean | null>(null);
-  const [probeFailed, setProbeFailed] = useState(false);
-
-  // Magic-link step state.
-  const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Decide which step to show: probe the gateway status once on mount.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/admin/gateway", {
-          method: "GET",
-          credentials: "same-origin",
-        });
-        if (!res.ok) throw new Error("probe failed");
-        const json = await res.json();
-        if (cancelled) return;
-        setGatewayConfigured(Boolean(json?.configured));
-        // Show the gateway step only when it is configured AND not yet passed.
-        setPhase(json?.configured && !json?.authenticated ? "gateway" : "magiclink");
-      } catch {
-        // Probe unreachable — surface that explicitly rather than pretending the
-        // username/password gateway feature does not exist.
-        if (!cancelled) {
-          setProbeFailed(true);
-          setGatewayConfigured(null);
-          setPhase("magiclink");
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // If already an authenticated admin, skip straight to the console.
+  // Already authenticated → go straight to the console.
   if (session && isAdmin) {
     navigate("/admin/knowledge");
     return null;
   }
 
-  async function handleGatewaySubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setGwLoading(true);
-    setGwError(null);
-    try {
-      const res = await fetch("/api/admin/gateway", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({
-          username: gwUsername.trim(),
-          password: gwPassword,
-        }),
-      });
-
-      if (res.ok) {
-        // Perimeter cleared — drop the password from memory and advance.
-        setGwPassword("");
-        setPhase("magiclink");
-        return;
-      }
-
-      let message = "Invalid username or password.";
-      try {
-        const json = await res.json();
-        if (res.status === 429) {
-          const secs = Number(json?.retryAfterSec);
-          message =
-            Number.isFinite(secs) && secs > 0
-              ? `Too many attempts. Try again in ${secs} second${secs === 1 ? "" : "s"}.`
-              : "Too many attempts. Please try again later.";
-        } else if (json?.error) {
-          message = json.error;
-        }
-      } catch {
-        /* keep default message */
-      }
-      setGwError(message);
-    } catch {
-      setGwError("Network error. Please try again.");
-    } finally {
-      setGwLoading(false);
-    }
-  }
-
-  async function handleMagicLinkSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
+    if (loading) return;
     setError(null);
-    const result = await signInWithMagicLink(email.trim());
+    if (!username.trim() || !password) {
+      setError("Please enter both username and password.");
+      return;
+    }
+    setLoading(true);
+    const result = await signIn(username.trim(), password);
     setLoading(false);
     if (result.error) {
       setError(result.error);
-    } else {
-      setSent(true);
+      setPassword("");
+      return;
     }
+    navigate("/admin/knowledge");
   }
+
+  const canSubmit = !loading && username.trim().length > 0 && password.length > 0;
 
   return (
     <div
@@ -176,8 +94,11 @@ export default function AdminGatewayLoginPage() {
         backgroundAttachment: "fixed",
       }}
     >
-      <div className="ps-glass p-10 max-w-sm w-full mx-4" style={{ borderRadius: "var(--ps-radius-2xl)" }}>
-        {/* Header */}
+      <div
+        className="ps-glass p-10 max-w-sm w-full mx-4"
+        style={{ borderRadius: "var(--ps-radius-2xl)" }}
+        data-testid="admin-login-card"
+      >
         <div className="mb-8 text-center">
           <div className="ps-overline mb-2" style={{ fontSize: 9 }}>
             PhysioPS × HumanOS
@@ -186,223 +107,101 @@ export default function AdminGatewayLoginPage() {
             Admin Console
           </h1>
           <p style={{ color: "var(--color-text-muted)", fontSize: 13, marginTop: 6 }}>
-            {phase === "gateway"
-              ? "Enter your gateway credentials to continue."
-              : "Sign in with your admin email to continue."}
+            Sign in with your admin username and password.
           </p>
         </div>
 
-        {/* Probing the gateway status */}
-        {phase === "checking" && (
-          <div className="text-center" style={{ padding: "12px 0" }}>
-            <div
-              className="w-8 h-8 rounded-full border-2 animate-spin mx-auto"
-              style={{ borderColor: "var(--color-brand-cyan) transparent transparent transparent" }}
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4" data-testid="admin-login-form">
+          <div>
+            <label htmlFor="admin-username" style={labelStyle}>
+              Username
+            </label>
+            <input
+              id="admin-username"
+              name="username"
+              type="text"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              disabled={loading}
+              required
+              placeholder="admin"
+              style={inputStyle}
+              data-testid="admin-login-username"
             />
-            <p className="ps-text-mono" style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 10 }}>
-              Preparing sign-in…
-            </p>
           </div>
-        )}
 
-        {/* Step 1 — perimeter gateway (username + password) */}
-        {phase === "gateway" && (
-          <form onSubmit={handleGatewaySubmit} className="flex flex-col gap-4">
-            <div>
-              <label htmlFor="gw-username" style={labelStyle}>
-                Username
-              </label>
+          <div>
+            <label htmlFor="admin-password" style={labelStyle}>
+              Password
+            </label>
+            <div style={{ position: "relative" }}>
               <input
-                id="gw-username"
-                type="text"
-                autoComplete="username"
-                value={gwUsername}
-                onChange={(e) => setGwUsername(e.target.value)}
-                required
-                placeholder="admin"
-                style={inputStyle}
-              />
-            </div>
-            <div>
-              <label htmlFor="gw-password" style={labelStyle}>
-                Password
-              </label>
-              <input
-                id="gw-password"
-                type="password"
+                id="admin-password"
+                name="password"
+                type={showPassword ? "text" : "password"}
                 autoComplete="current-password"
-                value={gwPassword}
-                onChange={(e) => setGwPassword(e.target.value)}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={loading}
                 required
                 placeholder="••••••••"
-                style={inputStyle}
+                style={{ ...inputStyle, paddingRight: 44 }}
+                data-testid="admin-login-password"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+                data-testid="admin-login-password-toggle"
+                style={{
+                  position: "absolute",
+                  top: "50%",
+                  right: 8,
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--color-text-muted)",
+                  fontSize: 11,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  padding: 6,
+                }}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
             </div>
-
-            {gwError && <p style={errorStyle}>{gwError}</p>}
-
-            <button
-              type="submit"
-              disabled={gwLoading || !gwUsername.trim() || !gwPassword}
-              className="ps-cta"
-              style={{
-                width: "100%",
-                justifyContent: "center",
-                opacity: gwLoading || !gwUsername.trim() || !gwPassword ? 0.5 : 1,
-                cursor: gwLoading || !gwUsername.trim() || !gwPassword ? "not-allowed" : "pointer",
-              }}
-            >
-              {gwLoading ? "Verifying…" : "Continue"}
-            </button>
-          </form>
-        )}
-
-        {/* Config diagnostic — the username/password gateway is a real feature.
-            When ADMIN_GATEWAY_* env vars are absent (or the probe is unreachable)
-            say so explicitly instead of silently presenting magic-link as if the
-            gateway did not exist. */}
-        {phase === "magiclink" && !sent && gatewayConfigured === false && (
-          <div
-            data-testid="gateway-not-configured"
-            style={{
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: "var(--color-text-secondary)",
-              background: "rgba(234,179,8,0.08)",
-              border: "1px solid rgba(234,179,8,0.28)",
-              borderRadius: 8,
-              padding: "10px 12px",
-              marginBottom: 16,
-            }}
-          >
-            <strong style={{ color: "hsl(45 90% 65%)" }}>
-              Username/password gateway not configured.
-            </strong>{" "}
-            The perimeter gateway is inactive because its server environment
-            variables are unset, so sign-in is falling back to magic-link only. To
-            activate it, set{" "}
-            <code>ADMIN_GATEWAY_USERNAME</code>, <code>ADMIN_GATEWAY_PASSWORD_HASH</code>,
-            and <code>ADMIN_SESSION_SECRET</code> in the Vercel project (see
-            docs/ADMIN_GATEWAY_SETUP.md), then redeploy.
           </div>
-        )}
-        {phase === "magiclink" && !sent && probeFailed && (
-          <div
-            data-testid="gateway-probe-failed"
-            style={{
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: "var(--color-text-secondary)",
-              background: "rgba(239,68,68,0.08)",
-              border: "1px solid rgba(239,68,68,0.28)",
-              borderRadius: 8,
-              padding: "10px 12px",
-              marginBottom: 16,
-            }}
-          >
-            <strong style={{ color: "var(--color-status-critical)" }}>
-              Gateway status unavailable.
-            </strong>{" "}
-            Could not reach <code>/api/admin/gateway</code> to confirm whether the
-            username/password gateway is active. Proceeding with magic-link;
-            verify the deployment if you expected the gateway step.
-          </div>
-        )}
 
-        {/* Step 2 — Supabase magic link */}
-        {phase === "magiclink" && !sent && (
-          <form onSubmit={handleMagicLinkSubmit} className="flex flex-col gap-4">
-            <div>
-              <label htmlFor="admin-email" style={labelStyle}>
-                Email Address
-              </label>
-              <input
-                id="admin-email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                placeholder="admin@physiops.com"
-                style={inputStyle}
-              />
-            </div>
-
-            {error && <p style={errorStyle}>{error}</p>}
-
-            <button
-              type="submit"
-              disabled={loading || !email.trim()}
-              className="ps-cta"
-              style={{
-                width: "100%",
-                justifyContent: "center",
-                opacity: loading || !email.trim() ? 0.5 : 1,
-                cursor: loading || !email.trim() ? "not-allowed" : "pointer",
-              }}
-            >
-              {loading ? "Sending…" : "Send Magic Link"}
-            </button>
-          </form>
-        )}
-
-        {/* Step 2 — sent confirmation */}
-        {phase === "magiclink" && sent && (
-          <div className="text-center">
-            <div
-              className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
-              style={{
-                background: "rgba(0,229,255,0.1)",
-                border: "1px solid rgba(0,229,255,0.3)",
-              }}
-            >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M4 4H20C21.1 4 22 4.9 22 6V18C22 19.1 21.1 20 20 20H4C2.9 20 2 19.1 2 18V6C2 4.9 2.9 4 4 4Z"
-                  stroke="var(--color-brand-cyan)"
-                  strokeWidth="1.5"
-                />
-                <path d="M22 6L12 13L2 6" stroke="var(--color-brand-cyan)" strokeWidth="1.5" />
-              </svg>
-            </div>
-            <h2 className="ps-text-display" style={{ color: "var(--color-text-primary)", fontSize: 17, marginBottom: 8 }}>
-              Check your email
-            </h2>
-            <p style={{ color: "var(--color-text-muted)", fontSize: 13, lineHeight: 1.6 }}>
-              We sent a sign-in link to{" "}
-              <span className="ps-text-mono" style={{ color: "var(--color-brand-cyan)" }}>
-                {email}
-              </span>
-              . Click the link to access the admin console.
+          {error && (
+            <p role="alert" aria-live="assertive" style={errorStyle} data-testid="admin-login-error">
+              {error}
             </p>
-            <button
-              onClick={() => {
-                setSent(false);
-                setError(null);
-              }}
-              style={{
-                marginTop: 16,
-                fontSize: 12,
-                color: "var(--color-text-muted)",
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                textDecoration: "underline",
-              }}
-            >
-              Use a different email
-            </button>
-          </div>
-        )}
+          )}
+
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className="ps-cta"
+            data-testid="admin-login-submit"
+            style={{
+              width: "100%",
+              justifyContent: "center",
+              opacity: canSubmit ? 1 : 0.5,
+              cursor: canSubmit ? "pointer" : "not-allowed",
+            }}
+          >
+            {loading ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
 
         <div style={{ marginTop: 20, textAlign: "center" }}>
-          <a
-            href="/#/"
-            style={{
-              fontSize: 12,
-              color: "var(--color-text-muted)",
-              textDecoration: "none",
-            }}
-          >
+          <a href="/#/" style={{ fontSize: 12, color: "var(--color-text-muted)", textDecoration: "none" }}>
             ← Back to App
           </a>
         </div>

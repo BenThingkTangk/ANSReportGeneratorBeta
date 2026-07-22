@@ -6,6 +6,11 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { VercelRequest } from "@vercel/node";
 import { requireGateway } from "./_adminGateway.js";
+import {
+  isAuthConfigured as isAdminAuthConfigured,
+  verifyRequest as verifyAdminRequest,
+  ADMIN_SUBJECT,
+} from "./_adminSession.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -97,26 +102,53 @@ export async function requireRole(
   reqOrSupabase: VercelRequest | SupabaseClient,
   allowedRoles: UserRole[]
 ): Promise<AdminUser> {
-  // Support both call patterns: (req, roles) and legacy (supabase, roles)
-  let user: { id: string; email?: string } | null = null;
-
+  // Primary path (request): authorize via the signed admin session cookie set by
+  // POST /api/admin/login. The env-configured admin is a single super_admin
+  // account, so it is authorized for any admin route (every route includes
+  // super_admin). The DB/RAG layer keeps using the service-role client
+  // (createSupabaseFromRequest → createSupabaseAdmin) — data access is
+  // identity-independent, so replacing magic-link with the cookie does not touch
+  // any query or RAG behaviour.
   if ("headers" in reqOrSupabase) {
-    // Perimeter check FIRST: when the env-configured admin gateway is enabled,
-    // every request must carry a valid gateway session cookie before we even
-    // look at the Supabase identity. No-op when the gateway is unconfigured, so
-    // magic-link-only deployments are unaffected. This sits IN FRONT of Supabase
-    // RLS — it never replaces it.
-    requireGateway(reqOrSupabase as VercelRequest);
-    user = (await getAuthUser(reqOrSupabase as VercelRequest)) as any;
-  } else {
-    const { data } = await (reqOrSupabase as SupabaseClient).auth.getUser();
-    user = data.user as any;
+    const req = reqOrSupabase as VercelRequest;
+
+    if (isAdminAuthConfigured()) {
+      const session = verifyAdminRequest(req);
+      if (!session) {
+        throw Object.assign(new Error("Unauthorized"), { statusCode: 401 });
+      }
+      const role: UserRole = "super_admin";
+      if (!allowedRoles.includes(role)) {
+        throw Object.assign(new Error("Forbidden"), { statusCode: 403 });
+      }
+      return { id: ADMIN_SUBJECT, email: process.env.ADMIN_USERNAME ?? "admin", role };
+    }
+
+    // Back-compat: if the new username/password auth is NOT configured but the
+    // legacy scrypt gateway + Supabase magic-link stack still is, fall through to
+    // the previous behaviour so an un-migrated deployment keeps working.
+    requireGateway(req);
+    const user = (await getAuthUser(req)) as { id: string; email?: string } | null;
+    if (!user) {
+      throw Object.assign(new Error("Unauthorized"), { statusCode: 401 });
+    }
+    return await roleFromUserRoles(user, allowedRoles);
   }
 
+  // Legacy (supabase, roles) call pattern — unchanged.
+  const { data } = await (reqOrSupabase as SupabaseClient).auth.getUser();
+  const user = data.user as { id: string; email?: string } | null;
   if (!user) {
     throw Object.assign(new Error("Unauthorized"), { statusCode: 401 });
   }
+  return await roleFromUserRoles(user, allowedRoles);
+}
 
+/** Resolve a Supabase user's role from user_roles and enforce the allow-list. */
+async function roleFromUserRoles(
+  user: { id: string; email?: string },
+  allowedRoles: UserRole[]
+): Promise<AdminUser> {
   const admin = createSupabaseAdmin();
   const { data, error } = await admin
     .from("user_roles")
@@ -127,7 +159,6 @@ export async function requireRole(
   if (error || !data || !allowedRoles.includes(data.role as UserRole)) {
     throw Object.assign(new Error("Forbidden"), { statusCode: 403 });
   }
-
   return { id: user.id, email: user.email ?? "", role: data.role as UserRole };
 }
 

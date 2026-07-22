@@ -2,7 +2,6 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   createSupabaseAdmin,
   requireRole,
-  getAuthUser,
   logAudit,
   setCorsHeaders,
   handleError,
@@ -26,12 +25,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === "GET") {
-      // Reading flags requires only authentication, NOT admin role —
-      // the client needs them to render the right UI.
-      const user = await getAuthUser(req);
-      if (!user) {
-        return res.status(401).json({ success: false, error: "unauthorized" });
-      }
+      // Reading flags requires an authenticated admin session. Under the
+      // username/password cookie auth there is no per-user Bearer token, so we
+      // authorize via requireRole (any admin tier) instead of getAuthUser — the
+      // only caller is the admin rule-evidence page. (Back-compat: requireRole
+      // falls back to the legacy Supabase identity when cookie auth is unset.)
+      await requireRole(req, ["super_admin", "clinical_admin", "reviewer"]);
       const admin = createSupabaseAdmin();
       const { data, error } = await admin
         .from("app_settings")
