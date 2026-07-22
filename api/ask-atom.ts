@@ -4,6 +4,7 @@ import {
   buildKnowledgePromptSection,
   toCitations,
 } from "./_knowledgeCache.js";
+import { rankKnowledgeSources } from "./_knowledgeRetrieval.js";
 
 /**
  * /api/ask-atom — Colombo P&S grounded chat (Path B)
@@ -65,6 +66,98 @@ function cacheSet(key: string, value: Omit<CachedAnswer, "expires">): void {
     if (oldest !== undefined) answerCache.delete(oldest);
   }
   answerCache.set(key, { ...value, expires: Date.now() + CACHE_TTL_MS });
+}
+
+/**
+ * Stream a Sonar completion to the client as Server-Sent Events.
+ *
+ * Events:
+ *   event: delta   data: {"text": "<token chunk>"}
+ *   event: done    data: {"message": "<full text>", "webCitations": [...], "citations": [...]}
+ *   event: error   data: {"error": "<message>"}
+ *
+ * The full answer is assembled server-side and written to the response cache on
+ * completion, so a subsequent non-streaming request replays instantly. The
+ * deterministic grounding/gating is unchanged — only the transport differs.
+ */
+async function streamSonar(opts: {
+  apiKey: string;
+  conversation: Array<{ role: string; content: string }>;
+  knowledgeCitations: unknown[];
+  cacheKey: string;
+  res: VercelResponse;
+}): Promise<void> {
+  const { apiKey, conversation, knowledgeCitations, cacheKey, res } = opts;
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    const r = await fetch(SONAR_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "sonar-pro",
+        messages: conversation,
+        temperature: 0.3,
+        max_tokens: 1200,
+        stream: true,
+      }),
+    });
+
+    if (!r.ok || !r.body) {
+      const text = r.ok ? "no response body" : await r.text();
+      send("error", { error: `Sonar error ${r.status}: ${text.slice(0, 300)}` });
+      res.end();
+      return;
+    }
+
+    let full = "";
+    let webCitations: unknown[] = [];
+    let buffer = "";
+    const decoder = new TextDecoder();
+    // Node 20 fetch bodies are async-iterable.
+    for await (const chunk of r.body as any) {
+      buffer += decoder.decode(chunk as Uint8Array, { stream: true });
+      // SSE frames from Perplexity are separated by double newlines.
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.split("\n").find((l) => l.startsWith("data:"));
+        if (!line) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const j = JSON.parse(payload);
+          const delta = j?.choices?.[0]?.delta?.content ?? "";
+          if (delta) {
+            full += delta;
+            send("delta", { text: delta });
+          }
+          const cites = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean);
+          if (Array.isArray(cites) && cites.length) webCitations = cites;
+        } catch {
+          /* ignore non-JSON keep-alive frames */
+        }
+      }
+    }
+
+    const message = full.trim();
+    if (message) cacheSet(cacheKey, { message, webCitations });
+    send("done", { message, webCitations, citations: knowledgeCitations });
+    res.end();
+    return;
+  } catch (err: any) {
+    send("error", { error: err?.message || "stream failed" });
+    res.end();
+    return;
+  }
 }
 
 export const SYSTEM_PROMPT = `You are Atom, a Colombo-grounded autonomic-health assistant powered by Perplexity Sonar.
@@ -383,8 +476,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Inject active knowledge sources into system prompt
-    const knowledgeSources = await getActiveKnowledgeSources();
+    // Inject active knowledge sources into system prompt, RANKED BY RELEVANCE to
+    // the latest user question rather than a static top-12. This keeps the
+    // prompt focused (smaller, faster, less noise) and grounds the answer in the
+    // sources that actually pertain to the question. When the question has no
+    // searchable terms the ranker falls back to the original order, so grounding
+    // is never *reduced* relative to the previous static behavior.
+    const allKnowledgeSources = await getActiveKnowledgeSources();
+    const latestUserQuery =
+      [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "";
+    const knowledgeSources = rankKnowledgeSources(
+      allKnowledgeSources,
+      latestUserQuery,
+      6,
+    );
     const knowledgeSection = buildKnowledgePromptSection(knowledgeSources);
     const knowledgeCitations = toCitations(knowledgeSources);
 
@@ -409,6 +514,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         webCitations: cached.webCitations,
         citations: knowledgeCitations,
         cached: true,
+      });
+    }
+
+    // --- Opt-in true server streaming (SSE) ------------------------------------
+    // Enabled when the client sends { stream: true } (or Accept: text/event-stream).
+    // Emits token deltas as they arrive so time-to-first-token drops from
+    // "whole completion" to the first chunk. The default path (below) stays a
+    // single JSON response, so existing clients are unaffected. Grounding,
+    // gating and citations are identical — only the transport differs. Streamed
+    // responses are still written to the response cache on completion.
+    const wantsStream =
+      body?.stream === true ||
+      String(req.headers["accept"] || "").includes("text/event-stream");
+    if (wantsStream) {
+      return await streamSonar({
+        apiKey,
+        conversation,
+        knowledgeCitations,
+        cacheKey,
+        res,
       });
     }
 
