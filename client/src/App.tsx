@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Dashboard from "@/pages/dashboard";
 import NotFound from "@/pages/not-found";
 import { BuildInfo } from "@/components/BuildInfo";
+import { AuthProvider } from "@/hooks/useAuth";
 
 // Admin pages
 // NOTE: the admin username/password sign-in lives in
@@ -67,13 +68,15 @@ function App() {
       storageKey="humanos-theme"
     >
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <Toaster />
-          <Router hook={useHashLocation}>
-            <AppRouter />
-          </Router>
-          <BuildInfo />
-        </TooltipProvider>
+        <AuthProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Router hook={useHashLocation}>
+              <AppRouter />
+            </Router>
+            <BuildInfo />
+          </TooltipProvider>
+        </AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );

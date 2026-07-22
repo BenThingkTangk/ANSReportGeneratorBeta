@@ -14,7 +14,7 @@
  * Routed from App.tsx at /admin/login. It keeps its historical filename because
  * pages/admin/login.tsx exists in the tree; App.tsx imports THIS component.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -58,11 +58,14 @@ export default function AdminGatewayLoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Already authenticated → go straight to the console.
-  if (session && isAdmin) {
-    navigate("/admin/knowledge");
-    return null;
-  }
+  // Already authenticated (or just became authenticated) → go to the console.
+  // Navigation MUST happen in an effect, never during render — navigating in
+  // render is an unsafe side effect that can be dropped, and with shared auth
+  // state this fires as soon as `isAdmin` flips true after signIn().
+  const authed = Boolean(session && isAdmin);
+  useEffect(() => {
+    if (authed) navigate("/admin/knowledge");
+  }, [authed, navigate]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -80,6 +83,8 @@ export default function AdminGatewayLoginPage() {
       setPassword("");
       return;
     }
+    // The `authed` effect above performs the navigation once shared auth state
+    // reflects success; also navigate here for immediate transition.
     navigate("/admin/knowledge");
   }
 
