@@ -23,6 +23,7 @@
     "prebuild:vercel": "npm run audit:esm && npm run verify:ocr-native && tsc --noEmit",
     "ci": "npm run audit:esm && tsc --noEmit && npm run test:ans && npm run test:client && npm run eval:ci",
     "smoke:coldstart": "node scripts/coldstart-smoke.mjs",
+    "qa:visual": "node qa/visual-acceptance.mjs",
     "test:client": "vitest run --config vitest.client.config.ts"
   },
   "dependencies": {
