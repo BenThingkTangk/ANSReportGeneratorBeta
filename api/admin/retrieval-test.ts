@@ -5,6 +5,7 @@ import {
   setCorsHeaders,
   handleError,
 } from "../_supabase.js";
+import { tokenizeQuery, scoreChunk } from "../_ans/knowledgeChunking.js";
 
 /**
  * POST /api/admin/retrieval-test
@@ -25,45 +26,8 @@ import {
  * Body: { query: string, limit?: number, activeOnly?: boolean }
  */
 
-const STOPWORDS = new Set([
-  "the", "a", "an", "of", "to", "in", "and", "or", "is", "are", "for", "on",
-  "with", "as", "by", "at", "be", "this", "that", "it", "from", "what", "how",
-  "why", "when", "which", "does", "do", "can", "should", "my", "i",
-]);
-
-function tokenize(s: string): string[] {
-  return (s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(
-    (t) => t.length > 2 && !STOPWORDS.has(t),
-  );
-}
-
-/** Transparent term-overlap score: sum of per-term frequency in the chunk,
- *  normalized by chunk length, with a bonus for the count of distinct terms
- *  matched (breadth beats a single repeated word). */
-function scoreChunk(content: string, terms: string[]): { score: number; matched: string[] } {
-  const text = content.toLowerCase();
-  const words = text.match(/[a-z0-9]+/g) ?? [];
-  const total = Math.max(words.length, 1);
-  const counts = new Map<string, number>();
-  for (const w of words) counts.set(w, (counts.get(w) ?? 0) + 1);
-
-  const matched: string[] = [];
-  let freqScore = 0;
-  for (const term of terms) {
-    const c = counts.get(term) ?? 0;
-    if (c > 0) {
-      matched.push(term);
-      freqScore += c;
-    }
-  }
-  if (matched.length === 0) return { score: 0, matched };
-  const density = freqScore / total;
-  const breadth = matched.length / terms.length;
-  // Weight breadth heavily so a chunk touching many query terms ranks above one
-  // that merely repeats a single term.
-  const score = Number((breadth * 0.7 + density * 100 * 0.3).toFixed(4));
-  return { score, matched };
-}
+// Tokenization + term-overlap scoring live in the shared knowledgeChunking
+// module so the admin diagnostic and the live retrieval path stay identical.
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(res);
@@ -84,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ success: false, error: "query is required" });
     }
 
-    const terms = tokenize(query);
+    const terms = tokenizeQuery(query);
     if (terms.length === 0) {
       return res.status(400).json({
         success: false,
@@ -99,9 +63,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from("ans_knowledge_chunks")
       .select(
         `
-          id, source_id, chunk_index, content, tokens,
+          id, source_id, chunk_index, content, tokens, page, section,
           source:ans_knowledge_sources!inner (
-            id, title, authors, year, publication_type,
+            id, title, authors, year, publication_type, url,
             active_in_ai_analysis, review_status
           )
         `,
@@ -145,15 +109,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           sourceId: row.source_id,
           chunkIndex: row.chunk_index,
           tokens: row.tokens ?? null,
+          page: row.page ?? null,
+          section: row.section ?? null,
           score,
           matchedTerms: matched,
           snippet,
+          // A ready-to-render source/page citation label.
+          citation:
+            `${src.title ?? "(untitled)"}` +
+            (src.year ? ` (${src.year})` : "") +
+            (row.page != null ? `, p.${row.page}` : row.section ? `, ${row.section}` : ""),
           source: {
             id: src.id,
             title: src.title ?? "(untitled)",
             authors: src.authors ?? null,
             year: src.year ?? null,
             publicationType: src.publication_type ?? null,
+            url: src.url ?? null,
             active: !!src.active_in_ai_analysis,
             reviewStatus: src.review_status ?? null,
           },

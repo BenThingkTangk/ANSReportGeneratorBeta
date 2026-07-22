@@ -104,6 +104,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       knowledge.totalSources = sourceCount ?? 0;
       knowledge.activeApprovedSources = activeCount ?? 0;
       knowledge.totalChunks = chunkCount ?? 0;
+      // Honest RAG status: retrieval can only work when chunks exist. Sources
+      // with metadata but 0 chunks are NOT a functional knowledge base — the UI
+      // must show "needs indexing", not "reachable", in that state.
+      knowledge.ragFunctional = (chunkCount ?? 0) > 0;
+      knowledge.ragStatus =
+        (chunkCount ?? 0) > 0
+          ? "indexed"
+          : (sourceCount ?? 0) > 0
+            ? "sources_present_no_chunks"
+            : "empty";
     } catch (e: any) {
       knowledge.ok = false;
       knowledge.detail = e?.message ?? "knowledge count failed";

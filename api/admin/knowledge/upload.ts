@@ -7,6 +7,9 @@ import {
   setCorsHeaders,
   handleError,
 } from "../../_supabase.js";
+import { chunkText, estimateTokens } from "../../_ans/knowledgeChunking.js";
+import { extractPdfText } from "../../_ans/pdfText.js";
+import { ocrPdf } from "../../_ans/ocr.js";
 
 /**
  * POST /api/admin/knowledge/upload
@@ -25,20 +28,6 @@ import {
  */
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
-const CHUNK_SIZE = 3000; // ~800 tokens
-const CHUNK_OVERLAP = 100;
-
-function chunkText(text: string): string[] {
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length) {
-    const end = Math.min(start + CHUNK_SIZE, text.length);
-    chunks.push(text.slice(start, end).trim());
-    if (end >= text.length) break;
-    start = end - CHUNK_OVERLAP;
-  }
-  return chunks.filter((c) => c.length > 0);
-}
 
 export const config = {
   api: {
@@ -157,27 +146,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Extract text
+    // Extract text — use the hardened extractor with an OCR fallback for
+    // image-only PDFs (the same pipeline the vendor-PDF path uses), so a scanned
+    // knowledge file is not silently ingested as zero chunks.
     let extractedText = "";
+    let extractionMethod = "none";
     const isPdf = mimeType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf");
 
     if (isPdf) {
       try {
-        // Dynamic import to avoid module loading issues in Vercel.
-        // pdf-parse's TS types expose only a namespace; runtime gives us
-        // either a CJS default or the namespace itself depending on the
-        // resolver, so we coerce via `unknown`.
-        const mod = (await import("pdf-parse")) as unknown as
-          | { default: (b: Buffer) => Promise<{ text?: string }> }
-          | ((b: Buffer) => Promise<{ text?: string }>);
-        const pdfParse =
-          typeof mod === "function"
-            ? mod
-            : (mod as { default: (b: Buffer) => Promise<{ text?: string }> }).default;
-        const result = await pdfParse(fileBuffer);
-        extractedText = result.text ?? "";
+        extractedText = await extractPdfText(fileBuffer);
+        if (extractedText.trim().length > 0) extractionMethod = "pdf_text_layer";
       } catch (pdfErr) {
-        console.warn("pdf-parse failed, skipping text extraction:", pdfErr);
+        console.warn("extractPdfText failed:", pdfErr);
+      }
+      if (extractedText.trim().length === 0) {
+        // No text layer → OCR the rasterized pages.
+        try {
+          const ocr = await ocrPdf(fileBuffer);
+          if (ocr.ocrAvailable) {
+            extractedText = ocr.pages.map((p) => p.text).join("\n\n");
+            if (extractedText.trim().length > 0) extractionMethod = "ocr";
+          }
+        } catch (ocrErr) {
+          console.warn("ocrPdf failed:", ocrErr);
+        }
       }
     } else if (
       mimeType.startsWith("text/") ||
@@ -185,33 +178,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       fileName.endsWith(".md")
     ) {
       extractedText = fileBuffer.toString("utf-8");
+      if (extractedText.trim().length > 0) extractionMethod = "text";
     }
 
-    // Chunk and insert
+    // Chunk and insert. Ingestion errors are EXPLICIT (surfaced to the caller),
+    // never swallowed — a 0-chunk result must be visibly attributable.
     let chunkCount = 0;
+    let ingestionError: string | null = null;
     if (extractedText.trim().length > 0) {
       const textChunks = chunkText(extractedText);
-      chunkCount = textChunks.length;
 
-      // Delete old chunks for this source
-      await adminSupabase
+      // Delete old chunks for this source (re-index is idempotent).
+      const { error: delErr } = await adminSupabase
         .from("ans_knowledge_chunks")
         .delete()
         .eq("source_id", finalSourceId);
+      if (delErr) ingestionError = `chunk delete failed: ${delErr.message}`;
 
-      // Insert new chunks
-      if (textChunks.length > 0) {
+      if (!ingestionError && textChunks.length > 0) {
         const chunkRows = textChunks.map((content, idx) => ({
           source_id: finalSourceId,
           chunk_index: idx,
           content,
-          tokens: Math.ceil(content.length / 4), // rough estimate
+          tokens: estimateTokens(content),
         }));
         const { error: chunkErr } = await adminSupabase
           .from("ans_knowledge_chunks")
           .insert(chunkRows);
-        if (chunkErr) console.warn("Chunk insert error:", chunkErr.message);
+        if (chunkErr) {
+          ingestionError = `chunk insert failed: ${chunkErr.message}`;
+        } else {
+          chunkCount = textChunks.length;
+        }
       }
+    } else if (isPdf) {
+      ingestionError =
+        "No text could be extracted from this PDF (no text layer and OCR unavailable/empty). 0 chunks were created.";
     }
 
     // Update source metadata
@@ -231,7 +233,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       "ans_knowledge_sources",
       finalSourceId,
       null,
-      { file_path: storageKey, file_mime: mimeType, chunkCount } as Record<string, unknown>,
+      { file_path: storageKey, file_mime: mimeType, chunkCount, extractionMethod, ingestionError } as Record<string, unknown>,
       req
     );
 
@@ -240,6 +242,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       source_id: finalSourceId,
       file_path: storageKey,
       chunkCount,
+      extractionMethod,
+      // Explicit, non-null only when ingestion produced 0 usable chunks for a
+      // reason the admin should see. RAG is NOT claimed to work at chunks=0.
+      ingestionError,
     });
   } catch (err) {
     return handleError(res, err);
