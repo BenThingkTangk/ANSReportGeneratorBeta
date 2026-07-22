@@ -100,6 +100,17 @@ export function ScatterPanel({ mpg, patientAge, spectralAvailable }: ScatterPane
 function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
   const x = mpg.scatter.baselineLFa;
   const y = mpg.scatter.baselineRFa;
+  // Per-phase null guard: baseline spectral may be absent even when the panel's
+  // global gate opened (e.g. a vendor PDF that supplied other phases only).
+  if (x == null || y == null) {
+    return (
+      <SpectralUnavailableCard
+        title="Baseline LFa vs RFa — spectral not established for this phase"
+        testId="chart-baseline-lfa-rfa-unavailable"
+        compact
+      />
+    );
+  }
   const ratio = y > 0 ? x / y : 0;
 
   return (
@@ -157,6 +168,15 @@ function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
 
 function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }) {
   const val = mpg.scatter.dbRFa;
+  if (val == null) {
+    return (
+      <SpectralUnavailableCard
+        title="Deep Breathing RFa — spectral not established for this phase"
+        testId="chart-db-rfa-unavailable"
+        compact
+      />
+    );
+  }
   const band = dbRfaNormalBand(age);
   const inBand = val >= band.lo && val <= band.hi;
 
@@ -233,6 +253,15 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
 
 function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }) {
   const val = mpg.scatter.valsalvaLFa;
+  if (val == null) {
+    return (
+      <SpectralUnavailableCard
+        title="Valsalva LFa — spectral not established for this phase"
+        testId="chart-valsalva-lfa-unavailable"
+        compact
+      />
+    );
+  }
   const band = valsalvaLfaNormalBand(age);
   const inBand = val >= band.lo && val <= band.hi;
 
@@ -307,9 +336,19 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
 // --- 4. Stand Response -----------------------------------------------------
 
 function StandResponse({ mpg }: { mpg: MultiParameterGraphical }) {
+  const { standLFa, standRFa } = mpg.scatter;
+  if (standLFa == null || standRFa == null) {
+    return (
+      <SpectralUnavailableCard
+        title="Stand Response — spectral not established for this phase"
+        testId="chart-stand-response-unavailable"
+        compact
+      />
+    );
+  }
   const data = [
-    { label: "Stand LFa", value: mpg.scatter.standLFa, target: 3.0 },
-    { label: "Stand RFa", value: mpg.scatter.standRFa, target: 1.5 },
+    { label: "Stand LFa", value: standLFa, target: 3.0 },
+    { label: "Stand RFa", value: standRFa, target: 1.5 },
   ];
 
   const maxV = Math.max(...data.map((d) => Math.max(d.value, d.target))) * 1.3;
@@ -374,10 +413,21 @@ function RfaExcess({ mpg }: { mpg: MultiParameterGraphical }) {
   const valsalva = mpg.scatter.rfaChangeValsalvaPct;
   const stand = mpg.scatter.rfaChangeStandPct;
 
+  // These % changes need both baseline and challenge RFa. If neither is
+  // computable, the panel is not assessable.
+  if (valsalva == null && stand == null) {
+    return (
+      <SpectralUnavailableCard
+        title="RFa % change — spectral not established"
+        testId="chart-rfa-excess-unavailable"
+        compact
+      />
+    );
+  }
   const data = [
     { label: "Valsalva (A→D)", value: valsalva, expected: -40, expectedLabel: "expected: ≤ -30%" },
     { label: "Stand (A→F)",    value: stand,    expected: -50, expectedLabel: "expected: ≤ -40%" },
-  ];
+  ].filter((d): d is { label: string; value: number; expected: number; expectedLabel: string } => d.value != null);
 
   const maxAbs = Math.max(100, ...data.map((d) => Math.abs(d.value)));
 
