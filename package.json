@@ -16,6 +16,7 @@
     "eval:ci": "tsx eval/runner/runEval.ts --ci",
     "eval:build-fixtures": "tsx eval/buildFixtures.ts",
     "fixtures:build-deid": "tsx scripts/build-deid-fixture.mts",
+    "fixtures:build-deid-vendor-ocr": "tsx scripts/build-deid-vendor-ocr.mts",
     "audit:esm": "node scripts/audit-esm-imports.mjs",
     "audit:esm:fix": "node scripts/audit-esm-imports.mjs --fix",
     "verify:ocr-native": "node scripts/verify-ocr-native-deps.mjs",
