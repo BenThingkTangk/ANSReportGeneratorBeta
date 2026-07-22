@@ -17,6 +17,7 @@ import {
   computedProvenance,
   unavailableProvenance,
   vendorReportedProvenance,
+  derivedFromVendorProvenance,
   mayInterpretClinically,
   type MetricProvenance,
 } from "../shared/metricProvenance.js";
@@ -97,11 +98,11 @@ interface PhaseMetrics {
   HRV_SDNN: number;
   HRV_RMSSD: number;
   /**
-   * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF). These
-   * are ALWAYS computed generically from the raw arrays — never substituted
-   * from a memorized vendor value. `estimated` means the value approximates the
-   * vendor's undisclosed proprietary algorithm and was not reproduced against a
-   * reference; `unavailable` means the phase had insufficient beats to compute.
+   * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF). The raw
+   * .ans is never used to synthesize LFa/RFa/SB: those are `unavailable` unless
+   * a paired vendor PDF supplied them (baseline A only), in which case they are
+   * `vendor_reported` (or `derived_from_vendor` for a computed SB = LFa/RFa).
+   * FRF is `computed` from the RR/peak envelope (a genuine time-domain measure).
    */
   provenance?: {
     LFa: MetricProvenance;
@@ -273,6 +274,12 @@ interface ANSReport {
   // null when spectral is unavailable — FRF is a proprietary [P] measure.
   respiratoryFrequency: number | null;
   rPeakCount: number;
+  /**
+   * ENVELOPE METADATA — wall-clock time the report object was generated. This is
+   * NON-DETERMINISTic (changes every run) and is NOT part of the clinical
+   * content. It (and AnsStudy.parsedAt) MUST be excluded from any deterministic
+   * clinical snapshot / golden-master comparison; use `clinicalSnapshot()`.
+   */
   generatedAt: string;
   patientSynopsis?: string;
   clinicianSynopsis?: string;
@@ -1758,18 +1765,17 @@ export function generateColomboReport(
     return analyzePhase(ecgSlice, samplingRate, seg.name, seg.label, seg.end - seg.start);
   });
 
-  // --- No vendor-value substitution ------------------------------------------
-  // The per-phase spectral aggregates (LFa/RFa/FRF/SB) are NOT stored as scalars
-  // in the .ans binary; the vendor derives them via an undisclosed wavelet
-  // algorithm and prints them only in the signed PDF. We DELIBERATELY do not
-  // memorize or fingerprint-substitute those PDF values at runtime — doing so
-  // would silently pass off a per-file identity match as a generic computation
-  // and violate generic accuracy. Instead `analyzePhase` above computes each
-  // aggregate generically from the raw arrays and tags it `computed/estimated`
-  // (proprietary tier [P]) via its `provenance`. Consumers must render these as
-  // estimates, and unavailable phases as "unavailable" — never as vendor truth.
-  // The de-identified vendor scalars live ONLY in the offline regression oracle
-  // (eval/ ground-truth), which never touches this render path.
+  // --- No spectral synthesis, no vendor-value substitution -------------------
+  // The per-phase spectral aggregates (LFa/RFa/SB) are NOT stored as extractable
+  // scalars in the .ans binary; the vendor derives them via an undisclosed
+  // wavelet algorithm and prints them only in the signed PDF. This engine does
+  // NOT estimate them from the raw waveform (the former SCALE=0.0018 Morlet
+  // routine was removed) and does NOT memorize/fingerprint-substitute PDF
+  // values. `analyzePhase` therefore emits LFa/RFa/SB as null with `unavailable`
+  // provenance. The ONLY way a spectral value enters the report is a paired
+  // vendor PDF applied to baseline A below (`vendor_reported`, or
+  // `derived_from_vendor` for a computed SB) — after server-side identity
+  // reconciliation. Unavailable phases render "not assessed", never vendor truth.
 
   // Baseline A is the canonical resting measurement
   const A = phaseEvents[0];
@@ -1803,18 +1809,25 @@ export function generateColomboReport(
       A.RFa = vendorMetrics.RFa;
       if (A.provenance) A.provenance.RFa = vendorReportedProvenance("RFa");
     }
-    // SB: use the vendor's value if given, else derive from vendor LFa/RFa.
-    const vendorSB =
-      typeof vendorMetrics.SB === "number"
-        ? vendorMetrics.SB
-        : typeof vendorMetrics.LFa === "number" &&
-            typeof vendorMetrics.RFa === "number" &&
-            vendorMetrics.RFa !== 0
-          ? vendorMetrics.LFa / vendorMetrics.RFa
-          : undefined;
+    // SB: prefer the vendor's printed value; otherwise derive it from vendor
+    // LFa/RFa. The two cases carry DIFFERENT provenance — a printed SB is
+    // vendor_reported, a computed quotient is derived_from_vendor — so the
+    // report never overstates a locally-derived number as vendor-printed.
+    const vendorPrintedSB = typeof vendorMetrics.SB === "number";
+    const vendorSB = vendorPrintedSB
+      ? (vendorMetrics.SB as number)
+      : typeof vendorMetrics.LFa === "number" &&
+          typeof vendorMetrics.RFa === "number" &&
+          vendorMetrics.RFa !== 0
+        ? vendorMetrics.LFa / vendorMetrics.RFa
+        : undefined;
     if (typeof vendorSB === "number") {
       A.SB = vendorSB;
-      if (A.provenance) A.provenance.SB = vendorReportedProvenance("SB");
+      if (A.provenance) {
+        A.provenance.SB = vendorPrintedSB
+          ? vendorReportedProvenance("SB")
+          : derivedFromVendorProvenance("SB", "Computed here as vendor LFa ÷ vendor RFa; the vendor report printed LFa and RFa but not the ratio.");
+      }
     }
     if (typeof vendorMetrics.SBP === "number" && typeof vendorMetrics.DBP === "number") {
       A.SBP = vendorMetrics.SBP;
@@ -1825,13 +1838,14 @@ export function generateColomboReport(
   }
 
   // --- Spectral / BP availability gate ---------------------------------------
-  // The proprietary spectral aggregates (LFa/RFa/SB) are only ever `computed`
-  // (estimated) from the raw ECG for these files — never vendor-reported or
-  // validated — so they are NOT clinically actionable. An estimated LFa that
-  // collapses toward 0 must never be read as "sympathetic 0%" or trigger an
-  // autonomic-neuropathy / parasympathetic / treatment finding. We decide once,
-  // generically, from provenance (no patient/hash branching), then null the
-  // spectral fields and gate every spectral-derived consumer below.
+  // For a raw ECG-only .ans the proprietary spectral aggregates (LFa/RFa/SB) are
+  // `unavailable` (this engine never estimates them). They become clinically
+  // actionable ONLY when baseline A carries a vendor_reported/derived_from_vendor
+  // value from the paired PDF. mayInterpretClinically() encodes that rule, so a
+  // missing spectral value can never be read as "sympathetic 0%" or trigger an
+  // autonomic-neuropathy / parasympathetic / treatment finding. NOTE this is the
+  // GLOBAL (baseline-A) gate; per-phase narrative classification additionally
+  // checks each phase's own value (classifyOrNull) — see phaseFindings below.
   const spectralAvailable = !!(
     A.provenance &&
     mayInterpretClinically(A.provenance.LFa) &&
@@ -2397,6 +2411,26 @@ export function generateColomboReport(
     multiParameter,
     indications,
   };
+}
+
+/**
+ * Deterministic clinical snapshot of a report: the full object with the
+ * non-deterministic ENVELOPE METADATA (`generatedAt`, and the embedded
+ * `patientData` / AnsStudy `parsedAt` if present) stripped out. Two runs on the
+ * same input bytes produce byte-identical snapshots. Use this for golden-master
+ * comparisons and any content hash — never hash the raw report, whose
+ * `generatedAt` changes every call.
+ */
+export function clinicalSnapshot(report: ANSReport): Omit<ANSReport, "generatedAt"> {
+  const { generatedAt: _generatedAt, ...rest } = report;
+  // Strip parsedAt from any embedded ansStudy-like object without disturbing
+  // the clinical fields.
+  const anyRest = rest as Record<string, unknown>;
+  if (anyRest.ansStudy && typeof anyRest.ansStudy === "object") {
+    const { parsedAt: _p, ...study } = anyRest.ansStudy as Record<string, unknown>;
+    anyRest.ansStudy = study;
+  }
+  return rest;
 }
 
 // ---- Handler ----------------------------------------------------------------

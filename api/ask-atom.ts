@@ -88,15 +88,16 @@ async function streamSonar(opts: {
   res: VercelResponse;
 }): Promise<void> {
   const { apiKey, conversation, knowledgeCitations, cacheKey, res } = opts;
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
   const send = (event: string, data: unknown) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
+  // Call upstream FIRST, before committing SSE headers/200. If it fails at the
+  // start, we can still return an honest non-200 JSON error (the reviewer's
+  // point: an upstream failure must not masquerade as a 200 SSE success).
+  let r: Response;
   try {
-    const r = await fetch(SONAR_URL, {
+    r = await fetch(SONAR_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -110,14 +111,27 @@ async function streamSonar(opts: {
         stream: true,
       }),
     });
+  } catch (err: any) {
+    res.status(502).json({ success: false, error: err?.message || "Upstream request failed" });
+    return;
+  }
 
-    if (!r.ok || !r.body) {
-      const text = r.ok ? "no response body" : await r.text();
-      send("error", { error: `Sonar error ${r.status}: ${text.slice(0, 300)}` });
-      res.end();
-      return;
-    }
+  if (!r.ok || !r.body) {
+    const text = r.ok ? "no response body" : await r.text();
+    // Headers not yet committed → surface a real error status, not a 200 stream.
+    res.status(502).json({
+      success: false,
+      error: `Sonar error ${r.status}: ${text.slice(0, 300)}`,
+    });
+    return;
+  }
 
+  // Upstream is good: NOW commit the SSE response (implicitly 200) and stream.
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+
+  try {
     let full = "";
     let webCitations: unknown[] = [];
     let buffer = "";
@@ -150,11 +164,20 @@ async function streamSonar(opts: {
 
     const message = full.trim();
     if (message) cacheSet(cacheKey, { message, webCitations });
+    // Mid-stream truncation with no content is an explicit error event, not a
+    // silent empty success — the client must distinguish this from a real answer.
+    if (!message) {
+      send("error", { error: "Upstream stream ended before any content was received." });
+      res.end();
+      return;
+    }
     send("done", { message, webCitations, citations: knowledgeCitations });
     res.end();
     return;
   } catch (err: any) {
-    send("error", { error: err?.message || "stream failed" });
+    // Headers already sent → we cannot change the status now; emit an explicit
+    // error event (never a done event) so the client treats it as a failure.
+    send("error", { error: err?.message || "stream failed mid-response" });
     res.end();
     return;
   }
@@ -476,12 +499,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Inject active knowledge sources into system prompt, RANKED BY RELEVANCE to
-    // the latest user question rather than a static top-12. This keeps the
-    // prompt focused (smaller, faster, less noise) and grounds the answer in the
-    // sources that actually pertain to the question. When the question has no
-    // searchable terms the ranker falls back to the original order, so grounding
-    // is never *reduced* relative to the previous static behavior.
+    // Inject active knowledge sources into the system prompt, RANKED BY
+    // RELEVANCE to the latest user question and capped at the 6 most relevant,
+    // versus the previous "first 12 in year order for every question". This is a
+    // deliberate focus/breadth trade: the set is smaller (faster, less noise)
+    // and question-specific. When the question has no searchable terms the
+    // ranker falls back to the first 6 in the original order. (To keep the old
+    // breadth exactly while still ranking, raise the cap below to 12.)
     const allKnowledgeSources = await getActiveKnowledgeSources();
     const latestUserQuery =
       [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "";

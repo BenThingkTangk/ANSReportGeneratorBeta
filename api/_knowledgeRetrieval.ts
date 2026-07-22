@@ -66,13 +66,21 @@ export function scoreSource(
 /**
  * Rank knowledge sources by relevance to `query` and return the top `limit`.
  *
- * Behavior guarantees (kept deliberately conservative so retrieval never
- * *removes* grounding relative to the old static path):
+ * Scope/accuracy note: this REPLACES the previous "inject the first 12 sources
+ * for every question" behavior with "inject the `limit` (default 6) MOST
+ * RELEVANT sources". That is a deliberate trade — the set is smaller and more
+ * focused, so total breadth can be LOWER than the old 12 when the corpus has
+ * more than `limit` entries. What it does NOT do is drop a source that the old
+ * path would have surfaced for THIS question while leaving a less-relevant one
+ * in; ranking + backfill only re-order and cap.
+ *
+ * Behavior guarantees:
  *   - If the query has no searchable terms, return the first `limit` sources in
- *     their original (year-desc) order — identical to the previous behavior.
+ *     their original (year-desc) order (a stable, relevance-agnostic fallback).
  *   - If fewer than `limit` sources match the query, backfill with the
  *     remaining sources in original order so the model still gets breadth.
- *   - Never returns more than `limit`.
+ *   - Never returns more than `limit`; callers may pass a larger `limit` (e.g.
+ *     12) to preserve the old breadth exactly while still ranking by relevance.
  */
 export function rankKnowledgeSources(
   sources: KnowledgeSource[],

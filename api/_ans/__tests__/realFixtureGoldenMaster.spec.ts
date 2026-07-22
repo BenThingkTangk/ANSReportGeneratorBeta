@@ -27,7 +27,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseANSFile, generateColomboReport } from "../../upload.js";
+import { parseANSFile, generateColomboReport, clinicalSnapshot } from "../../upload.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string) => path.join(__dirname, "fixtures", name);
@@ -88,6 +88,19 @@ describe("real de-identified fixtures — golden master", () => {
         height: d.height, ecgSampleCount: d.ecgData.length,
       });
       expect(pick(a)).toEqual(pick(b));
+    }
+  });
+
+  it("clinicalSnapshot is byte-identical across runs (envelope timestamps excluded)", () => {
+    // The full report carries generatedAt/parsedAt envelope metadata that change
+    // every run; clinicalSnapshot strips them so the CLINICAL content can be
+    // compared/hashed deterministically. Two runs on the same bytes must match.
+    for (const fn of ["pare_deid.ans", "jill_deid.ans"]) {
+      const a = clinicalSnapshot(reportFor(fixture(fn), fn).report);
+      const b = clinicalSnapshot(reportFor(fixture(fn), fn).report);
+      expect(JSON.stringify(a)).toEqual(JSON.stringify(b));
+      // The raw reports DO differ only by the excluded timestamp.
+      expect("generatedAt" in a).toBe(false);
     }
   });
 

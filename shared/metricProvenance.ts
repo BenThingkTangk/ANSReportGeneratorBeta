@@ -25,6 +25,7 @@ export type EvidenceTier = "C" | "X" | "P";
 export type MetricMethod =
   | "computed" // derived generically from the raw .ans arrays by our pipeline
   | "vendor_reported" // parsed verbatim from an ingested vendor report/PDF
+  | "derived_from_vendor" // arithmetic on vendor-reported inputs (e.g. SB = LFa/RFa)
   | "measured" // directly measured device field (e.g. cuff BP entered at test)
   | "unavailable"; // required inputs absent — no value can be produced
 
@@ -180,6 +181,27 @@ export function vendorReportedProvenance(
   };
 }
 
+/**
+ * Build provenance for a value we DERIVED arithmetically from vendor-reported
+ * inputs (e.g. SB = vendor LFa / vendor RFa when the vendor printed LFa and RFa
+ * but not the ratio). Honestly distinct from `vendor_reported` (which means
+ * "printed by the vendor verbatim"): the inputs are vendor-reported but this
+ * scalar was computed here. Still clinically interpretable because it is exact
+ * arithmetic on trusted vendor values.
+ */
+export function derivedFromVendorProvenance(
+  key: MetricKey,
+  note = "Derived here from vendor-reported inputs (not printed by the vendor verbatim).",
+): MetricProvenance {
+  return {
+    method: "derived_from_vendor",
+    tier: METRIC_TIERS[key],
+    validation: "not_applicable",
+    note,
+    citations: METRIC_CITATIONS[key],
+  };
+}
+
 /** True when a value may be shown with a normal/abnormal classification. */
 export function mayClassify(p: MetricProvenance): boolean {
   return p.method !== "unavailable";
@@ -198,7 +220,7 @@ export function mayClassify(p: MetricProvenance): boolean {
  */
 export function mayInterpretClinically(p: MetricProvenance): boolean {
   if (p.method === "unavailable") return false;
-  if (p.method === "vendor_reported" || p.method === "measured") return true;
+  if (p.method === "vendor_reported" || p.method === "derived_from_vendor" || p.method === "measured") return true;
   // method === "computed": consensus metrics OK; proprietary/contested only if
   // explicitly validated against a reference.
   if (p.tier === "C") return true;
