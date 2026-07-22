@@ -102,6 +102,13 @@ export interface SubScore {
   contribution: number;
   drivers?: WellnessDriver[];
   notes: string[];
+  /**
+   * False when every component of this sub-score depends on unavailable
+   * proprietary spectral data (e.g. sympathovagal balance on a raw ECG-only
+   * file). Omitted/true means the sub-score reflects measured data. The UI
+   * renders "Not assessed" for unavailable sub-scores instead of a number.
+   */
+  available?: boolean;
 }
 
 export interface WellnessBreakdown {
