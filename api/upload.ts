@@ -10,6 +10,7 @@ import {
   ewingNormalRangeLabel,
   COLOMBO_NORMS,
   classifyLowSbDriver,
+  ageContinuousNorm,
 } from "../shared/colomboNorms.js";
 import {
   computedProvenance,
@@ -637,36 +638,10 @@ function formatDuration(sec: number): string {
  * Age-continuous P10/P90 normal ranges from Agelink & Gelber aggregated curves.
  * Returns { lo, hi } for a given parameter at a given age.
  */
-function norm(param: string, age: number): { lo: number; hi: number } {
-  // Reference curves: linear interpolation between anchor ages.
-  // Values derived from Agelink 2001 & Gelber 1997 tables.
-  const tables: Record<string, { age: number; lo: number; hi: number }[]> = {
-    HR:       [{ age: 20, lo: 60, hi: 90 }, { age: 40, lo: 58, hi: 92 }, { age: 65, lo: 55, hi: 95 }],
-    RFa:      [{ age: 20, lo: 0.8, hi: 10 }, { age: 40, lo: 0.5, hi: 10 }, { age: 65, lo: 0.3, hi: 10 }],
-    LFa:      [{ age: 20, lo: 0.5, hi: 10 }, { age: 40, lo: 0.5, hi: 10 }, { age: 65, lo: 0.3, hi: 10 }],
-    SB:       [{ age: 20, lo: 0.4, hi: 3.0 }, { age: 40, lo: 0.4, hi: 3.0 }, { age: 65, lo: 0.4, hi: 3.0 }],
-    // Ewing ratios — Agelink Table 2
-    EI:       [{ age: 20, lo: 1.15, hi: 1.60 }, { age: 40, lo: 1.10, hi: 1.40 }, { age: 60, lo: 1.05, hi: 1.30 }],
-    Valsalva: [{ age: 20, lo: 1.30, hi: 1.80 }, { age: 40, lo: 1.20, hi: 1.60 }, { age: 60, lo: 1.15, hi: 1.50 }],
-    ThirtyFifteen: [{ age: 20, lo: 1.15, hi: 1.50 }, { age: 40, lo: 1.10, hi: 1.40 }, { age: 60, lo: 1.05, hi: 1.30 }],
-    // DB range HR
-    DB_rangeHR: [{ age: 20, lo: 19, hi: 50 }, { age: 40, lo: 15, hi: 50 }, { age: 60, lo: 10, hi: 40 }],
-  };
-  const tbl = tables[param];
-  if (!tbl) return { lo: 0, hi: 1 };
-  if (age <= tbl[0].age) return { lo: tbl[0].lo, hi: tbl[0].hi };
-  if (age >= tbl[tbl.length - 1].age) return { lo: tbl[tbl.length - 1].lo, hi: tbl[tbl.length - 1].hi };
-  for (let i = 0; i < tbl.length - 1; i++) {
-    if (age >= tbl[i].age && age <= tbl[i + 1].age) {
-      const frac = (age - tbl[i].age) / (tbl[i + 1].age - tbl[i].age);
-      return {
-        lo: tbl[i].lo + frac * (tbl[i + 1].lo - tbl[i].lo),
-        hi: tbl[i].hi + frac * (tbl[i + 1].hi - tbl[i].hi),
-      };
-    }
-  }
-  return { lo: tbl[0].lo, hi: tbl[0].hi };
-}
+// Age-continuous P10/P90 normal ranges now live in the single source of truth,
+// shared/colomboNorms.ts (`ageContinuousNorm`). This thin alias keeps the many
+// call sites below readable.
+const norm = ageContinuousNorm;
 
 function classify(value: number, lo: number, hi: number, lowBorderMargin = 0.15, highBorderMargin = 0.15): Classification {
   const borderlineLow = lo * (1 + lowBorderMargin);

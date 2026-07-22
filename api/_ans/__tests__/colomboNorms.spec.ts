@@ -14,6 +14,7 @@ import {
   sbZone,
   sbZoneLabel,
   sbIsBalanced,
+  ageContinuousNorm,
 } from "../../../shared/colomboNorms";
 
 describe("COLOMBO_NORMS — single source of truth", () => {
@@ -44,6 +45,35 @@ describe("COLOMBO_NORMS — single source of truth", () => {
 
   it("FRF 0.10 is normal (was wrongly 'low' under the 0.15 lower edge)", () => {
     expect(classifySpectral(0.1, COLOMBO_NORMS.FRF)).toBe("normal");
+  });
+});
+
+describe("ageContinuousNorm — consolidated wellness curves (was upload.ts norm())", () => {
+  it("interpolates linearly between anchor ages", () => {
+    // HR: age 30 is halfway between the 20 (60–90) and 40 (58–92) anchors.
+    const hr30 = ageContinuousNorm("HR", 30);
+    expect(hr30.lo).toBeCloseTo(59, 5);
+    expect(hr30.hi).toBeCloseTo(91, 5);
+  });
+
+  it("clamps below the youngest / above the oldest anchor", () => {
+    expect(ageContinuousNorm("HR", 10)).toEqual({ lo: 60, hi: 90 });
+    expect(ageContinuousNorm("HR", 99)).toEqual({ lo: 55, hi: 95 });
+  });
+
+  it("returns a safe default for unknown parameters", () => {
+    expect(ageContinuousNorm("NOPE", 40)).toEqual({ lo: 0, hi: 1 });
+  });
+
+  it("spectral edges agree with COLOMBO_NORMS at the age anchors (no drift)", () => {
+    // The age-stable Colombo bands and the age-continuous scoring curves must
+    // not contradict each other. SB is age-stable in both; LFa/RFa upper edge
+    // is 10 bpm² in both. This guards against the two co-located tables drifting.
+    expect(ageContinuousNorm("SB", 20)).toEqual({ lo: COLOMBO_NORMS.SB.lo, hi: COLOMBO_NORMS.SB.hi });
+    expect(ageContinuousNorm("LFa", 20).hi).toBeCloseTo(COLOMBO_NORMS.LFa.hi, 5);
+    expect(ageContinuousNorm("RFa", 20).hi).toBeCloseTo(COLOMBO_NORMS.RFa.hi, 5);
+    // Young resting LFa/RFa lower edge matches the Colombo 0.5 bpm² floor.
+    expect(ageContinuousNorm("LFa", 20).lo).toBeCloseTo(COLOMBO_NORMS.LFa.lo, 5);
   });
 });
 
