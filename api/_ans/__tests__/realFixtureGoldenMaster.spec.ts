@@ -260,10 +260,10 @@ describe("BLOCKER 1 regression — baseline-only vendor never fabricates B–F f
       expect(allText).not.toMatch(/(Low|Abnormal|High) sympathetic response \(LFa\) to stand/i);
       // No fabricated advanced autonomic dysfunction from unassessed challenges.
       expect(allText).not.toMatch(/advanced autonomic dysfunction/i);
-      expect(report.patterns?.advancedAutonomicDysfunction).toBeFalsy();
-      expect(report.patterns?.CAN).toBeFalsy();
-      expect(report.patterns?.sympatheticWithdrawal).toBeFalsy();
-      expect(report.patterns?.parasympatheticWithdrawal).toBeFalsy();
+      expect(report.dysfunctionPatterns?.advancedAutonomicDysfunction).toBeFalsy();
+      expect(report.dysfunctionPatterns?.CAN).toBeFalsy();
+      expect(report.dysfunctionPatterns?.sympatheticWithdrawal).toBeFalsy();
+      expect(report.dysfunctionPatterns?.parasympatheticWithdrawal).toBeFalsy();
 
       // The unassessed phases must SAY so, not render a classification.
       const dbPhase = report.phaseFindings.find((p: any) => /DEEP BREATHING/i.test(p.phase));

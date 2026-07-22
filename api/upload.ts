@@ -4,6 +4,7 @@ import { ansStudyToLegacy } from "./_ans/legacyAdapter.js";
 import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
 import { reconcileStudyWithReport } from "./_ans/reconcileStudy.js";
 import { reconcilePhenotypesWithVendor } from "./_ans/reconcilePhenotypesWithVendor.js";
+import { reconcileVendorIdentity } from "./_ans/reconcileVendorIdentity.js";
 import {
   EWING_THRESHOLDS,
   classifyEwing,
@@ -277,6 +278,14 @@ interface ANSReport {
   clinicianSynopsis?: string;
   multiParameter?: MultiParameterGraphical;
   indications?: Indication[];
+  /**
+   * Present only when a paired vendor-PDF metrics payload was supplied but its
+   * identity (patient name / study date / DOB) did NOT reconcile with the
+   * uploaded .ans, so the vendor values were dropped. Surfaced so the UI can
+   * warn the clinician that the PDF and the study appear to be different
+   * patients/visits — never silently ignored.
+   */
+  vendorReconciliationWarnings?: string[];
 }
 
 // ---- Multipart Parser -------------------------------------------------------
@@ -2432,24 +2441,65 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Optional paired vendor-PDF metrics: passed as a JSON header so the custom
     // single-part multipart parser above is untouched. Malformed input is
     // ignored (report falls back to the honest "Not assessed" gate).
+    //
+    // SAFETY (BLOCKER 2): vendor metrics are the sole trigger for the full
+    // spectral/BP interpretation pathway, so they are applied ONLY after the
+    // vendor PDF's identity (patient name + study date, DOB when present) is
+    // reconciled server-side against the parsed .ans. The client cannot be
+    // trusted to enforce this. A mismatch — or a payload that omits identity —
+    // drops the metrics and records an explicit warning; it NEVER silently
+    // overrides one patient's study with another's vendor numbers.
     let vendorMetrics: VendorReportedMetrics | undefined;
+    const vendorWarnings: string[] = [];
     const vmHeader = req.headers["x-vendor-metrics"];
     if (typeof vmHeader === "string" && vmHeader.trim()) {
       try {
         const parsed = JSON.parse(vmHeader);
         const pick = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
-        vendorMetrics = {
+        const candidate: VendorReportedMetrics = {
           LFa: pick(parsed.LFa),
           RFa: pick(parsed.RFa),
           SB: pick(parsed.SB),
           SBP: pick(parsed.SBP),
           DBP: pick(parsed.DBP),
         };
+        const hasAnyMetric = Object.values(candidate).some((v) => v !== undefined);
+        if (hasAnyMetric) {
+          // Identity may be nested (`identity`) or flat on the payload.
+          const idIn = parsed.identity ?? {
+            patientName: parsed.patientName,
+            testDate: parsed.testDate,
+            dob: parsed.dob,
+          };
+          const recon = reconcileVendorIdentity(
+            {
+              patientName: typeof idIn?.patientName === "string" ? idIn.patientName : null,
+              testDate: typeof idIn?.testDate === "string" ? idIn.testDate : null,
+              dob: typeof idIn?.dob === "string" ? idIn.dob : null,
+            },
+            {
+              firstName: patientData.firstName,
+              lastName: patientData.lastName,
+              testDate: patientData.testDate,
+              dob: patientData.dobString,
+            },
+          );
+          if (recon.ok) {
+            vendorMetrics = candidate;
+          } else {
+            vendorWarnings.push(recon.reason ?? "Vendor report identity could not be reconciled with the uploaded .ans; vendor values were not applied.");
+            console.warn("[upload] vendor identity reconciliation FAILED:", recon.reason);
+          }
+        }
       } catch {
         console.warn("[upload] ignoring malformed x-vendor-metrics header");
+        vendorWarnings.push("The paired vendor-metrics payload was malformed and was ignored.");
       }
     }
     const report = generateColomboReport(patientData, vendorMetrics);
+    if (vendorWarnings.length > 0) {
+      (report as { vendorReconciliationWarnings?: string[] }).vendorReconciliationWarnings = vendorWarnings;
+    }
     // Send only a preview of the raw ECG to the client — the full waveform
     // stays server-side (we'd blow past the Vercel payload limit otherwise).
     // The Multi-Parameter Graphical and Colombo analysis have already run

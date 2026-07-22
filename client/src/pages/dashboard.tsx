@@ -135,7 +135,23 @@ export default function Dashboard() {
         stage?: string;
       }>("/api/upload", pendingFile, {
         timeoutMs: 90_000,
-        headers: vendorMetrics ? { "x-vendor-metrics": JSON.stringify(vendorMetrics) } : undefined,
+        // Carry the vendor PDF's identity alongside the metrics so the SERVER
+        // can reconcile it against the parsed .ans before applying any value.
+        // The client is never trusted to gate this — it only forwards.
+        headers: vendorMetrics
+          ? {
+              "x-vendor-metrics": JSON.stringify({
+                ...vendorMetrics,
+                identity: vendorExtraction?.identity
+                  ? {
+                      patientName: vendorExtraction.identity.patientName?.value ?? null,
+                      testDate: vendorExtraction.identity.testDate?.value ?? null,
+                      dob: vendorExtraction.identity.dob?.value ?? null,
+                    }
+                  : null,
+              }),
+            }
+          : undefined,
       });
       cancelled = true;
 
@@ -159,7 +175,7 @@ export default function Dashboard() {
       await new Promise(r => setTimeout(r, 3000));
       setAppState("review");
     }
-  }, [pendingFile, vendorMetrics]);
+  }, [pendingFile, vendorMetrics, vendorExtraction]);
 
   const handleReparse = useCallback(() => {
     if (pendingFile) {
