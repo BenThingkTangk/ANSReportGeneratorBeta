@@ -227,3 +227,58 @@ describe("vendor-parity contract — unresolved values are explicit, never inven
     }
   });
 });
+
+describe("BLOCKER 1 regression — baseline-only vendor never fabricates B–F findings", () => {
+  // A paired vendor PDF supplies ONLY baseline (A) spectral + cuff BP. Phases
+  // B–F stay null. The global spectralAvailable gate becomes true, but the
+  // per-phase gate must keep the unassessed Valsalva/stand responses out of the
+  // narrative — the prior code classified null→0 and fabricated Low/Abnormal
+  // responses and a spurious "advanced autonomic dysfunction" impression.
+  const baselineOnlyVendor = { LFa: 1.5, RFa: 2.5, SB: 0.6, SBP: 92, DBP: 55 };
+
+  for (const fn of ["jill_deid.ans", "pare_deid.ans"]) {
+    it(`${fn}: baseline-only vendor unlocks A but never fabricates Valsalva/stand/AAD`, () => {
+      const { data } = reportFor(fixture(fn), fn);
+      const report = generateColomboReport(data, baselineOnlyVendor);
+
+      expect(report.spectralAvailable).toBe(true); // baseline A is vendor-reported
+      // Baseline A carries the real vendor values.
+      expect(report.phaseEvents[0].LFa).toBe(1.5);
+      // Phases B–F remain null (vendor gave baseline only).
+      expect(report.phaseEvents[3].LFa).toBeNull(); // Valsalva D
+      expect(report.phaseEvents[5].LFa).toBeNull(); // Stand F
+
+      const allText = [
+        ...report.phaseFindings.flatMap((p: any) => p.findings),
+        report.overallImpression,
+        report.riskLevel,
+      ].join("   ");
+
+      // No fabricated spectral abnormality for the unassessed phases.
+      expect(allText).not.toMatch(/Low sympathetic response \(LFa\) to Valsalva/i);
+      expect(allText).not.toMatch(/Low parasympathetic response \(RFa\) to Valsalva/i);
+      expect(allText).not.toMatch(/(Low|Abnormal|High) sympathetic response \(LFa\) to stand/i);
+      // No fabricated advanced autonomic dysfunction from unassessed challenges.
+      expect(allText).not.toMatch(/advanced autonomic dysfunction/i);
+      expect(report.patterns?.advancedAutonomicDysfunction).toBeFalsy();
+      expect(report.patterns?.CAN).toBeFalsy();
+      expect(report.patterns?.sympatheticWithdrawal).toBeFalsy();
+      expect(report.patterns?.parasympatheticWithdrawal).toBeFalsy();
+
+      // The unassessed phases must SAY so, not render a classification.
+      const dbPhase = report.phaseFindings.find((p: any) => /DEEP BREATHING/i.test(p.phase));
+      expect(dbPhase?.findings.join(" ")).toMatch(/not assessed/i);
+      const standPhase = report.phaseFindings.find((p: any) => /STAND/i.test(p.phase));
+      expect(standPhase?.findings.join(" ")).toMatch(/not assessed/i);
+    });
+  }
+
+  it("stand HR-only findings (POTS) still surface without spectral", () => {
+    // HR delta on standing is ECG-derived and must remain reportable even when
+    // stand spectral is unavailable.
+    const { data } = reportFor(fixture("jill_deid.ans"), "jill_deid.ans");
+    const report = generateColomboReport(data, baselineOnlyVendor);
+    const standPhase = report.phaseFindings.find((p: any) => /STAND/i.test(p.phase));
+    expect(standPhase?.findings.join(" ")).toMatch(/HR response|POTS/i);
+  });
+});

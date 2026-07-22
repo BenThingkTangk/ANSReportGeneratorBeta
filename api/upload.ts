@@ -656,6 +656,27 @@ function classify(value: number, lo: number, hi: number, lowBorderMargin = 0.15,
   return { label, severity, value, lo, hi };
 }
 
+/**
+ * Per-phase-safe classification. Returns null when the value is null/undefined/
+ * non-finite/≤0 (i.e. the proprietary spectral aggregate for THIS phase was not
+ * captured), so a missing value can never be coerced to 0 and classified as
+ * "Low"/"Abnormal". This is the guard for the baseline-only vendor case, where
+ * the GLOBAL spectralAvailable gate is true (baseline A was vendor-reported) but
+ * phases B–F still carry null spectral — classifying those nulls fabricated
+ * Low/Abnormal Valsalva/stand responses and a spurious "advanced autonomic
+ * dysfunction" impression.
+ */
+function classifyOrNull(
+  value: number | null | undefined,
+  lo: number,
+  hi: number,
+  lowBorderMargin = 0.15,
+  highBorderMargin = 0.15,
+): Classification | null {
+  if (value == null || !Number.isFinite(value) || value <= 0) return null;
+  return classify(value, lo, hi, lowBorderMargin, highBorderMargin);
+}
+
 // ============================================================================
 // STAGE 6 — Continuous Wellness Score (5-factor, age-normalized)
 // ============================================================================
@@ -1959,14 +1980,22 @@ export function generateColomboReport(
   // Spectral (LFa/RFa/SB) modulation findings are only emitted when the
   // proprietary aggregates are clinically available. Otherwise we state, once,
   // that they were not assessed — never a fabricated Normal/Low classification.
-  if (spectralAvailable) {
-    const lfaA = classify(A.LFa as number, LFa_n.lo, LFa_n.hi);
-    if (lfaA.label === "Borderline Low") baselineFindings.push("Borderline low sympathetic modulation (LFa)");
-    else if (lfaA.severity === "Normal") baselineFindings.push("Normal sympathetic modulation (LFa)");
-    else baselineFindings.push(`${lfaA.label} sympathetic modulation (LFa)`);
-    const rfaA = classify(A.RFa as number, RFa_n.lo, RFa_n.hi);
-    if (rfaA.severity === "Normal") baselineFindings.push("Normal parasympathetic modulation (RFa)");
-    else baselineFindings.push(`${rfaA.label} parasympathetic modulation (RFa)`);
+  // Per-phase classification: only classify a phase's spectral value when THAT
+  // phase actually carries it (non-null). The global spectralAvailable gate is
+  // necessary but NOT sufficient — with baseline-only vendor metrics it is true
+  // while phases B–F are still null.
+  const lfaA = classifyOrNull(A.LFa, LFa_n.lo, LFa_n.hi);
+  const rfaA = classifyOrNull(A.RFa, RFa_n.lo, RFa_n.hi);
+  if (spectralAvailable && (lfaA || rfaA)) {
+    if (lfaA) {
+      if (lfaA.label === "Borderline Low") baselineFindings.push("Borderline low sympathetic modulation (LFa)");
+      else if (lfaA.severity === "Normal") baselineFindings.push("Normal sympathetic modulation (LFa)");
+      else baselineFindings.push(`${lfaA.label} sympathetic modulation (LFa)`);
+    }
+    if (rfaA) {
+      if (rfaA.severity === "Normal") baselineFindings.push("Normal parasympathetic modulation (RFa)");
+      else baselineFindings.push(`${rfaA.label} parasympathetic modulation (RFa)`);
+    }
     if (parasympatheticDominance) {
       // Describe the low ratio by its driver (generic) — reduced sympathetic
       // modulation vs genuine parasympathetic excess — WITHOUT asserting
@@ -1984,19 +2013,29 @@ export function generateColomboReport(
   phaseFindings.push({ phase: "INITIAL BASELINE", indication: "Indication of balance in the patient's Autonomic Nervous System (ANS) and protection of the heart", findings: baselineFindings });
 
   const dbFindings: string[] = [];
-  // lfaD/rfaD/lfaF are null when spectral is unavailable so the impression
-  // counting below can't treat a missing value as "Abnormal".
-  const lfaD = spectralAvailable ? classify(D.LFa as number, LFa_n.lo, LFa_n.hi) : null;
-  const rfaD = spectralAvailable ? classify(D.RFa as number, RFa_n.lo, RFa_n.hi) : null;
-  const lfaF = spectralAvailable ? classify(F.LFa as number, LFa_n.lo, LFa_n.hi) : null;
-  if (spectralAvailable) {
+  // Per-phase-null-safe: lfaD/rfaD/lfaF are null unless THAT phase carries a
+  // usable spectral value, so neither the findings below nor the impression
+  // counting can treat a missing value as "Abnormal". (Under baseline-only
+  // vendor metrics these are null even though spectralAvailable is true.)
+  const lfaD = classifyOrNull(D.LFa, LFa_n.lo, LFa_n.hi);
+  const rfaD = classifyOrNull(D.RFa, RFa_n.lo, RFa_n.hi);
+  const lfaF = classifyOrNull(F.LFa, LFa_n.lo, LFa_n.hi);
+  // "DB RFa low" is only a real finding when B's RFa was actually captured.
+  const dbSpectralAssessed = B_RFa != null;
+  const valsalvaSpectralAssessed = lfaD != null || rfaD != null;
+  if (spectralAvailable && (dbSpectralAssessed || valsalvaSpectralAssessed || highFRF)) {
     if (highFRF) {
       dbFindings.push(`NOTE: Fundamental Respiratory Frequency (FRF) is high during DB (${B.FRF.toFixed(2)} Hz; Normal: 0.09–0.15) which may artificially reduce the parasympathetic measure. High FRF may be associated with upper respiratory or pulmonary disorder and anxiety. Consider treating the patient and retesting to obtain the true interpretation for the DB phase.`);
     }
-    if (dbRFaLow) dbFindings.push("Low parasympathetic response (RFa) to DB suggesting possible autonomic dysfunction");
-    else dbFindings.push("Normal parasympathetic response (RFa) to DB");
-    dbFindings.push(`${lfaD!.severity === "Normal" ? "Normal" : lfaD!.label} sympathetic response (LFa) to Valsalva`);
-    dbFindings.push(`${rfaD!.severity === "Normal" ? "Normal" : rfaD!.label} parasympathetic response (RFa) to Valsalva`);
+    if (dbSpectralAssessed) {
+      if (dbRFaLow) dbFindings.push("Low parasympathetic response (RFa) to DB suggesting possible autonomic dysfunction");
+      else dbFindings.push("Normal parasympathetic response (RFa) to DB");
+    }
+    if (lfaD) dbFindings.push(`${lfaD.severity === "Normal" ? "Normal" : lfaD.label} sympathetic response (LFa) to Valsalva`);
+    if (rfaD) dbFindings.push(`${rfaD.severity === "Normal" ? "Normal" : rfaD.label} parasympathetic response (RFa) to Valsalva`);
+    if (!dbSpectralAssessed && !valsalvaSpectralAssessed) {
+      dbFindings.push("Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed for these phases — the vendor report supplied baseline values only.");
+    }
   } else {
     dbFindings.push("Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed — not reproducible from this recording.");
   }
@@ -2018,8 +2057,14 @@ export function generateColomboReport(
   phaseFindings.push({ phase: "DEEP BREATHING (DB) AND VALSALVA RESPONSES", indication: "Detection of early signs of autonomic dysfunction and chronic disease", findings: dbFindings });
 
   const standFindings: string[] = [];
-  if (spectralAvailable) {
-    standFindings.push(`${lfaF!.severity === "Normal" ? "Normal" : lfaF!.label} sympathetic response (LFa) to stand`);
+  // Standing spectral findings require the STAND phase's own spectral values —
+  // gated on standSpectralAvailable (true only when F's provenance is
+  // clinically interpretable), NOT the global spectralAvailable (which is true
+  // for a baseline-only vendor override while F stays null). lfaF is per-phase
+  // null-safe. preSyncope/vasovagal/parasympatheticExcess already derive from
+  // sfLFa/sfRFa which enforce the same gate.
+  if (standSpectralAvailable && lfaF) {
+    standFindings.push(`${lfaF.severity === "Normal" ? "Normal" : lfaF.label} sympathetic response (LFa) to stand`);
     if (preSyncopeRisk) standFindings.push('A higher peak sympathetic response (LFa) to stand compared to the response during Valsalva suggesting a possible risk of pre-syncope [Check "HR" and "Trends" plot and EKG Report to rule out ectopy]');
     if (vasovagalRisk) standFindings.push("Relatively higher parasympathetic activation (RFa) compared to sympathetic activation (LFa) throughout the test suggesting risk of possible vasovagal pre-syncope");
     if (parasympatheticExcess) standFindings.push("High parasympathetic activation (RFa) indicating excess parasympathetic activity ** [Check for symptoms such as unstable BP and dizziness]");
@@ -2045,8 +2090,23 @@ export function generateColomboReport(
   if (valsalvaAbnormal) challenges.push("the sympathetic response (LFa) during Valsalva is abnormal");
   if (standAbnormal) challenges.push("the response to standing is abnormal");
   const abnormalChallengeCount = challenges.length;
+  // A challenge is ASSESSED only when its spectral input (or, for stand, HR/BP)
+  // was actually captured. With baseline-only vendor metrics, none of the DB /
+  // Valsalva / stand spectral responses are assessed, so the dysfunction-grading
+  // ladder below must NOT run — it would read the absence of abnormalities as
+  // "normal autonomic function" or (worse, via the old null-classify bug)
+  // fabricate "advanced autonomic dysfunction". standSpectralAvailable / POTS /
+  // orthostaticBpAssessable make the stand challenge assessable on HR/BP alone.
+  const dbChallengeAssessed = dbSpectralAssessed;
+  const valsalvaChallengeAssessed = valsalvaSpectralAssessed;
+  // The dysfunction-grading ladder is a spectral + orthostatic-BP construct; it
+  // runs only when at least one of those challenge measures was actually
+  // captured. HR-only findings (POTS / bradycardia) are surfaced in the
+  // supported-observations text via hrNote regardless.
+  const anyChallengeAssessed =
+    dbChallengeAssessed || valsalvaChallengeAssessed || standSpectralAvailable || orthostaticBpAssessable;
   let overall: string;
-  if (!spectralAvailable) {
+  if (!spectralAvailable || !anyChallengeAssessed) {
     // With only ECG-derived HR + Ewing ratios, we can only report those
     // supported observations — never an autonomic-dysfunction grading that
     // depends on spectral challenge responses.
