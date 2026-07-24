@@ -48,6 +48,22 @@ function fnv1a(str: string): string {
   return h.toString(16);
 }
 
+/**
+ * Remove literature citation markers from patient-facing prose. Strips inline
+ * bracket refs like "[1]", "[2, 3]", "[1-15]" and a trailing "Sources:"/
+ * "References:" list. Patient answers are grounded in the patient's own report,
+ * not external literature, so these must never appear.
+ */
+export function stripCitationMarkers(text: string): string {
+  return text
+    // inline [1], [2,3], [1-15], [1][2]
+    .replace(/\s?\[\d+(?:\s*[-,]\s*\d+)*\]/g, "")
+    // a trailing Sources/References/Citations block to end of string
+    .replace(/\n+\s*(?:sources|references|citations)\s*:[\s\S]*$/i, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 function cacheGet(key: string): CachedAnswer | null {
   const hit = answerCache.get(key);
   if (!hit) return null;
@@ -86,10 +102,11 @@ async function streamSonar(opts: {
   conversation: Array<{ role: string; content: string }>;
   knowledgeCitations: unknown[];
   grounding?: unknown;
+  patientMode?: boolean;
   cacheKey: string;
   res: VercelResponse;
 }): Promise<void> {
-  const { apiKey, conversation, knowledgeCitations, grounding, cacheKey, res } = opts;
+  const { apiKey, conversation, knowledgeCitations, grounding, patientMode, cacheKey, res } = opts;
   const send = (event: string, data: unknown) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
@@ -135,6 +152,7 @@ async function streamSonar(opts: {
 
   try {
     let full = "";
+    let emitted = ""; // for patient mode: how much sanitized text we've sent
     let webCitations: unknown[] = [];
     let buffer = "";
     const decoder = new TextDecoder();
@@ -154,7 +172,20 @@ async function streamSonar(opts: {
           const delta = j?.choices?.[0]?.delta?.content ?? "";
           if (delta) {
             full += delta;
-            send("delta", { text: delta });
+            if (patientMode) {
+              // Emit only the sanitized suffix so bracket citations never reach
+              // the patient client, even mid-stream. (A trailing '[' is held
+              // back until the next chunk resolves whether it's a citation.)
+              const safeFull = stripCitationMarkers(full);
+              const pendingBracket = /\[[\d\s,–-]*$/.test(safeFull);
+              const upTo = pendingBracket ? safeFull.replace(/\[[\d\s,–-]*$/, "") : safeFull;
+              if (upTo.length > emitted.length) {
+                send("delta", { text: upTo.slice(emitted.length) });
+                emitted = upTo;
+              }
+            } else {
+              send("delta", { text: delta });
+            }
           }
           const cites = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean);
           if (Array.isArray(cites) && cites.length) webCitations = cites;
@@ -164,8 +195,11 @@ async function streamSonar(opts: {
       }
     }
 
-    const message = full.trim();
-    if (message) cacheSet(cacheKey, { message, webCitations });
+    const rawMessage = full.trim();
+    // Patient mode: strip citation markers + suppress the web-citation list.
+    const message = patientMode ? stripCitationMarkers(rawMessage) : rawMessage;
+    const outWebCitations = patientMode ? [] : webCitations;
+    if (message) cacheSet(cacheKey, { message, webCitations: outWebCitations });
     // Mid-stream truncation with no content is an explicit error event, not a
     // silent empty success — the client must distinguish this from a real answer.
     if (!message) {
@@ -173,7 +207,12 @@ async function streamSonar(opts: {
       res.end();
       return;
     }
-    send("done", { message, webCitations, citations: knowledgeCitations, grounding });
+    // In patient mode emit any remaining sanitized tail so the final rendered
+    // text equals `message` even if the client concatenated deltas.
+    if (patientMode && message.length > emitted.length) {
+      send("delta", { text: message.slice(emitted.length) });
+    }
+    send("done", { message, webCitations: outWebCitations, citations: knowledgeCitations, grounding });
     res.end();
     return;
   } catch (err: any) {
@@ -213,9 +252,22 @@ Evidence-grounding rules (HIGHEST PRIORITY — apply whenever a "KNOWLEDGE LIBRA
 - Ground answers in (a) the PATIENT REPORT facts below, and (b) clearly-labeled general physiology stated as such. Any external claim MUST be labeled "External (web)" and carry a real, resolvable URL; if you cannot provide a URL, do not make the claim.
 - Prefer "I can't cite specific studies here because the knowledge base has no indexed full-text; based on your report …" over an unsupported cited statistic. Being explicit about the limitation is required, not optional.
 
-Audience mode (the PATIENT CONTEXT block states the viewer role — "clinician view" or "patient view"):
-- CLINICIAN VIEW: be scientifically deep. Use the full Colombo methodology — name the specific phase responses, LFa/RFa/SB values and their bpm² units, Ewing battery ratios and thresholds, the phenotype classifications (PE, SE, SW, OD, POTS, VVS, AAN, CAN) with their defining criteria, and the graded treatment protocol including doses and titration when the underlying metrics are assessed. Do not water this down; the clinician needs the mechanism and the numbers.
-- PATIENT VIEW: simplify the language WITHOUT omitting meaning. Translate every assessed finding into plain terms (e.g. "rest-and-digest" for parasympathetic, "fight-or-flight" for sympathetic) and connect it to how the patient may feel, but keep the actual finding, its significance, and the recommended direction of care. Simplify wording, never delete substance.
+Audience mode (the PATIENT CONTEXT block states the viewer role — "clinician view" or "patient view"). Mode tone is STRICTLY isolated — never let clinician phrasing leak into a patient answer:
+
+- PATIENT VIEW (address the patient directly as "you"/"your", by the first name in the context):
+  • LEAD with THIS patient's actual measured values from the PATIENT CONTEXT (e.g. "Your E/I ratio was 1.22"), then explain in plain language what that means for them. Do NOT open with generic textbook thresholds or a definition.
+  • Speak to the patient, never about them: use "you"/"your". NEVER write "the patient", "your patient's", "this patient", "map your patient's ratios", or any phrasing addressed to a clinician.
+  • Do NOT diagnose OR exclude conditions. Never say a result "argues against"/"rules out"/"is consistent with" cardiovascular autonomic neuropathy (CAN/AAN), POTS, or any named disease. Say what was measured and that interpretation is for their clinician.
+  • Do NOT give prognosis, risk levels, sensitivity/specificity, or survival/morbidity statements.
+  • Plain terms only: "rest-and-digest" (parasympathetic), "fight-or-flight" (sympathetic), "calming reflex" (cardiovagal). You may still name a ratio and its number, but explain it.
+  • State the limitations plainly: the sympathetic/parasympathetic spectral split (LFa/RFa/SB) and blood pressure were NOT captured in this recording, so you cannot speak to them.
+  • Do NOT include bracketed reference markers ([1], [2], …) or a citations/sources list. Patient answers are grounded in the patient's own report, not literature.
+
+- CLINICIAN VIEW: be scientifically deep. Use the full Colombo methodology — specific phase responses, LFa/RFa/SB values and bpm² units, Ewing battery ratios and thresholds, phenotype classifications (PE, SE, SW, OD, POTS, VVS, AAN, CAN) with defining criteria, and the graded treatment protocol with doses/titration WHEN the underlying metrics are assessed. Additionally you MUST clearly separate three grounding tiers:
+  • MEASURED (report): facts from this patient's report/PATIENT CONTEXT — label them as measured.
+  • EXTERNAL (web): any general-literature claim must be labeled "External (web)" and carry a real, resolvable URL; without a URL, do not make the claim.
+  • PRIVATE CORPUS: state that the private knowledge base has no indexed full-text chunks, so nothing here is RAG-grounded.
+
 - In BOTH modes the assessability/provenance rules below are absolute: only speak to what was actually measured.
 
 When analyzing a patient's ANS state, structure your response in three sections (only on the first message or when the user asks for an interpretation; skip for follow-up clarifications):
@@ -448,14 +500,36 @@ export function buildPatientContext(report: any, viewerRole: string): string {
   const assessability = buildAssessabilitySection(report);
   const overall = report.overallImpression || "(none)";
   const contraindList = (report.contraindications ?? []).join("; ") || "None flagged.";
+  const firstName = (pd.firstName ?? "").trim() || name;
+
+  // Explicit measured Ewing (cardiovagal) ratios — THIS patient's actual values
+  // with their normal reference. These are ECG-derived and always present, so
+  // answers about the ratios must lead with these numbers rather than generic
+  // textbook thresholds.
+  const ratios = report.ratios ?? {};
+  const ratioLine = (label: string, r: any): string | null => {
+    if (!r || typeof r.value !== "number") return null;
+    const cls = r.classification?.label ?? r.classification?.severity ?? "";
+    return `- ${label}: ${r.value} (normal ${r.normal ?? "?"})${cls ? ` — ${cls}` : ""}`;
+  };
+  const ratioLines = [
+    ratioLine("E/I ratio (deep-breathing)", ratios.eiRatio),
+    ratioLine("Valsalva ratio", ratios.valsalvaRatio),
+    ratioLine("30:15 ratio (standing)", ratios.thirtyFifteenRatio),
+  ].filter(Boolean);
+  const ratiosBlock = ratioLines.length
+    ? `Measured cardiovagal (Ewing) ratios for ${firstName} — ECG-derived, actually measured:\n${ratioLines.join("\n")}`
+    : "Measured cardiovagal (Ewing) ratios: none available.";
 
   return `--------------------------------------------------
 PATIENT CONTEXT (${viewerRole} view)
 --------------------------------------------------
-Patient: ${name} | Age: ${age} | Sex: ${sex} | BMI: ${bmi}
+Patient: ${name} | First name (address the patient by this in patient view): ${firstName} | Age: ${age} | Sex: ${sex} | BMI: ${bmi}
 Physician: ${physician}
 Medications: ${meds}
 Reported Symptoms: ${symptoms}
+
+${ratiosBlock}
 
 Event Mean Data (a cell reading "${NOT_ASSESSED}", or any 0 / blank spectral value, means the metric was NOT captured — never treat it as a real measurement):
 ${meanTable}
@@ -577,6 +651,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         conversation,
         knowledgeCitations,
         grounding,
+        patientMode: viewerRole === "patient",
         cacheKey,
         res,
       });
@@ -601,9 +676,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).json({ success: false, error: `Sonar error ${r.status}: ${text.slice(0, 300)}` });
     }
     const j = (await r.json()) as any;
-    const message = j?.choices?.[0]?.message?.content?.trim() || "";
+    const rawMessage = j?.choices?.[0]?.message?.content?.trim() || "";
     // Perplexity web citations renamed to webCitations to disambiguate from internal knowledge citations
-    const webCitations = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean) || [];
+    const rawWebCitations = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean) || [];
+    // Patient mode must never expose literature citations: strip bracket markers
+    // from the prose and drop the web-citation list. Clinician mode keeps them.
+    const message = viewerRole === "patient" ? stripCitationMarkers(rawMessage) : rawMessage;
+    const webCitations = viewerRole === "patient" ? [] : rawWebCitations;
 
     // Only cache non-empty answers so a transient blank never sticks.
     if (message) cacheSet(cacheKey, { message, webCitations });
