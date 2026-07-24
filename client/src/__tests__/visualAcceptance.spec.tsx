@@ -133,6 +133,17 @@ describe("Visual acceptance — Pare .ans-only report (render invariants)", () =
     expect(report.bpAvailable).toBe(false);
   });
 
+  it("upload screen exposes an accessible, automatable .ans file input", async () => {
+    const { render, screen } = await import("@testing-library/react");
+    const { UploadScreen } = await import("../components/UploadScreen");
+    render(<UploadScreen onUpload={() => {}} />);
+    const input = screen.getByTestId("file-input") as HTMLInputElement;
+    // Real file input, accept-filtered, and NOT display:none (automatable).
+    expect(input.type).toBe("file");
+    expect(input.accept).toContain(".ans");
+    expect(input.className).not.toMatch(/\bhidden\b/);
+  });
+
   for (const vp of [
     { tag: "desktop", w: 1280, h: 900 },
     { tag: "mobile", w: 390, h: 844 },
