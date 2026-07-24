@@ -21,7 +21,7 @@
  *     familiar and traceable.
  */
 import { motion } from "framer-motion";
-import type { VendorReportExtraction, VendorField, VendorPhaseTable, VendorPhaseRow, VendorOrthostaticObservation } from "@shared/vendorExtraction";
+import type { VendorReportExtraction, VendorField, VendorPhaseTable, VendorPhaseRow, VendorOrthostaticObservation, VendorNarrativeFinding } from "@shared/vendorExtraction";
 import { crossCheckTestDate } from "@shared/vendorExtraction";
 import {
   COLOMBO_NORMS,
@@ -326,6 +326,14 @@ export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileNa
         </div>
       </section>
 
+      {/* Narrative findings (Diagnostic Implication Summary / Colombo letter) —
+          categorical vendor findings + any number the vendor printed in prose
+          (e.g. SB = 2.59). Present on narrative-style PDFs with no numeric grid. */}
+      {extraction.narrative &&
+        (extraction.narrative.findings.length > 0 || extraction.narrative.printedNumbers.length > 0) && (
+          <VendorNarrativeSection narrative={extraction.narrative} />
+        )}
+
       {/* Per-phase A–F Numerical Summary (page 2) — vendor's own table grammar */}
       {extraction.phases && extraction.phases.rows.length > 0 && (
         <>
@@ -344,6 +352,85 @@ export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileNa
         Indications, Therapies, and Outcomes.</em> Springer, 2014). Normal ranges per Colombo P&amp;S 4.0.
       </p>
     </motion.div>
+  );
+}
+
+/** Color + label for a categorical vendor finding classification. */
+function findingStyle(c: VendorNarrativeFinding["classification"]): { color: string; text: string } {
+  switch (c) {
+    case "normal": return { color: "hsl(140 60% 55%)", text: "Normal" };
+    case "high-normal": return { color: "hsl(140 55% 60%)", text: "High-normal" };
+    case "borderline-low": return { color: "hsl(38 92% 60%)", text: "Borderline low" };
+    case "borderline-high": return { color: "hsl(38 92% 60%)", text: "Borderline high" };
+    case "low": return { color: "hsl(17 100% 62%)", text: "Low" };
+    case "high": return { color: "hsl(0 72% 62%)", text: "High" };
+    case "abnormal": return { color: "hsl(0 72% 62%)", text: "Abnormal" };
+    case "present": return { color: "hsl(0 72% 62%)", text: "Present" };
+    default: return { color: "hsl(var(--muted-foreground))", text: c };
+  }
+}
+
+const PHASE_TITLE: Record<VendorNarrativeFinding["phase"], string> = {
+  baseline: "Initial Baseline",
+  deep_breathing_valsalva: "Deep Breathing & Valsalva",
+  stand: "Stand Responses",
+  overall: "Overall",
+};
+
+/**
+ * Narrative vendor findings — the Diagnostic Implication Summary / Colombo
+ * letter state findings in prose (no numeric grid). Renders the vendor's OWN
+ * categorical findings verbatim, grouped by phase, plus any number the vendor
+ * printed in prose (e.g. SB = 2.59). Everything is vendor_reported; nothing is
+ * computed. This is what fills the view for narrative-only vendor PDFs.
+ */
+function VendorNarrativeSection({ narrative }: { narrative: NonNullable<VendorReportExtraction["narrative"]> }) {
+  const byPhase = new Map<VendorNarrativeFinding["phase"], VendorNarrativeFinding[]>();
+  for (const f of narrative.findings) {
+    const arr = byPhase.get(f.phase) ?? [];
+    arr.push(f);
+    byPhase.set(f.phase, arr);
+  }
+  const order: VendorNarrativeFinding["phase"][] = ["baseline", "deep_breathing_valsalva", "stand", "overall"];
+  return (
+    <section className="ps-glass p-4" data-testid="vendor-narrative-findings">
+      <h4 className="ps-overline ps-underline-cyan mb-1">Vendor-reported findings</h4>
+      <p className="text-[10px] text-muted-foreground/70 mb-3">
+        Categorical findings printed in the signed report/letter (vendor-reported, verbatim).
+        Values the vendor did not print numerically are shown as the vendor's own wording — never converted to a number.
+      </p>
+      {narrative.printedNumbers.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2" data-testid="vendor-printed-numbers">
+          {narrative.printedNumbers.map((n) => (
+            <span key={n.key} className="inline-flex items-baseline gap-1 rounded px-2 py-1 text-xs"
+              style={{ background: "hsl(244 84% 68% / 0.12)", color: "hsl(244 84% 78%)" }}
+              title={n.sourceText}>
+              <span className="font-medium">{n.key}</span>
+              <span className="tabular-nums">{n.value}</span>
+              <span className="text-[9px] uppercase opacity-70">vendor-printed</span>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="space-y-3">
+        {order.filter((p) => byPhase.has(p)).map((p) => (
+          <div key={p}>
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground/80 mb-1">{PHASE_TITLE[p]}</div>
+            <ul className="space-y-1">
+              {byPhase.get(p)!.map((f) => {
+                const s = findingStyle(f.classification);
+                return (
+                  <li key={f.key} className="flex items-start justify-between gap-3 text-xs" data-testid={`vendor-finding-${f.key}`}>
+                    <span className="text-muted-foreground">{f.label}</span>
+                    <span className="font-medium whitespace-nowrap" style={{ color: s.color }} title={f.sourceText}>{s.text}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
