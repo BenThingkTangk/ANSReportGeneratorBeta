@@ -653,11 +653,19 @@ function buildFileMetadata(
     : extractFromText(asciiHead, asciiHeadStart, FIELD_SYNONYMS.STUDY_START_TIME);
   const studyStartTime = toProvString(startRes, metaSec?.id);
 
-  // Procedure type
+  // Procedure type. In many .ans headers "Procedure" is a bare binary marker
+  // with NO real value — the bytes after it are padding/noise (e.g. a stray
+  // "n"). We accept a procedure value ONLY when it is a plausible label token:
+  // at least 3 chars, containing letters, not a lone control/pad character.
+  // Otherwise it stays MISSING rather than surfacing binary noise as "Procedure".
   const procRes = metaSec
     ? extractFromSection(metaSec, FIELD_SYNONYMS.PROCEDURE)
     : extractFromText(asciiHead, asciiHeadStart, FIELD_SYNONYMS.PROCEDURE);
-  const procedureType = toProvString(procRes, metaSec?.id);
+  const procRaw = procRes?.raw?.replace(/[\x00-\x1f]/g, "").trim() ?? "";
+  const procedureLooksReal = procRaw.length >= 3 && /[A-Za-z]{3,}/.test(procRaw);
+  const procedureType = procedureLooksReal
+    ? toProvString(procRes, metaSec?.id)
+    : missingField<string>("no plausible procedure label present (bare marker / binary padding)");
 
   // Sampling
   let samplingRateHz: ProvField<number>;

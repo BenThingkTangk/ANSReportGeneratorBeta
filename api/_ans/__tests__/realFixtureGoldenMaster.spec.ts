@@ -60,6 +60,13 @@ describe("real de-identified fixtures — golden master", () => {
     // Proprietary spectral + BP are NOT reproducible from the .ans — gated.
     expect(report.spectralAvailable).toBe(false);
     expect(report.bpAvailable).toBe(false);
+    // Procedure is a bare binary marker in this .ans (no real value); it must
+    // be MISSING, never the stray "n" the non-greedy pattern used to capture.
+    expect(data.procedureType).not.toBe("n");
+    expect([""].includes(data.procedureType) || data.procedureType == null).toBe(true);
+    // Weight/BMI are NOT in the .ans → stay missing (0), never fabricated.
+    expect(data.weight).toBe(0);
+    expect(data.bmi).toBe(0);
   });
 
   it("Jill fixture reproduces the vendor's embedded verifiable values exactly", () => {
