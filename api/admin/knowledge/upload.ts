@@ -8,6 +8,7 @@ import {
   handleError,
 } from "../../_supabase.js";
 import { chunkText, estimateTokens } from "../../_ans/knowledgeChunking.js";
+import { detectChunkSchema } from "../../_ans/knowledgeSchema.js";
 import { extractPdfText } from "../../_ans/pdfText.js";
 import { ocrPdf } from "../../_ans/ocr.js";
 
@@ -196,11 +197,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (delErr) ingestionError = `chunk delete failed: ${delErr.message}`;
 
       if (!ingestionError && textChunks.length > 0) {
+        // Mark these as real document text (section='document') when the column
+        // exists, so health can distinguish full-text ingestion from metadata
+        // placeholders. Omitted on the legacy schema (no section column).
+        const schema = await detectChunkSchema(adminSupabase);
         const chunkRows = textChunks.map((content, idx) => ({
           source_id: finalSourceId,
           chunk_index: idx,
           content,
           tokens: estimateTokens(content),
+          ...(schema.hasSection ? { section: "document" } : {}),
         }));
         const { error: chunkErr } = await adminSupabase
           .from("ans_knowledge_chunks")

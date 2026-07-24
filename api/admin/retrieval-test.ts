@@ -6,6 +6,7 @@ import {
   handleError,
 } from "../_supabase.js";
 import { tokenizeQuery, scoreChunk } from "../_ans/knowledgeChunking.js";
+import { detectChunkSchema } from "../_ans/knowledgeSchema.js";
 
 /**
  * POST /api/admin/retrieval-test
@@ -56,6 +57,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
+    // Detect whether the optional page/section columns exist (migration 0005).
+    // On the legacy schema we MUST NOT select them or PostgREST 42703 crashes
+    // the request (the live-preview failure).
+    const schema = await detectChunkSchema(supabase);
+    const optionalCols = [schema.hasPage ? "page" : null, schema.hasSection ? "section" : null]
+      .filter(Boolean)
+      .join(", ");
+
     // Pull candidate chunks joined to their source. We over-fetch (bounded) and
     // rank in-process so the score breakdown is explainable. Postgres full-text
     // could pre-filter, but the corpus is small and this keeps behavior honest.
@@ -63,7 +72,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from("ans_knowledge_chunks")
       .select(
         `
-          id, source_id, chunk_index, content, tokens, page, section,
+          id, source_id, chunk_index, content, tokens${optionalCols ? ", " + optionalCols : ""},
           source:ans_knowledge_sources!inner (
             id, title, authors, year, publication_type, url,
             active_in_ai_analysis, review_status
@@ -104,21 +113,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           (start > 0 ? "…" : "") +
           content.slice(start, start + 320).trim() +
           (content.length > start + 320 ? "…" : "");
+        // page/section are only present on the migration-0005 schema. When
+        // absent, fall back to the chunk index for a still-honest locator.
+        const page = row.page ?? null;
+        const section = row.section ?? null;
+        const locator =
+          page != null ? `p.${page}` : section ? section : `chunk ${row.chunk_index}`;
         return {
           chunkId: row.id,
           sourceId: row.source_id,
           chunkIndex: row.chunk_index,
           tokens: row.tokens ?? null,
-          page: row.page ?? null,
-          section: row.section ?? null,
+          page,
+          section,
           score,
           matchedTerms: matched,
           snippet,
-          // A ready-to-render source/page citation label.
+          // A ready-to-render source citation label (page when available, else
+          // section, else chunk index — never crashes on a legacy schema).
           citation:
             `${src.title ?? "(untitled)"}` +
             (src.year ? ` (${src.year})` : "") +
-            (row.page != null ? `, p.${row.page}` : row.section ? `, ${row.section}` : ""),
+            `, ${locator}`,
           source: {
             id: src.id,
             title: src.title ?? "(untitled)",
@@ -137,6 +153,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       query,
       terms,
       activeOnly,
+      schemaVersion: schema.schemaVersion,
       candidatesScanned: (data ?? []).length,
       resultCount: ranked.length,
       results: ranked,

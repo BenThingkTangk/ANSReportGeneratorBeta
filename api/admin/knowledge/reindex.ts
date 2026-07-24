@@ -12,6 +12,7 @@ import {
   estimateTokens,
   sourceMetadataText,
 } from "../../_ans/knowledgeChunking.js";
+import { detectChunkSchema } from "../../_ans/knowledgeSchema.js";
 
 /**
  * POST /api/admin/knowledge/reindex
@@ -49,6 +50,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const onlyMissing = body.onlyMissing !== false; // default true
     const activeApprovedOnly = body.activeApprovedOnly !== false; // default true
 
+    // Detect schema so we only write the `section` marker when the column
+    // exists (legacy DB without migration 0005 lacks it). These are METADATA
+    // placeholder chunks (title/abstract/claims) — explicitly NOT full-text RAG.
+    const schema = await detectChunkSchema(admin);
+
     // Load candidate sources with the metadata we chunk from.
     let q = admin
       .from("ans_knowledge_sources")
@@ -73,6 +79,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       sourceId: string;
       title: string;
       chunks: number;
+      kind?: "metadata" | "fulltext";
       skipped?: string;
       error?: string;
     }> = [];
@@ -104,13 +111,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         chunk_index: idx,
         content,
         tokens: estimateTokens(content),
+        // Mark as metadata placeholder ONLY when the column exists.
+        ...(schema.hasSection ? { section: "metadata" } : {}),
       }));
       const { error: insErr } = await admin.from("ans_knowledge_chunks").insert(rows);
       if (insErr) {
         results.push({ sourceId: src.id, title: src.title, chunks: 0, error: `insert failed: ${insErr.message}` });
         continue;
       }
-      results.push({ sourceId: src.id, title: src.title, chunks: rows.length });
+      results.push({ sourceId: src.id, title: src.title, chunks: rows.length, kind: "metadata" });
       totalChunks += rows.length;
     }
 
@@ -128,6 +137,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       success: true,
       sourcesProcessed: (sources ?? []).length,
       totalChunksWritten: totalChunks,
+      chunkKind: "metadata",
+      chunkSchemaVersion: schema.schemaVersion,
+      // Honesty: these are metadata placeholders, not full-text RAG.
+      ragFunctional: false,
+      note:
+        "Wrote METADATA placeholder chunks (title + abstract + key_claims) so retrieval returns curated sources. This is NOT full-text RAG — upload the source documents via Admin → Upload PDF to ingest real passages. See docs/RAG_ACTIVATION.md.",
       results,
     });
   } catch (err) {

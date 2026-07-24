@@ -23,7 +23,39 @@ honestly (`ragFunctional=false`, `ragStatus="sources_present_no_chunks"`).
    explicit `ingestionError` instead of silently producing 0 chunks.
 4. **`api/admin/retrieval-test.ts`** — shares the scoring with the live path and
    now returns a `citation` (title + year + page/section) per hit.
-5. **`api/admin/parser-health.ts`** — `ragFunctional` / `ragStatus` / `totalChunks`.
+5. **`api/admin/parser-health.ts`** — `ragFunctional` / `ragStatus` /
+   `totalChunks` / `metadataOnlyChunks` / `fullTextChunks` / `chunkSchemaVersion`.
+
+## Schema compatibility — migration 0005 is OPTIONAL and auto-detected
+
+**Do not assume migration 0005 has been applied.** A deployed database may still
+be on the legacy `ans_knowledge_chunks` schema (`id, source_id, chunk_index,
+content, tokens, created_at`). Selecting the migration-0005 columns (`page`,
+`section`) on that schema makes PostgREST return `42703` ("column ... does not
+exist") and previously crashed the Retrieval Test.
+
+`api/_ans/knowledgeSchema.ts` now **probes the live schema at runtime** (cached)
+and every consumer adapts:
+- **Retrieval Test** selects `page`/`section` only when they exist; otherwise it
+  falls back to a chunk-index locator in the citation (e.g. `Title (2019), chunk 0`).
+- **Parser & Model Health** reports `chunkSchemaVersion` (`0001` legacy / `0005`
+  / `partial`) and counts metadata vs full-text chunks.
+- **Reindex / Upload** write the `section` marker only when the column exists.
+
+`GET /api/admin/knowledge/schema-status` reports the detected schema and, when
+legacy, returns the **exact SQL** to add the optional columns. That endpoint
+**does not and cannot apply DDL** (the Supabase JS client has no DDL surface),
+so it never claims a migration was applied. To enable page-accurate citations,
+run this in the Supabase SQL editor (or apply `0005`):
+
+```sql
+ALTER TABLE public.ans_knowledge_chunks
+  ADD COLUMN IF NOT EXISTS page    int,
+  ADD COLUMN IF NOT EXISTS section text;
+```
+
+Retrieval is fully functional **without** these columns — they only add
+page/section citation precision.
 
 ## To activate the REAL 13-source RAG in a deployed environment
 

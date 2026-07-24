@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { parseStudy } from "../_ans/parseStudy.js";
 import { computeDiagnosticSummary } from "../_ans/scoring/index.js";
+import { detectChunkSchema } from "../_ans/knowledgeSchema.js";
 import { PARSER_VERSION } from "../../shared/ansStudy.js";
 import {
   createSupabaseFromRequest,
@@ -91,6 +92,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ---- Knowledge base reachability --------------------------------------
     const knowledge: any = { ok: true };
     try {
+      // Detect the chunk schema first so no count query references a column
+      // that may not exist (legacy DB without migration 0005).
+      const schema = await detectChunkSchema(supabase);
       const [{ count: sourceCount }, { count: activeCount }, { count: chunkCount }] =
         await Promise.all([
           supabase.from("ans_knowledge_sources").select("id", { count: "exact", head: true }),
@@ -101,19 +105,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .eq("review_status", "approved"),
           supabase.from("ans_knowledge_chunks").select("id", { count: "exact", head: true }),
         ]);
+
+      // Metadata-only placeholder chunks (section='metadata') are NOT full-text
+      // RAG. Count them separately when the section column exists so health can
+      // honestly distinguish "indexed from source documents" from "metadata
+      // placeholders only". On the legacy schema we cannot tell them apart.
+      let metadataChunks: number | null = null;
+      if (schema.hasSection) {
+        const { count } = await supabase
+          .from("ans_knowledge_chunks")
+          .select("id", { count: "exact", head: true })
+          .eq("section", "metadata");
+        metadataChunks = count ?? 0;
+      }
+
+      const total = chunkCount ?? 0;
+      const fullTextChunks = metadataChunks == null ? null : Math.max(0, total - metadataChunks);
+
       knowledge.totalSources = sourceCount ?? 0;
       knowledge.activeApprovedSources = activeCount ?? 0;
-      knowledge.totalChunks = chunkCount ?? 0;
-      // Honest RAG status: retrieval can only work when chunks exist. Sources
-      // with metadata but 0 chunks are NOT a functional knowledge base — the UI
-      // must show "needs indexing", not "reachable", in that state.
-      knowledge.ragFunctional = (chunkCount ?? 0) > 0;
-      knowledge.ragStatus =
-        (chunkCount ?? 0) > 0
-          ? "indexed"
-          : (sourceCount ?? 0) > 0
-            ? "sources_present_no_chunks"
-            : "empty";
+      knowledge.totalChunks = total;
+      knowledge.metadataOnlyChunks = metadataChunks;
+      knowledge.fullTextChunks = fullTextChunks;
+      knowledge.chunkSchemaVersion = schema.schemaVersion;
+      knowledge.hasPageColumn = schema.hasPage;
+      knowledge.hasSectionColumn = schema.hasSection;
+
+      // Honest RAG status. Retrieval works when chunks exist, but metadata-only
+      // placeholders are explicitly a WEAKER state than full-text ingestion.
+      if (total === 0) {
+        knowledge.ragFunctional = false;
+        knowledge.ragStatus = (sourceCount ?? 0) > 0 ? "sources_present_no_chunks" : "empty";
+        knowledge.activation =
+          (sourceCount ?? 0) > 0
+            ? "Sources exist but 0 chunks. Run POST /api/admin/knowledge/reindex (metadata chunks) or upload the source files (full text). See docs/RAG_ACTIVATION.md."
+            : "No knowledge sources. Add + approve sources, then ingest.";
+      } else if (fullTextChunks === 0) {
+        // Chunks exist but all are metadata placeholders.
+        knowledge.ragFunctional = false;
+        knowledge.ragStatus = "metadata_only";
+        knowledge.activation =
+          "Only metadata placeholder chunks exist (title/abstract/claims). This is NOT full-text RAG. Upload the source documents via Admin → Upload PDF to ingest real passages. See docs/RAG_ACTIVATION.md.";
+      } else {
+        knowledge.ragFunctional = true;
+        knowledge.ragStatus = metadataChunks && metadataChunks > 0 ? "indexed_mixed" : "indexed";
+      }
     } catch (e: any) {
       knowledge.ok = false;
       knowledge.detail = e?.message ?? "knowledge count failed";
