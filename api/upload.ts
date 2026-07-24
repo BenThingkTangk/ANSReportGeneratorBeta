@@ -2113,10 +2113,22 @@ export function generateColomboReport(
   } else {
     standFindings.push("Spectral response to standing (LFa/RFa) not assessed — not reproducible from this recording.");
   }
-  // HR response to standing IS supported (ECG-derived).
-  if (hrDelta >= 10 && hrDelta <= 30) standFindings.push("Normal HR response");
-  else if (hrDelta < 10) standFindings.push("Insufficient HR response to stand");
-  else standFindings.push(`Excessive HR rise of ${hrDelta} bpm — POTS criteria`);
+  // HR response to standing. The HR delta itself IS ECG-derived, but grading it
+  // as "Normal" vs "Insufficient" is an orthostatic judgment that requires
+  // standing blood-pressure context (an insufficient HR rise is only abnormal
+  // alongside a BP drop / symptoms). The .ans has no standing BP, so WITHOUT
+  // that evidence we report the measured delta as a neutral OBSERVATION and say
+  // the orthostatic adequacy is not assessed — never assert "Insufficient".
+  // POTS (>=30 bpm rise) is a validated HR-ONLY criterion and is retained.
+  if (POTS) {
+    standFindings.push(`Excessive HR rise of ${hrDelta} bpm on standing — meets the POTS heart-rate criterion (≥30 bpm); correlate with symptoms and standing BP.`);
+  } else if (orthostaticBpAssessable) {
+    // Standing BP is available (paired vendor/measured) → an adequacy verdict is supported.
+    if (hrDelta >= 10) standFindings.push(`Normal HR response to standing (Δ+${hrDelta} bpm).`);
+    else standFindings.push(`Blunted HR response to standing (Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm) with the available orthostatic BP.`);
+  } else {
+    standFindings.push(`Heart-rate change on standing: Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm (observed). Orthostatic adequacy not assessed — standing blood pressure was not recorded in this .ans; correlate with a cuff BP / the vendor report.`);
+  }
   phaseFindings.push({ phase: "STAND RESPONSES", indication: "Indication of proper autonomic coordination and possible causes of dizziness", findings: standFindings });
 
   // Overall impression — Colombo PDF counting rule.

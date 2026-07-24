@@ -293,12 +293,17 @@ describe("BLOCKER 1 regression — baseline-only vendor never fabricates B–F f
     });
   }
 
-  it("stand HR-only findings (POTS) still surface without spectral", () => {
-    // HR delta on standing is ECG-derived and must remain reportable even when
-    // stand spectral is unavailable.
+  it("stand HR observation still surfaces without spectral (no unsupported verdict)", () => {
+    // The ECG-derived HR delta on standing must remain reportable even when
+    // stand spectral is unavailable — but as a neutral OBSERVATION (or the
+    // validated POTS criterion), never an unsupported "Insufficient" verdict
+    // when standing BP was not recorded.
     const { data } = reportFor(fixture("jill_deid.ans"), "jill_deid.ans");
     const report = generateColomboReport(data, baselineOnlyVendor);
     const standPhase = report.phaseFindings.find((p: any) => /STAND/i.test(p.phase));
-    expect(standPhase?.findings.join(" ")).toMatch(/HR response|POTS/i);
+    const text = standPhase?.findings.join(" ") ?? "";
+    expect(text).toMatch(/Heart-rate change on standing|POTS/i);
+    // Must NOT assert an orthostatic adequacy verdict without standing BP.
+    expect(text).not.toMatch(/Insufficient HR response/i);
   });
 });
