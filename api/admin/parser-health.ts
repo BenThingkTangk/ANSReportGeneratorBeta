@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { parseStudy } from "../_ans/parseStudy.js";
 import { computeDiagnosticSummary } from "../_ans/scoring/index.js";
 import { detectChunkSchema } from "../_ans/knowledgeSchema.js";
+import { computeRagStatus } from "../_ans/ragStatus.js";
 import { PARSER_VERSION } from "../../shared/ansStudy.js";
 import {
   createSupabaseFromRequest,
@@ -120,36 +121,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const total = chunkCount ?? 0;
-      const fullTextChunks = metadataChunks == null ? null : Math.max(0, total - metadataChunks);
+      const rag = computeRagStatus({
+        totalSources: sourceCount ?? 0,
+        totalChunks: total,
+        metadataOnlyChunks: metadataChunks,
+      });
 
       knowledge.totalSources = sourceCount ?? 0;
       knowledge.activeApprovedSources = activeCount ?? 0;
       knowledge.totalChunks = total;
       knowledge.metadataOnlyChunks = metadataChunks;
-      knowledge.fullTextChunks = fullTextChunks;
+      knowledge.fullTextChunks = rag.fullTextChunks;
       knowledge.chunkSchemaVersion = schema.schemaVersion;
       knowledge.hasPageColumn = schema.hasPage;
       knowledge.hasSectionColumn = schema.hasSection;
-
-      // Honest RAG status. Retrieval works when chunks exist, but metadata-only
-      // placeholders are explicitly a WEAKER state than full-text ingestion.
-      if (total === 0) {
-        knowledge.ragFunctional = false;
-        knowledge.ragStatus = (sourceCount ?? 0) > 0 ? "sources_present_no_chunks" : "empty";
-        knowledge.activation =
-          (sourceCount ?? 0) > 0
-            ? "Sources exist but 0 chunks. Run POST /api/admin/knowledge/reindex (metadata chunks) or upload the source files (full text). See docs/RAG_ACTIVATION.md."
-            : "No knowledge sources. Add + approve sources, then ingest.";
-      } else if (fullTextChunks === 0) {
-        // Chunks exist but all are metadata placeholders.
-        knowledge.ragFunctional = false;
-        knowledge.ragStatus = "metadata_only";
-        knowledge.activation =
-          "Only metadata placeholder chunks exist (title/abstract/claims). This is NOT full-text RAG. Upload the source documents via Admin → Upload PDF to ingest real passages. See docs/RAG_ACTIVATION.md.";
-      } else {
-        knowledge.ragFunctional = true;
-        knowledge.ragStatus = metadataChunks && metadataChunks > 0 ? "indexed_mixed" : "indexed";
-      }
+      knowledge.ragFunctional = rag.ragFunctional;
+      knowledge.ragStatus = rag.ragStatus;
+      if (rag.activation) knowledge.activation = rag.activation;
     } catch (e: any) {
       knowledge.ok = false;
       knowledge.detail = e?.message ?? "knowledge count failed";

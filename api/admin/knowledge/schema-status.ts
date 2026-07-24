@@ -49,7 +49,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? "Optional page/section columns are present. Page-accurate citations are available."
         : "Legacy schema (page/section absent). Retrieval works via the compatibility fallback (chunk-index locators). To enable page-accurate citations, run the SQL below in the Supabase SQL editor — this endpoint cannot and does not apply DDL itself.",
       migrationSql: upToDate ? null : MIGRATION_SQL,
-      migrationFile: "supabase/migrations/0005_backfill_knowledge_chunks.sql",
+      migrationFile: "supabase/migrations/0005_rag_chunk_metadata.sql",
     });
   } catch (err) {
     return handleError(res, err);
