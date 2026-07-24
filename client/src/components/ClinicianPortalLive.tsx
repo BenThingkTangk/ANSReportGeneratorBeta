@@ -121,7 +121,11 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
   };
 
   useEffect(() => {
-    if (!report.clinicianSynopsis) {
+    // Skip vendor-blind AI enrichment when a vendor report has findings, so the
+    // deterministic vendor-aware synopsis (with the verbatim vendor block) is
+    // never overwritten by /api/synopsis prose that omits it.
+    const hasVendorFindings = (vendorFindings?.findings?.length ?? 0) > 0 || (vendorFindings?.printedNumbers?.length ?? 0) > 0;
+    if (!report.clinicianSynopsis && !hasVendorFindings) {
       enrichSynopsis();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

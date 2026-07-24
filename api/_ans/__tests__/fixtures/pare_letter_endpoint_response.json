@@ -1,0 +1,170 @@
+{
+  "success": true,
+  "fileName": "Faux-John-Thu-Jul-11-2024.pdf",
+  "source": "text",
+  "metrics": [
+    {
+      "key": "SB",
+      "label": "Sympathovagal balance (LFa/RFa)",
+      "value": 2.59,
+      "unit": null,
+      "provenance": {
+        "method": "vendor_reported",
+        "tier": "P",
+        "validation": "not_applicable",
+        "note": "Value parsed verbatim from the ingested vendor report; not recomputed.",
+        "citations": [
+          "https://pmc.ncbi.nlm.nih.gov/articles/PMC3094491/",
+          "https://www.aetna.com/cpb/medical/data/400_499/0485.html"
+        ]
+      }
+    }
+  ],
+  "metricCount": 1,
+  "findingCount": 2,
+  "extraction": {
+    "looksLikeVendorReport": true,
+    "identity": {
+      "patientName": {
+        "value": "John Faux",
+        "provenance": {
+          "page": 1,
+          "confidence": 0.9,
+          "sourceText": "RE:"
+        }
+      },
+      "testDate": {
+        "value": null,
+        "provenance": null
+      },
+      "physician": {
+        "value": null,
+        "provenance": null
+      },
+      "dob": {
+        "value": "1/1/1975",
+        "provenance": {
+          "page": 1,
+          "confidence": 0.9,
+          "sourceText": "dob"
+        }
+      },
+      "age": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      },
+      "sex": {
+        "value": null,
+        "provenance": null
+      },
+      "heightText": {
+        "value": null,
+        "provenance": null
+      },
+      "weightText": {
+        "value": null,
+        "provenance": null
+      },
+      "bmi": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      },
+      "ectopicBeats": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      }
+    },
+    "baseline": {
+      "meanHR": {
+        "value": null,
+        "unit": "bpm",
+        "provenance": null
+      },
+      "rangeHR": {
+        "value": null,
+        "unit": "bpm",
+        "provenance": null
+      },
+      "LFa": {
+        "value": null,
+        "unit": "bpm²",
+        "provenance": null
+      },
+      "RFa": {
+        "value": null,
+        "unit": "bpm²",
+        "provenance": null
+      },
+      "SB": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      },
+      "FRF": {
+        "value": null,
+        "unit": "Hz",
+        "provenance": null
+      },
+      "SBP": {
+        "value": null,
+        "unit": "mmHg",
+        "provenance": null
+      },
+      "DBP": {
+        "value": null,
+        "unit": "mmHg",
+        "provenance": null
+      }
+    },
+    "ratios": {
+      "eiRatio": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      },
+      "valsalvaRatio": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      },
+      "thirtyFifteenRatio": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      }
+    },
+    "meanConfidence": 0,
+    "fieldCount": 0,
+    "notes": [
+      "Report recognized but no fields could be read confidently (low OCR quality)."
+    ],
+    "narrative": {
+      "findings": [
+        {
+          "key": "baseline.sb",
+          "phase": "baseline",
+          "label": "Resting sympathovagal balance (SB)",
+          "classification": "high-normal",
+          "sourceText": "nd high-normal Sympathovagal Balance"
+        },
+        {
+          "key": "stand.presyncope",
+          "phase": "stand",
+          "label": "Pre-syncope risk",
+          "classification": "present",
+          "sourceText": "If it did not increase normally or he reports lightheadedness upon standing, it is likely that he demonstrates Orthostatic dysfunction (common with pre-Syncope)"
+        }
+      ],
+      "printedNumbers": [
+        {
+          "key": "SB",
+          "value": 2.59,
+          "sourceText": "Sympathovagal Balance (SB = 2.59"
+        }
+      ]
+    }
+  }
+}

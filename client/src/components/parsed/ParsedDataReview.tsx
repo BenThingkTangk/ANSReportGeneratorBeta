@@ -16,7 +16,7 @@
  */
 import type { AnsStudy } from "@shared/ansStudy";
 import type { DiagnosticSummary } from "@shared/diagnosticSummary";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { ArrowLeft, RefreshCw, Download, FileCheck2, Sparkles } from "lucide-react";
 
 import { ConfidenceGauge } from "./ConfidenceGauge";
@@ -57,7 +57,11 @@ export function ParsedDataReview({
   onVendorMetrics,
   onVendorExtraction,
 }: Props) {
-  const canGenerate = !!ansStudy && !!file;
+  // Disable "Generate Report" while any attached vendor PDF is still being
+  // read/OCR'd, so we never generate on a half-merged vendor state (e.g. the
+  // report landed but the letter's SB=2.59 hasn't merged yet).
+  const [vendorProcessing, setVendorProcessing] = useState(false);
+  const canGenerate = !!ansStudy && !!file && !vendorProcessing;
 
   const handleDownloadJson = useCallback(() => {
     if (!ansStudy) return;
@@ -173,9 +177,10 @@ export function ParsedDataReview({
                   : "none",
               }}
               data-testid="button-generate-report"
+              title={vendorProcessing ? "Waiting for attached vendor PDF(s) to finish reading…" : undefined}
             >
               <Sparkles className="w-3.5 h-3.5" />
-              Generate Report
+              {vendorProcessing ? "Reading vendor PDF(s)…" : "Generate Report"}
             </button>
           </div>
         </div>
@@ -247,6 +252,7 @@ export function ParsedDataReview({
             onVendorMetrics?.(Object.keys(map).length > 0 ? map : null);
           }}
           onExtraction={(extraction, meta) => onVendorExtraction?.(extraction, meta)}
+          onProcessingChange={setVendorProcessing}
         />
       </div>
 

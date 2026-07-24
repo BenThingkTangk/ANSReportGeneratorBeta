@@ -37,6 +37,9 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
   const vendorFindings = vendorExtraction?.narrative
     ? { findings: vendorExtraction.narrative.findings, printedNumbers: vendorExtraction.narrative.printedNumbers }
     : undefined;
+  const vendorHasNotableFindings = (vendorFindings?.findings ?? []).some(
+    (f) => f.classification === "abnormal" || f.classification === "high" || f.classification === "low" || f.key === "stand.presyncope",
+  );
   // The deterministic synopsis is computed offline from the report, so it is shown
   // immediately — the patient is never blocked by (or left waiting on) the network.
   // Optional AI enrichment quietly swaps in richer prose over the top when it lands.
@@ -94,7 +97,14 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
   };
 
   useEffect(() => {
-    if (!report.patientSynopsis) enrichSynopsis();
+    // Do NOT enrich when a vendor report flagged notable findings: /api/synopsis
+    // is vendor-blind, so its prose would OVERWRITE the vendor-aware deterministic
+    // synopsis and reintroduce the "nothing flagged" contradiction. Keep the
+    // deterministic vendor-aware text in that case.
+    const hasNotableVendor = (vendorFindings?.findings ?? []).some(
+      (f) => f.classification === "abnormal" || f.classification === "high" || f.classification === "low" || f.key === "stand.presyncope",
+    );
+    if (!report.patientSynopsis && !hasNotableVendor) enrichSynopsis();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -277,7 +287,10 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
         </h2>
         <div className="space-y-4">
           <SupplementsPanel recommendations={report.therapyRecommendations} />
-          <TreatmentsPanel recommendations={report.therapyRecommendations} />
+          <TreatmentsPanel
+            recommendations={report.therapyRecommendations}
+            vendorHasNotableFindings={vendorHasNotableFindings}
+          />
           <NextTestCard followUp={report.followUp} />
         </div>
       </motion.div>

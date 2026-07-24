@@ -1,0 +1,239 @@
+{
+  "success": true,
+  "fileName": "Faux-John-Thu-Jul-11-2024-Report.pdf",
+  "source": "ocr",
+  "ocrConfidence": 70,
+  "pageCount": 3,
+  "metrics": [],
+  "metricCount": 0,
+  "findingCount": 9,
+  "extraction": {
+    "looksLikeVendorReport": true,
+    "identity": {
+      "patientName": {
+        "value": "Faux. John",
+        "provenance": {
+          "page": 1,
+          "confidence": 0.84,
+          "sourceText": "Patient: Faux. John Test Date"
+        }
+      },
+      "testDate": {
+        "value": "7/11/2024",
+        "provenance": {
+          "page": 1,
+          "confidence": 0.84,
+          "sourceText": "Test Date: 7/11/2024"
+        }
+      },
+      "physician": {
+        "value": null,
+        "provenance": null
+      },
+      "dob": {
+        "value": "1/1/1975",
+        "provenance": {
+          "page": 1,
+          "confidence": 0.84,
+          "sourceText": "DOB: 1/1/1975"
+        }
+      },
+      "age": {
+        "value": 48,
+        "unit": null,
+        "provenance": {
+          "page": 1,
+          "region": {
+            "x0": 1200,
+            "y0": 173,
+            "x1": 1230,
+            "y1": 195
+          },
+          "confidence": 0.9568425750732422,
+          "sourceText": "Age: 48"
+        }
+      },
+      "sex": {
+        "value": "Male",
+        "provenance": {
+          "page": 1,
+          "confidence": 0.84,
+          "sourceText": "Gender: Male"
+        }
+      },
+      "heightText": {
+        "value": null,
+        "provenance": null
+      },
+      "weightText": {
+        "value": "200lbs",
+        "provenance": {
+          "page": 1,
+          "confidence": 0.84,
+          "sourceText": "Weight: 200lbs"
+        }
+      },
+      "bmi": {
+        "value": 25.68,
+        "unit": null,
+        "provenance": {
+          "page": 1,
+          "region": {
+            "x0": 1934,
+            "y0": 171,
+            "x1": 2003,
+            "y1": 194
+          },
+          "confidence": 0.9525526428222656,
+          "sourceText": "BMI: 25.68"
+        }
+      },
+      "ectopicBeats": {
+        "value": 1,
+        "unit": null,
+        "provenance": {
+          "page": 1,
+          "region": {
+            "x0": 800,
+            "y0": 325,
+            "x1": 805,
+            "y1": 344
+          },
+          "confidence": 0.9592551422119141,
+          "sourceText": "Ectopic Beats: 1"
+        }
+      }
+    },
+    "baseline": {
+      "meanHR": {
+        "value": null,
+        "unit": "bpm",
+        "provenance": null
+      },
+      "rangeHR": {
+        "value": null,
+        "unit": "bpm",
+        "provenance": null
+      },
+      "LFa": {
+        "value": null,
+        "unit": "bpm²",
+        "provenance": null
+      },
+      "RFa": {
+        "value": null,
+        "unit": "bpm²",
+        "provenance": null
+      },
+      "SB": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      },
+      "FRF": {
+        "value": null,
+        "unit": "Hz",
+        "provenance": null
+      },
+      "SBP": {
+        "value": null,
+        "unit": "mmHg",
+        "provenance": null
+      },
+      "DBP": {
+        "value": null,
+        "unit": "mmHg",
+        "provenance": null
+      }
+    },
+    "ratios": {
+      "eiRatio": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      },
+      "valsalvaRatio": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      },
+      "thirtyFifteenRatio": {
+        "value": null,
+        "unit": null,
+        "provenance": null
+      }
+    },
+    "meanConfidence": 0.8898071943010601,
+    "fieldCount": 7,
+    "notes": [],
+    "narrative": {
+      "findings": [
+        {
+          "key": "baseline.lfa",
+          "phase": "baseline",
+          "label": "Resting sympathetic modulation (LFa)",
+          "classification": "normal",
+          "sourceText": "Normal BP - Normal sympathetic modulation (LFa"
+        },
+        {
+          "key": "baseline.rfa",
+          "phase": "baseline",
+          "label": "Resting parasympathetic modulation (RFa)",
+          "classification": "borderline-low",
+          "sourceText": "- Borderline low parasympathetic modulation (RFa"
+        },
+        {
+          "key": "baseline.sb",
+          "phase": "baseline",
+          "label": "Resting sympathovagal balance (SB)",
+          "classification": "high-normal",
+          "sourceText": "- High Normal sympathovagal balance"
+        },
+        {
+          "key": "baseline.hr",
+          "phase": "baseline",
+          "label": "Resting heart rate",
+          "classification": "normal",
+          "sourceText": "Normal HR and Normal BP"
+        },
+        {
+          "key": "baseline.bp",
+          "phase": "baseline",
+          "label": "Resting blood pressure",
+          "classification": "normal",
+          "sourceText": "Normal HR and Normal BP"
+        },
+        {
+          "key": "db.responses",
+          "phase": "deep_breathing_valsalva",
+          "label": "DB/Valsalva ANS responses",
+          "classification": "normal",
+          "sourceText": "All ANS responses within normal ranges"
+        },
+        {
+          "key": "db.hr_change",
+          "phase": "deep_breathing_valsalva",
+          "label": "HR change (baseline→DB)",
+          "classification": "abnormal",
+          "sourceText": "Abnormal changes in HR (from baseline to DB)"
+        },
+        {
+          "key": "stand.sympathetic",
+          "phase": "stand",
+          "label": "Sympathetic response to stand",
+          "classification": "high",
+          "sourceText": "High sympathetic response to stand"
+        },
+        {
+          "key": "stand.presyncope",
+          "phase": "stand",
+          "label": "Pre-syncope risk",
+          "classification": "present",
+          "sourceText": "of Ectopic Beats: 1 INITIAL BASELINE: At rest, Patient presents with: - All parameters within normal ranges (includes borderline conditions) DEEF BREATHING (DB)"
+        }
+      ],
+      "printedNumbers": []
+    }
+  },
+  "note": "OCR read 0 printed metric(s) + 9 categorical finding(s)"
+}

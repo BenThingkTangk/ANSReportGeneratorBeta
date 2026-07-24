@@ -7,13 +7,16 @@
  * href (no duplicate/overlapping nav target).
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 
 // Keep the REAL wouter Link (that's what we're testing), but stub useLocation
-// so the component renders without a Router provider.
+// so the component renders without a Router provider and we can observe that a
+// plain click actually reaches the router (i.e. is not swallowed by an
+// overlapping second anchor).
+const navigate = vi.fn();
 vi.mock("wouter", async () => {
   const actual = await vi.importActual<any>("wouter");
-  return { ...actual, useLocation: () => ["/admin/knowledge", vi.fn()] };
+  return { ...actual, useLocation: () => ["/admin/knowledge", navigate] };
 });
 
 vi.mock("@/hooks/useAuth", () => ({
@@ -40,5 +43,25 @@ describe("AdminLayout sidebar nav — single anchor per destination", () => {
     render(<AdminLayout title="Knowledge Inventory">content</AdminLayout>);
     const nestedAnchors = document.querySelectorAll("a a");
     expect(nestedAnchors).toHaveLength(0);
+  });
+
+  it("the Parser & Model Health label lives in a link that receives clicks (not intercepted)", async () => {
+    const { AdminLayout } = await import("@/components/admin/AdminLayout");
+    render(<AdminLayout title="Knowledge Inventory">content</AdminLayout>);
+    const label = screen.getByText(/Parser & Model Health/);
+    const link = label.closest("a")!;
+    expect(link).toBeTruthy();
+    expect(link.getAttribute("href")).toMatch(/\/admin\/parser-health$/);
+    // The label must NOT be wrapped by a SECOND anchor between it and its link
+    // (the nested-<a> overlap that swallowed clicks). Its nearest anchor
+    // ancestor is the ONLY anchor on the path to the nav root.
+    let anchors = 0;
+    for (let el: HTMLElement | null = label as HTMLElement; el; el = el.parentElement) {
+      if (el.tagName === "A") anchors++;
+      if (el.tagName === "NAV") break;
+    }
+    expect(anchors).toBe(1);
+    // A plain click dispatches without throwing / being swallowed.
+    expect(() => fireEvent.click(link)).not.toThrow();
   });
 });
