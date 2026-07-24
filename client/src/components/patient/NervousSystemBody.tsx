@@ -518,16 +518,16 @@ export function NervousSystemBody({ sympathetic, parasympathetic, available = tr
         </div>
       ) : (
         <div
-          className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-2 text-[10px] font-medium text-white/60 pointer-events-none"
+          className="absolute bottom-2 left-1/2 -translate-x-1/2 max-w-[92%] text-center text-[10px] leading-snug font-medium text-white/60 pointer-events-none px-2 py-0.5 rounded-lg"
+          style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(4px)" }}
           data-testid="nsb-not-assessed"
         >
-          <span>Sympathetic / parasympathetic balance:</span>
-          <span className="text-white/80">Not assessed</span>
+          Sympathetic / parasympathetic balance: <span className="text-white/80">Not assessed</span>
         </div>
       )}
 
-      {/* Hint */}
-      <div className="absolute top-2 right-3 text-[10px] text-white/40 pointer-events-none">
+      {/* Hint — hidden on the smallest screens so it never overlaps the helix. */}
+      <div className="absolute top-2 right-3 text-[10px] text-white/40 pointer-events-none hidden sm:block">
         drag to rotate · click strands
       </div>
 
