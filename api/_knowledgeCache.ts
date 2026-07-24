@@ -29,6 +29,55 @@ interface CacheEntry {
 const CACHE_TTL_MS = 60_000; // 60 seconds
 let _cache: CacheEntry | null = null;
 
+export interface KnowledgeCorpusStatus {
+  /** Approved+active source rows (metadata: title/abstract/claims). */
+  activeSources: number;
+  /** Rows in ans_knowledge_chunks (retrievable full-text/metadata passages). */
+  totalChunks: number;
+  /**
+   * True only when there is a real retrievable corpus (chunks > 0). When false,
+   * the source metadata is NOT a citable evidence base — ATOM must fall back to
+   * report-only + clearly-labeled external grounding.
+   */
+  ragFunctional: boolean;
+}
+
+let _statusCache: { value: KnowledgeCorpusStatus; fetchedAt: number } | null = null;
+
+/**
+ * Cheap corpus status for grounding decisions. Counts chunks defensively — a
+ * missing table/column or any error yields totalChunks:0 (safe: RAG treated as
+ * non-functional), never a throw.
+ */
+export async function getKnowledgeCorpusStatus(): Promise<KnowledgeCorpusStatus> {
+  const now = Date.now();
+  if (_statusCache && now - _statusCache.fetchedAt < CACHE_TTL_MS) return _statusCache.value;
+  let activeSources = 0;
+  let totalChunks = 0;
+  try {
+    const admin = createSupabaseAdmin();
+    const [{ count: src }, { count: ch }] = await Promise.all([
+      admin
+        .from("ans_knowledge_sources")
+        .select("id", { count: "exact", head: true })
+        .eq("active_in_ai_analysis", true)
+        .eq("review_status", "approved"),
+      admin.from("ans_knowledge_chunks").select("id", { count: "exact", head: true }),
+    ]);
+    activeSources = src ?? 0;
+    totalChunks = ch ?? 0;
+  } catch {
+    /* fall through with zeros — RAG treated as non-functional */
+  }
+  const value: KnowledgeCorpusStatus = {
+    activeSources,
+    totalChunks,
+    ragFunctional: totalChunks > 0,
+  };
+  _statusCache = { value, fetchedAt: now };
+  return value;
+}
+
 export async function getActiveKnowledgeSources(): Promise<KnowledgeSource[]> {
   const now = Date.now();
   if (_cache && now - _cache.fetchedAt < CACHE_TTL_MS) {
@@ -68,9 +117,38 @@ export async function getActiveKnowledgeSources(): Promise<KnowledgeSource[]> {
 }
 
 export function buildKnowledgePromptSection(
-  sources: KnowledgeSource[]
+  sources: KnowledgeSource[],
+  ragFunctional = true,
 ): string {
   if (sources.length === 0) return "";
+
+  // GROUNDING HONESTY: when there is no retrievable full-text corpus (0 chunks),
+  // the source rows are bibliographic METADATA only — a reading list, NOT an
+  // evidence base we have actually retrieved passages from. In that state the
+  // model must NOT cite these entries to support quantitative diagnostic
+  // performance (sensitivity/specificity), prognosis ("lower near-term risk"),
+  // or treatment claims. It may name them as background reading only.
+  if (!ragFunctional) {
+    const lines = [
+      "---",
+      "KNOWLEDGE LIBRARY STATUS — METADATA ONLY (NO FULL-TEXT CORPUS)",
+      "The private knowledge base currently has 0 retrievable chunks. The entries below are",
+      "bibliographic references (title/abstract) that have NOT been ingested as searchable",
+      "passages. Therefore:",
+      "  • Do NOT cite these entries with bracketed reference numbers as if quoting them.",
+      "  • Do NOT state sensitivity, specificity, predictive value, prognosis, risk reduction,",
+      "    or treatment efficacy sourced from them.",
+      "  • Ground your answer in the PATIENT REPORT facts below and clearly-labeled general",
+      "    physiology. If you cite external evidence, label it 'External (web)' with a real,",
+      "    resolvable URL — never a bracketed private-corpus citation.",
+      "Background reading (titles only, not retrieved):",
+    ];
+    for (const s of sources.slice(0, 6)) {
+      lines.push(`  - ${s.title}${s.authors ? ` — ${s.authors}` : ""}${s.year ? ` (${s.year})` : ""}`);
+    }
+    lines.push("---");
+    return lines.join("\n");
+  }
 
   const lines = [
     "---",

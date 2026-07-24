@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   getActiveKnowledgeSources,
+  getKnowledgeCorpusStatus,
   buildKnowledgePromptSection,
   toCitations,
 } from "./_knowledgeCache.js";
@@ -84,10 +85,11 @@ async function streamSonar(opts: {
   apiKey: string;
   conversation: Array<{ role: string; content: string }>;
   knowledgeCitations: unknown[];
+  grounding?: unknown;
   cacheKey: string;
   res: VercelResponse;
 }): Promise<void> {
-  const { apiKey, conversation, knowledgeCitations, cacheKey, res } = opts;
+  const { apiKey, conversation, knowledgeCitations, grounding, cacheKey, res } = opts;
   const send = (event: string, data: unknown) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
@@ -171,7 +173,7 @@ async function streamSonar(opts: {
       res.end();
       return;
     }
-    send("done", { message, webCitations, citations: knowledgeCitations });
+    send("done", { message, webCitations, citations: knowledgeCitations, grounding });
     res.end();
     return;
   } catch (err: any) {
@@ -205,6 +207,11 @@ Data assessability & provenance rules (HIGHEST PRIORITY — these override every
 - The "DATA ASSESSABILITY & PROVENANCE" block is authoritative. When it conflicts with the Event Mean Data table, "Detected Colombo Indications", "Overall Clinical Impression", or any other legacy finding, follow the assessability block and treat the conflicting legacy item as unconfirmed / Not assessed. Privilege missingDomains, blocked claims, and provenance over legacy findings every time.
 - Blocked claims (listed as blocked for insufficient data) are explicitly NOT findings. Report each as "not assessed because required inputs were missing" — never as present or absent.
 - If the metrics needed to answer a question are Not assessed, say so plainly and recommend an adequate repeat recording instead of interpreting placeholder values.
+
+Evidence-grounding rules (HIGHEST PRIORITY — apply whenever a "KNOWLEDGE LIBRARY STATUS — METADATA ONLY" block is present):
+- The private knowledge corpus then has ZERO retrieved full-text passages. You must NOT cite the reference titles with bracketed numbers, and you must NOT state any quantitative diagnostic performance (sensitivity, specificity, PPV/NPV, AUC), prognosis, near-term risk/"lower risk", morbidity/mortality figures, or treatment-efficacy claims as if sourced from that corpus.
+- Ground answers in (a) the PATIENT REPORT facts below, and (b) clearly-labeled general physiology stated as such. Any external claim MUST be labeled "External (web)" and carry a real, resolvable URL; if you cannot provide a URL, do not make the claim.
+- Prefer "I can't cite specific studies here because the knowledge base has no indexed full-text; based on your report …" over an unsupported cited statistic. Being explicit about the limitation is required, not optional.
 
 Audience mode (the PATIENT CONTEXT block states the viewer role — "clinician view" or "patient view"):
 - CLINICIAN VIEW: be scientifically deep. Use the full Colombo methodology — name the specific phase responses, LFa/RFa/SB values and their bpm² units, Ewing battery ratios and thresholds, the phenotype classifications (PE, SE, SW, OD, POTS, VVS, AAN, CAN) with their defining criteria, and the graded treatment protocol including doses and titration when the underlying metrics are assessed. Do not water this down; the clinician needs the mechanism and the numbers.
@@ -506,7 +513,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // and question-specific. When the question has no searchable terms the
     // ranker falls back to the first 6 in the original order. (To keep the old
     // breadth exactly while still ranking, raise the cap below to 12.)
-    const allKnowledgeSources = await getActiveKnowledgeSources();
+    const [allKnowledgeSources, corpus] = await Promise.all([
+      getActiveKnowledgeSources(),
+      getKnowledgeCorpusStatus(),
+    ]);
     const latestUserQuery =
       [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "";
     const knowledgeSources = rankKnowledgeSources(
@@ -514,8 +524,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       latestUserQuery,
       6,
     );
-    const knowledgeSection = buildKnowledgePromptSection(knowledgeSources);
-    const knowledgeCitations = toCitations(knowledgeSources);
+    // When there is no retrievable corpus (0 chunks), the source rows are
+    // metadata only — the prompt section reframes them as background reading and
+    // forbids bracketed citations / diagnostic-performance / prognosis claims.
+    const knowledgeSection = buildKnowledgePromptSection(knowledgeSources, corpus.ragFunctional);
+    // Citations we return to the client: real RAG citations only when the corpus
+    // is functional; otherwise none (report-only/external grounding).
+    const knowledgeCitations = corpus.ragFunctional ? toCitations(knowledgeSources) : [];
+    const grounding = corpus.ragFunctional
+      ? { mode: "rag" as const, chunks: corpus.totalChunks, activeSources: corpus.activeSources }
+      : { mode: "report_only" as const, chunks: 0, activeSources: corpus.activeSources,
+          note: "Private knowledge corpus has no full-text chunks; answer is grounded in the report and clearly-labeled external evidence, not RAG." };
 
     const systemContent = [
       SYSTEM_PROMPT,
@@ -537,6 +556,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         message: cached.message,
         webCitations: cached.webCitations,
         citations: knowledgeCitations,
+        grounding,
         cached: true,
       });
     }
@@ -556,6 +576,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         apiKey,
         conversation,
         knowledgeCitations,
+        grounding,
         cacheKey,
         res,
       });
@@ -592,6 +613,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       message,
       webCitations,
       citations: knowledgeCitations,
+      grounding,
       cached: false,
     });
   } catch (err: any) {

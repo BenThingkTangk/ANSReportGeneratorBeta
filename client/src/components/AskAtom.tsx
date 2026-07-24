@@ -203,6 +203,10 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
   // Dev/test-only diagnostics: transport, time-to-first-token, retrieved source
   // count. Surfaced behind a DEV gate so QA can verify streaming + grounding.
   const [lastDiagnostics, setLastDiagnostics] = useState<AtomDiagnostics | null>(null);
+  // Grounding mode from the server: "rag" (retrievable corpus) vs "report_only"
+  // (no full-text chunks → answers grounded in the report + labeled external
+  // evidence, NOT the private RAG corpus). Disclosed to the user.
+  const [grounding, setGrounding] = useState<{ mode: "rag" | "report_only"; chunks?: number } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -339,6 +343,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
         setMessages(prev => prev.map(m => (m.id === id ? { ...m, content: stripProvenanceMarkers(full) } : m)));
       } else if (event === "done") {
         citations = dedupeCitations([...(payload.citations ?? []), ...(payload.webCitations ?? [])]);
+        if (payload.grounding?.mode) setGrounding({ mode: payload.grounding.mode, chunks: payload.grounding.chunks });
       } else if (event === "error") {
         sawError = payload.error || "stream error";
       }
@@ -408,6 +413,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
       abortRef.current = null;
       if (!data?.success || !data?.message) throw new Error(data?.error || "No response");
       const citations = dedupeCitations([...(data.citations ?? []), ...(data.webCitations ?? [])]);
+      if (data.grounding?.mode) setGrounding({ mode: data.grounding.mode, chunks: data.grounding.chunks });
       setLoading(false);
       setLastDiagnostics({ ttftMs: Date.now() - t0, sourceCount: citations.length, transport: "json", totalMs: Date.now() - t0 });
       startReveal(stripProvenanceMarkers(String(data.message)), citations);
@@ -909,6 +915,24 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
               )}
               <div ref={messagesEndRef} />
             </div>
+
+            {/* Grounding disclosure: when the private corpus has no full-text
+                chunks, tell the user answers are report-only/external, not RAG. */}
+            {grounding?.mode === "report_only" && (
+              <div
+                className="px-3 py-2 text-[10.5px] leading-snug border-t flex items-start gap-1.5 flex-shrink-0"
+                style={{ borderColor: "hsl(38 92% 50% / 0.25)", background: "hsl(38 92% 50% / 0.06)", color: "hsl(38 90% 78%)" }}
+                data-testid="atom-grounding-disclosure"
+                data-grounding="report_only"
+              >
+                <span aria-hidden="true">ⓘ</span>
+                <span>
+                  Answers are grounded in <strong>your report</strong> and clearly-labeled external
+                  sources. The private knowledge base has <strong>no full-text chunks indexed</strong>,
+                  so this is not retrieval-augmented (RAG) grounding.
+                </span>
+              </div>
+            )}
 
             {/* Input bar */}
             <div
