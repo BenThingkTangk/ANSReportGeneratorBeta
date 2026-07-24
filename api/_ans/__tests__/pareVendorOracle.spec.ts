@@ -121,19 +121,42 @@ describe("Pare oracle — report vs letter distinction is preserved", () => {
   });
 });
 
-// Optional end-to-end when the real (un-redacted) summary PDF is present locally.
-const REAL_SUMMARY =
-  "/home/user/workspace/uploaded_attachments/7dcba36d6d4f4aa4a00f54155cbfffd0/Pare-Alex-Thu-Jul-11-2024-Report.pdf";
+// Optional end-to-end when the real (un-redacted) PDFs are present locally.
+// These lock the LIVE-QA parity fix (both PDFs previously reported 0 clinical
+// metrics). They skip in CI where the PHI files are absent.
+const REAL_DIR = "/home/user/workspace/uploaded_attachments/7dcba36d6d4f4aa4a00f54155cbfffd0";
+const REAL_SUMMARY = `${REAL_DIR}/Pare-Alex-Thu-Jul-11-2024-Report.pdf`;
+const REAL_LETTER = `${REAL_DIR}/Pare-Alex-Thu-Jul-11-2024.pdf`;
 (existsSync(REAL_SUMMARY) ? describe : describe.skip)(
-  "Pare real summary PDF (local only) — OCR parity with the de-id fixture",
+  "Pare real PDFs (local only) — full extraction parity",
   () => {
-    it("reads weight 200 / BMI 25.68 / ectopy 1 from the real scan", async () => {
+    it("summary OCR: weight 200 / BMI 25.68 / ectopy 1 + narrative findings", async () => {
       const { ocrPdf } = await import("../ocr.js");
+      const { extractVendorNarrative } = await import("../vendorNarrative.js");
       const ocr = await ocrPdf(readFileSync(REAL_SUMMARY));
       const x = parseVendorOcrPages(ocr.pages) as any;
       expect(x.identity.weightText.value).toMatch(/200/);
       expect(x.identity.bmi.value).toBeCloseTo(25.68, 2);
       expect(x.identity.ectopicBeats.value).toBe(1);
+      // Narrative findings must be extracted (the 0-metrics defect).
+      const narr = extractVendorNarrative(ocr.pages.map((p: any) => p.text).join("\n"));
+      const keys = narr.findings.map((f) => f.key);
+      expect(keys).toEqual(expect.arrayContaining([
+        "baseline.lfa", "baseline.rfa", "baseline.sb", "stand.sympathetic",
+      ]));
+      expect(narr.findings.find((f) => f.key === "baseline.rfa")?.classification).toBe("borderline-low");
+      // Summary carries NO printed spectral numbers → none fabricated.
+      expect(narr.printedNumbers.find((n) => n.key === "LFa")).toBeUndefined();
     }, 240_000);
+
+    it("letter text-layer: prints SB = 2.59 (and no fabricated LFa/RFa numbers)", async () => {
+      const { extractPdfText } = await import("../pdfText.js");
+      const { extractVendorNarrative } = await import("../vendorNarrative.js");
+      const text = await extractPdfText(readFileSync(REAL_LETTER));
+      const narr = extractVendorNarrative(text);
+      const sb = narr.printedNumbers.find((n) => n.key === "SB");
+      expect(sb?.value).toBeCloseTo(2.59, 2);
+      expect(narr.printedNumbers.some((n) => n.key === "LFa" || n.key === "RFa")).toBe(false);
+    }, 60_000);
   },
 );
