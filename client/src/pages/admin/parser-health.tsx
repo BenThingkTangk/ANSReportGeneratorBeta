@@ -26,12 +26,43 @@ interface HealthData {
     };
   };
   models: Record<string, { provider: string; configured: boolean; voiceId?: string; model?: string; browserFallback?: boolean }>;
-  knowledge: { ok?: boolean; totalSources?: number; activeApprovedSources?: number; totalChunks?: number; detail?: string };
+  knowledge: {
+    ok?: boolean;
+    totalSources?: number;
+    activeApprovedSources?: number;
+    totalChunks?: number;
+    metadataOnlyChunks?: number | null;
+    fullTextChunks?: number | null;
+    chunkSchemaVersion?: string;
+    hasPageColumn?: boolean;
+    hasSectionColumn?: boolean;
+    ragFunctional?: boolean;
+    ragStatus?: string;
+    activation?: string;
+    detail?: string;
+  };
   evals: {
     recent: Array<{ finishedAt: string; totalCases: number; passedCases: number; failedCases: number; unsafeOverclaimCount: number; flagF1: number }>;
     lastGatePassed?: boolean | null;
     detail?: string;
   };
+}
+
+/** Human label for the honest RAG status pill (non-functional states). */
+function ragStatusLabel(status: string | undefined, totalChunks: number | undefined): string {
+  switch (status) {
+    case "metadata_only": return "metadata only";
+    case "sources_present_no_chunks": return "no chunks";
+    case "empty": return "empty";
+    default: return (totalChunks ?? 0) === 0 ? "no chunks" : "needs indexing";
+  }
+}
+/** "n" for a number, "n/a (legacy)" when the count is indeterminable (null). */
+function fmtChunks(n: number | null | undefined): string {
+  return n == null ? "n/a (legacy schema)" : String(n);
+}
+function yn(b: boolean | undefined): string {
+  return b ? "yes" : "no";
 }
 
 function Pill({ ok, label }: { ok: boolean; label: string }) {
@@ -154,16 +185,46 @@ export default function ParserHealthPage() {
               </div>
 
               {/* Knowledge */}
-              <div style={CARD}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={CARD} data-testid="admin-knowledge-health">
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
                   <strong style={{ fontSize: 14 }}>Knowledge Base (RAG)</strong>
-                  <Pill ok={data.knowledge.ok !== false} label={data.knowledge.ok !== false ? "reachable" : "unreachable"} />
+                  {data.knowledge.ok !== false && (
+                    <Pill
+                      ok={data.knowledge.ragFunctional === true}
+                      label={
+                        data.knowledge.ragFunctional === true
+                          ? "RAG functional"
+                          : ragStatusLabel(data.knowledge.ragStatus, data.knowledge.totalChunks)
+                      }
+                    />
+                  )}
                 </div>
                 {data.knowledge.ok !== false ? (
-                  <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
+                  <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.7 }} data-rag-status={data.knowledge.ragStatus ?? ""} data-rag-functional={String(data.knowledge.ragFunctional ?? "")}>
                     <div>Total sources: {data.knowledge.totalSources ?? 0}</div>
-                    <div>Active + approved (retrievable): {data.knowledge.activeApprovedSources ?? 0}</div>
-                    <div>Total chunks: {data.knowledge.totalChunks ?? 0}</div>
+                    <div>Active + approved: {data.knowledge.activeApprovedSources ?? 0}</div>
+                    <div>Total chunks: <strong>{data.knowledge.totalChunks ?? 0}</strong></div>
+                    <div>· Full-text chunks: {fmtChunks(data.knowledge.fullTextChunks)}</div>
+                    <div>· Metadata-only chunks: {fmtChunks(data.knowledge.metadataOnlyChunks)}</div>
+                    <div style={{ marginTop: 6 }}>
+                      Schema: <strong>{data.knowledge.chunkSchemaVersion ?? "?"}</strong>
+                      {" "}({data.knowledge.hasPageColumn && data.knowledge.hasSectionColumn ? "native page/section" : "legacy — fallback mode"})
+                    </div>
+                    <div>page column: {yn(data.knowledge.hasPageColumn)} · section column: {yn(data.knowledge.hasSectionColumn)}</div>
+                    {/* Explicit honest state banner */}
+                    {data.knowledge.ragFunctional !== true && (
+                      <div
+                        data-testid="admin-rag-activation"
+                        style={{ marginTop: 8, padding: 8, borderRadius: 6, background: "hsl(38 92% 50% / 0.10)", border: "1px solid hsl(38 92% 50% / 0.3)", color: "#fbbf24", fontSize: 11.5, lineHeight: 1.5 }}
+                      >
+                        <strong>
+                          {(data.knowledge.totalChunks ?? 0) === 0
+                            ? "Sources present, no chunks — RAG not functional."
+                            : "Metadata-only chunks — not full-text RAG."}
+                        </strong>
+                        {data.knowledge.activation ? <div style={{ marginTop: 3 }}>{data.knowledge.activation}</div> : null}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div style={{ fontSize: 12, color: "#f87171" }}>{data.knowledge.detail}</div>
