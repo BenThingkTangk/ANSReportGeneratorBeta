@@ -53,17 +53,33 @@ export function UploadScreen({ onUpload }: UploadScreenProps) {
         </p>
       </div>
 
-      {/* Upload area */}
+      {/* Upload area.
+          Accessibility + QA: the file input is a REAL, focusable, labeled
+          control (not display:none — which drops it from the a11y tree and
+          blocks automation). It is visually hidden via `sr-only` but remains
+          programmatically actionable (setInputFiles / keyboard). The dropzone
+          is a <label> so clicking anywhere in it opens the picker natively, and
+          Enter/Space on the focused label activates it. */}
       <div
         className={`relative w-full max-w-xl transition-all duration-300 ${isDragging ? "scale-[1.02]" : ""}`}
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
       >
-        <div className={`ps-glass-featured p-12 text-center cursor-pointer transition-all duration-300 ${isDragging ? "ps-glow-cyan" : ""}`}
-          onClick={() => fileInputRef.current?.click()}
+        <label
+          htmlFor="ans-file-input"
+          className={`ps-glass-featured p-12 text-center cursor-pointer transition-all duration-300 block ${isDragging ? "ps-glow-cyan" : ""}`}
           data-testid="upload-dropzone"
           style={isDragging ? { borderColor: "var(--ps-brand-cyan)" } : undefined}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              fileInputRef.current?.click();
+            }
+          }}
+          tabIndex={0}
+          role="button"
+          aria-label="Upload ANS data file (.ans). Activate to browse, or drag and drop."
         >
           <div className="w-20 h-20 rounded-2xl mx-auto mb-6 flex items-center justify-center ps-pulse"
             style={{ background: "oklch(0.85 0.18 200 / 0.10)", border: "1px solid var(--ps-border-strong)" }}>
@@ -84,13 +100,15 @@ export function UploadScreen({ onUpload }: UploadScreenProps) {
 
           <input
             ref={fileInputRef}
+            id="ans-file-input"
+            name="ansFile"
             type="file"
             accept=".ans,.txt"
-            className="hidden"
+            className="sr-only"
             onChange={handleFileSelect}
             data-testid="file-input"
           />
-        </div>
+        </label>
       </div>
 
       {/* Feature cards */}

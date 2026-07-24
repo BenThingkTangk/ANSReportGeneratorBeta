@@ -101,21 +101,34 @@ export function VendorPdfCard({ onIngested, onExtraction }: Props) {
         values the scan can't resolve stay "not assessed" rather than being guessed.
       </p>
 
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        disabled={status === "loading"}
-        className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs uppercase tracking-[0.14em] border border-border/50 hover:bg-card/80 disabled:opacity-50 transition-colors"
+      {/* Accessible file control: a real <label> wraps the button styling and
+          points at a focusable sr-only input (not display:none), so it is
+          keyboard-operable, in the a11y tree, and automatable. */}
+      <label
+        htmlFor="vendor-pdf-input"
+        className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs uppercase tracking-[0.14em] border border-border/50 hover:bg-card/80 transition-colors cursor-pointer ${status === "loading" ? "opacity-50 pointer-events-none" : ""}`}
         data-testid="vendor-pdf-select"
+        tabIndex={0}
+        role="button"
+        aria-label="Attach paired vendor PDF report"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
       >
         {status === "loading" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
         {status === "loading" ? "Reading PDF…" : "Attach vendor PDF"}
-      </button>
+      </label>
       <input
         ref={inputRef}
+        id="vendor-pdf-input"
+        name="vendorPdf"
         type="file"
         accept="application/pdf,.pdf"
-        className="hidden"
+        className="sr-only"
+        disabled={status === "loading"}
         data-testid="vendor-pdf-input"
         onChange={(e) => {
           const f = e.target.files?.[0];
