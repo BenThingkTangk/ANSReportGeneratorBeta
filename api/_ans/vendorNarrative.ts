@@ -50,6 +50,12 @@ export interface VendorNarrativeExtraction {
   printedNumbers: Array<{ key: "SB" | "LFa" | "RFa"; value: number; sourceText: string }>;
   /** True if the text reads like a P&S / ANS vendor narrative. */
   looksLikeVendorNarrative: boolean;
+  /**
+   * Identity parsed from prose (e.g. the letter's "RE: Alex Pare, dob 9/17/1975"),
+   * so a narrative-only document can still be identity-reconciled when merged.
+   * Fields absent from the prose stay null.
+   */
+  identity: { patientName: string | null; dob: string | null; testDate: string | null };
 }
 
 const NUM = String.raw`(-?\d+(?:\.\d+)?)`;
@@ -80,11 +86,12 @@ export function extractVendorNarrative(rawText: string): VendorNarrativeExtracti
   const text = normalize(rawText);
   const findings: VendorFinding[] = [];
   const printedNumbers: VendorNarrativeExtraction["printedNumbers"] = [];
+  const identity = extractProseIdentity(text);
 
   const looksLikeVendorNarrative =
     /(autonomic|sympathovagal|parasympathetic|sympathetic modulation|LFa|RFa|P&S|Colombo|ANS)/i.test(text);
   if (!looksLikeVendorNarrative) {
-    return { findings: [], printedNumbers: [], looksLikeVendorNarrative: false };
+    return { findings: [], printedNumbers: [], looksLikeVendorNarrative: false, identity };
   }
 
   const push = (
@@ -142,5 +149,27 @@ export function extractVendorNarrative(rawText: string): VendorNarrativeExtracti
     findings.push({ key: "stand.presyncope", phase: "stand", label: "Pre-syncope risk", classification: "present", sourceText: (ps?.[0] ?? "possible risk of pre-syncope").trim().slice(0, 160) });
   }
 
-  return { findings, printedNumbers, looksLikeVendorNarrative };
+  return { findings, printedNumbers, looksLikeVendorNarrative, identity };
+}
+
+/**
+ * Parse patient identity from vendor prose so a narrative-only document (e.g.
+ * the Colombo letter: "RE: Alex Pare, dob 9/17/1975") can be identity-reconciled
+ * when merged with the tabular report. Only reads what is printed; absent fields
+ * stay null. Not patient-keyed (generic "RE:"/"DOB:"/"Test Date:" anchors).
+ */
+function extractProseIdentity(text: string): VendorNarrativeExtraction["identity"] {
+  const DATE = String.raw`(\d{1,2}\s*\/\s*\d{1,2}\s*\/\s*\d{2,4})`;
+  // "RE: Alex Pare, dob 9/17/1975"  or  "Patient: Pare, Alex"
+  const nameM =
+    /\bRE:\s*([A-Za-z][A-Za-z ,.'-]{1,40}?)\s*(?:,?\s*dob\b|,|\.|$)/i.exec(text) ||
+    /\bPatient:\s*([A-Za-z][A-Za-z ,.'-]{1,40}?)\s+(?:Test Date|DOB|Gender)\b/i.exec(text);
+  const dobM = new RegExp(String.raw`\b(?:dob|d\.o\.b\.?|date of birth)\b[^\d]{0,6}${DATE}`, "i").exec(text);
+  const testM = new RegExp(String.raw`\bTest Date:?\s*${DATE}`, "i").exec(text);
+  const clean = (s: string | undefined) => (s ? s.replace(/\s{2,}/g, " ").trim() : null);
+  return {
+    patientName: clean(nameM?.[1]),
+    dob: clean(dobM?.[1])?.replace(/\s+/g, "") ?? null,
+    testDate: clean(testM?.[1])?.replace(/\s+/g, "") ?? null,
+  };
 }

@@ -51,35 +51,43 @@ export function VendorPdfCard({ onIngested, onExtraction }: Props) {
   const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [result, setResult] = useState<VendorResponse | null>(null);
 
-  const handleFile = useCallback(async (file: File) => {
+  const handleOneFile = useCallback(async (file: File): Promise<VendorResponse> => {
+    const form = new FormData();
+    form.append("vendorPdf", file);
+    const res = await fetch("/api/upload-vendor", { method: "POST", body: form });
+    const json: VendorResponse = await res.json();
+    // Emit per-file extraction + metrics so the parent can cumulatively merge
+    // multiple documents (letter + signed report) rather than replace.
+    if (json.success && json.extraction && json.extraction.fieldCount > 0) {
+      onExtraction?.(json.extraction, {
+        source: json.source === "ocr" ? "ocr" : json.source === "text" ? "text" : undefined,
+        ocrConfidence: json.ocrConfidence,
+        fileName: file.name,
+      });
+    }
+    if (json.success && json.metrics && json.metrics.length > 0) {
+      onIngested?.(json.metrics);
+    }
+    return json;
+  }, [onIngested, onExtraction]);
+
+  const handleFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
     setStatus("loading");
     setResult(null);
+    let last: VendorResponse | null = null;
     try {
-      const form = new FormData();
-      form.append("vendorPdf", file);
-      const res = await fetch("/api/upload-vendor", { method: "POST", body: form });
-      const json: VendorResponse = await res.json();
-      setResult(json);
-      if (json.success && json.extraction && json.extraction.fieldCount > 0) {
-        onExtraction?.(json.extraction, {
-          source: json.source === "ocr" ? "ocr" : json.source === "text" ? "text" : undefined,
-          ocrConfidence: json.ocrConfidence,
-          fileName: file.name,
-        });
+      // Process sequentially so the parent's cumulative merge is deterministic.
+      for (const f of files) {
+        last = await handleOneFile(f);
       }
-      if (json.success && json.metrics && json.metrics.length > 0) {
-        onIngested?.(json.metrics);
-        setStatus("done");
-      } else {
-        // Success:true with 0 metrics (e.g. OCR could not resolve anything) is
-        // not an error — it's an honest "nothing to ingest" outcome.
-        setStatus(json.success ? "done" : "error");
-      }
+      setResult(last);
+      setStatus(last?.success ? "done" : "error");
     } catch (e: any) {
       setResult({ success: false, error: e?.message || "Upload failed" });
       setStatus("error");
     }
-  }, [onIngested, onExtraction]);
+  }, [handleOneFile]);
 
   return (
     <div
@@ -110,7 +118,7 @@ export function VendorPdfCard({ onIngested, onExtraction }: Props) {
         data-testid="vendor-pdf-select"
         tabIndex={0}
         role="button"
-        aria-label="Attach paired vendor PDF report"
+        aria-label="Attach paired vendor PDF report(s)"
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -119,7 +127,7 @@ export function VendorPdfCard({ onIngested, onExtraction }: Props) {
         }}
       >
         {status === "loading" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
-        {status === "loading" ? "Reading PDF…" : "Attach vendor PDF"}
+        {status === "loading" ? "Reading PDF…" : "Attach vendor PDF(s)"}
       </label>
       <input
         ref={inputRef}
@@ -127,12 +135,15 @@ export function VendorPdfCard({ onIngested, onExtraction }: Props) {
         name="vendorPdf"
         type="file"
         accept="application/pdf,.pdf"
+        multiple
         className="sr-only"
         disabled={status === "loading"}
         data-testid="vendor-pdf-input"
         onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void handleFile(f);
+          const files = Array.from(e.target.files ?? []);
+          if (files.length) void handleFiles(files);
+          // Reset so re-selecting the same file(s) re-triggers change.
+          e.target.value = "";
         }}
       />
 

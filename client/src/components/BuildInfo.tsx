@@ -48,6 +48,11 @@ export function BuildInfo() {
   return (
     <div
       data-testid="build-info-badge"
+      // Hidden on phones: even a collapsed fixed badge can visually overlay the
+      // lower balance visualization on small screens. It is a developer/deploy
+      // aid, so it is shown only from `sm` up where the fixed corner is clear of
+      // content. (Tailwind `hidden` sets display:none, overriding position:fixed.)
+      className="hidden sm:block"
       style={{
         position: "fixed",
         // Sit inside the safe area; on mobile the report reserves bottom padding

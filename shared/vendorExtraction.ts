@@ -18,6 +18,8 @@ export interface VendorFieldProvenance {
   confidence: number;
   /** Verbatim source substring the value was read from. */
   sourceText: string;
+  /** Originating PDF filename (set when multiple vendor documents are merged). */
+  sourceFile?: string;
 }
 
 export interface VendorField<T> {
@@ -157,12 +159,24 @@ export interface VendorPhaseTable {
  */
 export interface VendorNarrativeFinding {
   key: string;
-  phase: "baseline" | "deep_breathing_valsalva" | "stand" | "overall";
+  phase: "deep_breathing_valsalva" | "baseline" | "stand" | "overall";
   label: string;
   classification:
     | "normal" | "borderline-low" | "borderline-high"
     | "low" | "high" | "high-normal" | "abnormal" | "present";
   sourceText: string;
+  /** Originating PDF filename (set when multiple vendor documents are merged). */
+  sourceFile?: string;
+}
+
+/**
+ * A conflict detected while merging multiple vendor documents: the same field
+ * carried different values across documents. Surfaced to the UI — NEVER silently
+ * resolved by overwrite.
+ */
+export interface VendorMergeConflict {
+  field: string;
+  values: Array<{ value: string; sourceFile?: string }>;
 }
 
 /**
@@ -221,4 +235,13 @@ export interface VendorReportExtraction {
   fieldCount: number;
   /** Notes for admin transparency. */
   notes: string[];
+  /**
+   * Set when this extraction is the MERGE of multiple vendor documents: the
+   * source filenames combined, and any field-level conflicts surfaced (never
+   * silently overwritten). Absent for a single-document extraction.
+   */
+  merged?: {
+    sourceFiles: string[];
+    conflicts: VendorMergeConflict[];
+  };
 }

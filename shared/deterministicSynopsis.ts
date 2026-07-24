@@ -21,12 +21,84 @@
  */
 
 import type { ANSReport, PhaseMetrics } from "./schema";
+import type { VendorNarrativeFinding } from "./vendorExtraction";
 
 export interface DeterministicSynopsis {
   patient: string;
   clinician: string;
   /** Stable marker so the UI can label the source of the text. */
   source: "deterministic";
+}
+
+/**
+ * Vendor-reported findings threaded into the synopsis as a SEPARATE evidence
+ * class. These are the vendor's own categorical statements (from the signed
+ * report / letter) — they are NOT converted into deterministic engine
+ * measurements or scores; they are quoted as vendor-reported.
+ */
+export interface VendorFindingsInput {
+  findings: VendorNarrativeFinding[];
+  printedNumbers?: Array<{ key: string; value: number }>;
+}
+
+const HUMAN_FINDING: Record<string, { patient: string; clinician: string }> = {
+  "baseline.hr_change": { patient: "", clinician: "" },
+  "db.hr_change": {
+    patient: "an abnormal change in heart rate from baseline to deep breathing",
+    clinician: "Abnormal baseline→DB HR change",
+  },
+  "stand.sympathetic": {
+    patient: "a high sympathetic (fight-or-flight) response when standing",
+    clinician: "High sympathetic response to stand",
+  },
+  "stand.presyncope": {
+    patient: "a possible risk of pre-syncope (light-headedness on standing)",
+    clinician: "Possible pre-syncope risk",
+  },
+  "baseline.rfa": {
+    patient: "a borderline-low resting parasympathetic (rest-and-digest) tone",
+    clinician: "Borderline-low resting parasympathetic modulation (RFa)",
+  },
+  "baseline.sb": {
+    patient: "a high-normal sympathovagal balance at rest",
+    clinician: "High-normal resting sympathovagal balance (SB)",
+  },
+};
+
+/** The vendor findings that are clinically notable (not "normal"/"present-ok"). */
+function notableVendorFindings(v: VendorFindingsInput | undefined): VendorNarrativeFinding[] {
+  if (!v?.findings?.length) return [];
+  return v.findings.filter(
+    (f) => f.classification === "abnormal" || f.classification === "high" || f.classification === "low" || (f.key === "stand.presyncope"),
+  );
+}
+
+/** Patient-facing plain-English sentence for the vendor-reported findings. */
+export function vendorFindingsPatientSentence(v: VendorFindingsInput | undefined): string | null {
+  const notable = notableVendorFindings(v);
+  if (notable.length === 0) return null;
+  const phrases = notable
+    .map((f) => HUMAN_FINDING[f.key]?.patient)
+    .filter((s): s is string => !!s);
+  if (phrases.length === 0) return null;
+  return (
+    `Your attached vendor report (reviewed by the clinic) flagged ${humanList(phrases)}. ` +
+    "These come from the signed vendor report, not from this device's raw recording, which did not capture blood-pressure or the sympathetic/parasympathetic spectral values — so these findings must be reviewed with your clinician."
+  );
+}
+
+/** Clinician-facing verbatim vendor-reported findings block, with provenance. */
+export function vendorFindingsClinicianBlock(v: VendorFindingsInput | undefined): string | null {
+  if (!v?.findings?.length && !v?.printedNumbers?.length) return null;
+  const lines: string[] = ["Vendor-reported findings (from the signed vendor report/letter — vendor-reported, NOT deterministic engine measurements):"];
+  for (const f of v?.findings ?? []) {
+    const label = HUMAN_FINDING[f.key]?.clinician ?? f.label;
+    lines.push(`- ${label}: ${f.classification}${f.sourceFile ? ` [${f.sourceFile}]` : ""}`);
+  }
+  for (const n of v?.printedNumbers ?? []) {
+    lines.push(`- ${n.key} = ${n.value} (vendor-printed)`);
+  }
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +291,7 @@ export function hasAutonomicBalance(report: Partial<ANSReport>): boolean {
 // Patient synopsis (warm, plain English)
 // ---------------------------------------------------------------------------
 
-export function buildPatientSynopsis(report: Partial<ANSReport>): string {
+export function buildPatientSynopsis(report: Partial<ANSReport>, vendor?: VendorFindingsInput): string {
   const name = firstName(report);
   const tier = report.wellnessTier;
   const ab = report.autonomicBalance;
@@ -228,6 +300,7 @@ export function buildPatientSynopsis(report: Partial<ANSReport>): string {
   const stand = findPhase(report, "Stand-F");
   const patterns = activePatterns(report).patient;
   const balanceAssessed = hasAutonomicBalance(report);
+  const vendorNotable = notableVendorFindings(vendor);
 
   const sentences: string[] = [];
 
@@ -293,13 +366,21 @@ export function buildPatientSynopsis(report: Partial<ANSReport>): string {
     sentences.push(
       `The test picked up ${humanList(patterns)} — patterns in how your body regulates itself.`,
     );
-  } else if (ewing.length > 0 || balanceAssessed) {
+  } else if ((ewing.length > 0 || balanceAssessed) && vendorNotable.length === 0) {
     // A clean cardiovagal screen is meaningful on its own even when the vendor
-    // spectral branch-balance is unavailable.
+    // spectral branch-balance is unavailable. Only say "nothing flagged" when
+    // the VENDOR report also flagged nothing — otherwise that would contradict
+    // an attached signed report (its findings are added below).
     sentences.push(
-      "None of the specific autonomic dysfunction patterns the test screens for were flagged in the measured signals.",
+      "None of the specific autonomic dysfunction patterns this device's own signals screen for were flagged in the measured signals.",
     );
   }
+
+  // Vendor-reported findings (separate evidence class). Never converted to
+  // engine scores — quoted as vendor-reported so the summary can't contradict an
+  // attached signed report.
+  const vendorSentence = vendorFindingsPatientSentence(vendor);
+  if (vendorSentence) sentences.push(vendorSentence);
 
   // 3. What to do with the findings — WITHOUT asserting symptoms the test did
   // not capture. Prior versions stated specific daily-life symptoms ("low
@@ -337,7 +418,7 @@ export function buildPatientSynopsis(report: Partial<ANSReport>): string {
 // Clinician synopsis (precise, phase metrics + Colombo patterns)
 // ---------------------------------------------------------------------------
 
-export function buildClinicianSynopsis(report: Partial<ANSReport>): string {
+export function buildClinicianSynopsis(report: Partial<ANSReport>, vendor?: VendorFindingsInput): string {
   const baseline =
     findPhase(report, "Baseline-A") ?? findPhase(report, "Baseline-C");
   const stand = findPhase(report, "Stand-F");
@@ -439,6 +520,13 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>): string {
   if (nextSteps.length > 0) {
     parts.push(`Suggested next steps: ${humanList(nextSteps)}.`);
   }
+
+  // Vendor-reported findings — a distinct evidence class appended verbatim with
+  // provenance. Never merged into the deterministic measured/hypothesis text so
+  // the two tiers stay separable, but present so the clinician summary can never
+  // read "nothing flagged" when the attached signed report has findings.
+  const vendorBlock = vendorFindingsClinicianBlock(vendor);
+  if (vendorBlock) parts.push(vendorBlock);
 
   return parts.join(" ");
 }

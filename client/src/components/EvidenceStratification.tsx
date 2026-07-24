@@ -24,6 +24,10 @@ import { ConfidenceBadge } from "@/components/ConfidenceBadge";
 
 interface EvidenceStratificationProps {
   report: ANSReport;
+  /** Optional merged vendor extraction — its narrative findings are shown as a
+   *  SEPARATE evidence class (verbatim, with provenance), never folded into the
+   *  deterministic measured/hypothesis tiers. */
+  vendorExtraction?: import("@shared/vendorExtraction").VendorReportExtraction;
 }
 
 /**
@@ -47,8 +51,9 @@ interface EvidenceStratificationProps {
  * This component is presentational only. It reads existing fields and performs
  * NO scoring — the deterministic engine remains the single source of truth.
  */
-export function EvidenceStratification({ report }: EvidenceStratificationProps) {
+export function EvidenceStratification({ report, vendorExtraction }: EvidenceStratificationProps) {
   const summary = report.diagnosticSummary;
+  const vendorFindings = vendorExtraction?.narrative?.findings ?? [];
 
   return (
     <motion.section
@@ -68,6 +73,13 @@ export function EvidenceStratification({ report }: EvidenceStratificationProps) 
           context that does not affect this report.
         </p>
       </header>
+
+      {vendorFindings.length > 0 && (
+        <VendorReportedTier
+          findings={vendorFindings}
+          sourceFiles={vendorExtraction?.merged?.sourceFiles}
+        />
+      )}
 
       {summary ? (
         <div className="grid grid-cols-1 gap-3">
@@ -117,6 +129,12 @@ const TIER_ACCENTS = {
     icon: "text-violet-300",
     chip: "border-violet-400/40 text-violet-300 bg-violet-500/10",
   },
+  vendor: {
+    ring: "border-sky-400/30",
+    bg: "bg-sky-500/5",
+    icon: "text-sky-300",
+    chip: "border-sky-400/40 text-sky-300 bg-sky-500/10",
+  },
 } as const;
 
 function TierShell({
@@ -162,6 +180,84 @@ function TierShell({
       </div>
       {children}
     </div>
+  );
+}
+
+// ============================================================================
+// Vendor-reported findings — a SEPARATE evidence class
+// ============================================================================
+
+// Classifications the vendor prints that indicate an abnormal / notable result
+// (as opposed to an explicit "normal"). Used only for the summary count colour.
+const VENDOR_NOTABLE = new Set([
+  "borderline-low", "borderline-high", "low", "high", "high-normal", "abnormal", "present",
+]);
+
+const VENDOR_CLASS_TEXT: Record<string, string> = {
+  normal: "text-emerald-300",
+  "borderline-low": "text-amber-300",
+  "borderline-high": "text-amber-300",
+  "high-normal": "text-amber-300",
+  low: "text-orange-300",
+  high: "text-orange-300",
+  abnormal: "text-red-300",
+  present: "text-orange-300",
+};
+
+function VendorReportedTier({
+  findings,
+  sourceFiles,
+}: {
+  findings: import("@shared/vendorExtraction").VendorNarrativeFinding[];
+  sourceFiles?: string[];
+}) {
+  const notable = findings.filter((f) => VENDOR_NOTABLE.has(f.classification));
+  return (
+    <TierShell
+      accent="vendor"
+      icon={ShieldAlert}
+      title="Vendor-reported findings"
+      subtitle="Read verbatim from the attached signed vendor report. These are the vendor's own categorical conclusions — shown with provenance and kept strictly separate from HumanOS's deterministic measurements. They are NOT converted into engine scores and must be reviewed clinically."
+      count={findings.length}
+      testId="tier-vendor-reported"
+    >
+      <ul className="space-y-1.5">
+        {findings.map((f) => (
+          <li
+            key={f.key}
+            className="flex items-start justify-between gap-2 rounded-lg border border-sky-400/20 bg-background/30 px-3 py-2"
+            data-testid={`vendor-finding-${f.key}`}
+          >
+            <div className="min-w-0">
+              <div className="text-xs text-foreground">{f.label}</div>
+              <div className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                {f.phase}
+                {f.sourceFile ? ` · ${f.sourceFile}` : ""}
+              </div>
+            </div>
+            <span
+              className={`text-[10px] uppercase tracking-wide shrink-0 ${VENDOR_CLASS_TEXT[f.classification] ?? "text-muted-foreground"}`}
+            >
+              {f.classification}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {notable.length > 0 && (
+        <p className="text-[11px] text-sky-200/80 mt-3 leading-snug" data-testid="vendor-reported-note">
+          The signed vendor report flagged {notable.length} notable finding
+          {notable.length === 1 ? "" : "s"}. Because the raw .ans export does not
+          contain the vendor's proprietary blood-pressure and spectral values,
+          these categories cannot be independently reproduced by HumanOS and must
+          be reviewed clinically.
+        </p>
+      )}
+      {sourceFiles && sourceFiles.length > 0 && (
+        <p className="text-[10px] text-muted-foreground/70 mt-2 font-mono">
+          Source: {sourceFiles.join(", ")}
+        </p>
+      )}
+    </TierShell>
   );
 }
 

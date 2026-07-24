@@ -119,14 +119,14 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
           >
             {role === "patient" ? (
               <ErrorBoundary label="Patient view">
-                <PatientPortalTwoColumn report={report} ansStudy={ansStudy} />
+                <PatientPortalTwoColumn report={report} ansStudy={ansStudy} vendorExtraction={vendorExtraction} />
               </ErrorBoundary>
             ) : (
               <ErrorBoundary label="Clinician view">
                 <div className="space-y-4">
                   {/* Evidence tiers: measured vs hypotheses vs missing vs
                       investigational — separated so certainty is never blurred. */}
-                  <EvidenceStratification report={report} />
+                  <EvidenceStratification report={report} vendorExtraction={vendorExtraction} />
                   <ClinicianPortalLive
                     report={report}
                     ansStudy={ansStudy}

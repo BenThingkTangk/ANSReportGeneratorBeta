@@ -1,8 +1,9 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
 import type { DiagnosticSummary } from "@shared/diagnosticSummary";
 import type { VendorReportExtraction } from "@shared/vendorExtraction";
+import { mergeVendorExtractions, type NamedExtraction } from "@shared/mergeVendorExtractions";
 import { UploadScreen } from "@/components/UploadScreen";
 import { AnalyzingScreen } from "@/components/AnalyzingScreen";
 import { ReportDashboard } from "@/components/ReportDashboard";
@@ -31,6 +32,9 @@ export default function Dashboard() {
   // view. Held alongside vendorMetrics so the report can show exact vendor parity.
   const [vendorExtraction, setVendorExtraction] = useState<VendorReportExtraction | null>(null);
   const [vendorSource, setVendorSource] = useState<{ source?: "ocr" | "text"; ocrConfidence?: number; fileName?: string } | null>(null);
+  // Cumulative list of every attached vendor document; the displayed extraction
+  // is their identity-reconciled MERGE (letter + signed report coexist).
+  const vendorDocsRef = useRef<NamedExtraction[]>([]);
 
   /** Step 1: parse-only — give the user a chance to review extraction. */
   const parseFile = useCallback(async (file: File) => {
@@ -198,6 +202,10 @@ export default function Dashboard() {
     setDiagnosticSummary(null);
     setPendingFile(null);
     setAnalysisProgress(0);
+    setVendorExtraction(null);
+    setVendorMetrics(null);
+    setVendorSource(null);
+    vendorDocsRef.current = [];
   }, []);
 
   return (
@@ -230,7 +238,16 @@ export default function Dashboard() {
             onGenerate={generateReport}
             onVendorMetrics={setVendorMetrics}
             onVendorExtraction={(x, meta) => {
-              setVendorExtraction(x);
+              // Accumulate every attached document and display their
+              // identity-reconciled MERGE, so a second PDF augments rather than
+              // replaces the first (letter's SB + report's categorical findings).
+              const fileName = meta?.fileName ?? `document-${vendorDocsRef.current.length + 1}`;
+              vendorDocsRef.current = [
+                ...vendorDocsRef.current.filter((d) => d.fileName !== fileName),
+                { fileName, extraction: x },
+              ];
+              const { merged } = mergeVendorExtractions(vendorDocsRef.current);
+              setVendorExtraction(merged);
               setVendorSource(meta ?? null);
             }}
           />

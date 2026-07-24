@@ -28,14 +28,20 @@ interface PatientPortalProps {
   report: ANSReport;
   /** Optional — surfaces a subtle data-quality line when available. */
   ansStudy?: AnsStudy;
+  /** Optional merged vendor extraction — its narrative findings are threaded
+   *  into the patient synopsis as a separate vendor-reported evidence class. */
+  vendorExtraction?: import("@shared/vendorExtraction").VendorReportExtraction;
 }
 
-export function PatientPortalTwoColumn({ report }: PatientPortalProps) {
+export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPortalProps) {
+  const vendorFindings = vendorExtraction?.narrative
+    ? { findings: vendorExtraction.narrative.findings, printedNumbers: vendorExtraction.narrative.printedNumbers }
+    : undefined;
   // The deterministic synopsis is computed offline from the report, so it is shown
   // immediately — the patient is never blocked by (or left waiting on) the network.
   // Optional AI enrichment quietly swaps in richer prose over the top when it lands.
   const [synopsis, setSynopsis] = useState<string>(
-    () => report.patientSynopsis ?? buildPatientSynopsis(report),
+    () => report.patientSynopsis ?? buildPatientSynopsis(report, vendorFindings),
   );
   // Non-blocking enrichment indicator; deterministic synopsis is already shown.
   const [enhancing, setEnhancing] = useState(false);

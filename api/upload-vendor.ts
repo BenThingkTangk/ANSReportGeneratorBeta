@@ -75,6 +75,30 @@ function parseSinglePdf(rawBody: Buffer, contentType: string): { buffer: Buffer;
 }
 
 /**
+ * Fill null identity fields on the tabular extraction from identity parsed out
+ * of vendor PROSE (e.g. the letter's "RE: Alex Pare, dob 9/17/1975"). Only fills
+ * ABSENT fields — never overwrites a value the grid parser already read — so a
+ * narrative-only document can still be identity-reconciled during a merge.
+ */
+function backfillIdentityFromNarrative(
+  extraction: VendorReportExtraction,
+  narr: { identity?: { patientName: string | null; dob: string | null; testDate: string | null } } | null,
+): void {
+  const src = narr?.identity;
+  if (!src) return;
+  const id = extraction.identity;
+  const fill = (field: { value: string | null; provenance: any }, value: string | null) => {
+    if (field.value == null && value) {
+      field.value = value;
+      field.provenance = { page: 1, confidence: 0.9, sourceText: value };
+    }
+  };
+  fill(id.patientName, src.patientName);
+  fill(id.dob, src.dob);
+  fill(id.testDate, src.testDate);
+}
+
+/**
  * Flatten a structured OCR extraction into the same VendorMetric[] shape the
  * text-layer path returns, so the client merges both identically. Only fields
  * the parser actually read (value != null) become metrics; each keeps its
@@ -161,6 +185,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ? { findings: textNarrative.findings, printedNumbers: textNarrative.printedNumbers }
           : undefined,
       };
+      // Narrative-only docs (e.g. the letter) carry identity in prose — backfill
+      // so they can be identity-reconciled when merged with the tabular report.
+      backfillIdentityFromNarrative(extraction, textNarrative);
       const findingCount = textNarrative?.findings.length ?? 0;
       return res.status(200).json({
         success: true,
@@ -208,6 +235,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? { findings: ocrNarrative.findings, printedNumbers: ocrNarrative.printedNumbers }
         : undefined,
     };
+    backfillIdentityFromNarrative(extraction, ocrNarrative);
     // Numeric grid metrics (rare on narrative summaries) PLUS any prose numbers.
     const gridMetrics = extractionToVendorMetrics(extraction);
     const proseMetrics = parseVendorReportText(ocrText).metrics.filter(
