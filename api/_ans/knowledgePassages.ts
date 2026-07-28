@@ -189,6 +189,16 @@ export function buildPassagePromptSection(passages: SelectedPassage[]): string {
     "- NEVER convert a threshold, cut-off, or rule-of-thumb mentioned in a passage into a computed",
     "  result or diagnosis for this patient. Do not apply a passage's numbers to this patient's data.",
     "- Cite a passage by its source title and locator exactly as given below when you rely on it.",
+    // Dr. Colombo's output rule. Source text (papers, transcripts) legitimately
+    // discusses generic HRV indices, so they may exist INTERNALLY in a passage —
+    // but HumanOS work outputs are P&S (LFa/RFa/SB) and must not surface them.
+    "- HRV-PARAMETER OUTPUT RULE (Dr. Colombo): a passage may internally mention generic",
+    "  heart-rate-variability indices (e.g. SDNN, RMSSD, pNN50, LF/HF ratio, total power,",
+    "  LF or HF power in ms^2). You must NOT surface, quote, tabulate, or report those HRV",
+    "  parameters in your answer, and must NOT present them as this patient's results.",
+    "  HumanOS reports P&S measures - LFa, RFa, and sympathovagal balance (LFa/RFa) - plus",
+    "  the challenge-response findings. If a passage's explanation depends on an HRV index,",
+    "  paraphrase the underlying physiology in P&S terms without emitting the HRV parameter.",
   ];
 
   if (anyTranscript) {

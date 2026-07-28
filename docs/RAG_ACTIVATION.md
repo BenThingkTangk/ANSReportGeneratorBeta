@@ -138,3 +138,84 @@ Patient documents — including the **Pare Colombo consultation letter** and any
 They are patient PHI, not curated evidence. The reindex/upload paths operate
 only on curated `ans_knowledge_sources` rows; patient parsing is a separate
 pipeline (`/api/parse`, `/api/upload`, `/api/upload-vendor`).
+
+---
+
+# Embedding pipeline + retrieval repair (migration 0006)
+
+## The live defect this fixes
+
+The live project (`xsjwubnmcivsskumvgyy`) had a `public.match_ans_knowledge_chunks`
+function created out-of-band that referenced columns which **do not exist** on
+`public.ans_knowledge_sources`:
+
+| broken reference | real column |
+| --- | --- |
+| `s.status` | `s.review_status` |
+| `s.is_active` | `s.active_in_ai_analysis` |
+| `s.citation` | *(no such column — compose from `title`/`authors`/`year`)* |
+
+Every call therefore failed with `42703` (undefined column). Separately, the 16
+existing chunks all had `embedding IS NULL` and there was **no** embedding trigger,
+so a vector search could not have returned anything even with a correct function.
+
+Note: no application code ever called that RPC — Ask ATOM was already retrieving
+via the deterministic lexical ranker, which is why answers still worked. The
+function was dead-but-broken; 0006 makes it correct and the app now uses it when
+embeddings exist.
+
+## What was added
+
+1. **`supabase/migrations/0006_rag_embeddings_and_match_repair.sql`** — idempotent,
+   additive: enables `vector` (if available), adds `ans_knowledge_chunks.embedding
+   vector(1024)`, adds a cosine ANN index + a partial index over NULL embeddings,
+   and **replaces** `match_ans_knowledge_chunks` with a version that filters on
+   `review_status='approved' AND active_in_ai_analysis=true` and returns a citation
+   composed from real metadata. Safe on a database without pgvector (it skips the
+   vector-only objects and the app stays lexical). Modifies no rows, seeds no
+   content, and touches nothing in the `.ans` parser or any clinical calculation.
+2. **`api/_ans/embeddings.ts`** — server-only embedding generation via the
+   Perplexity Embeddings API (`POST https://api.perplexity.ai/v1/embeddings`) using
+   the existing `PPLX_API_KEY`. Model `pplx-embed-v1-0.6b` → **1024 dims** (kept
+   under pgvector's 2000-dim index ceiling). Provider returns **base64 int8,
+   unnormalised**, so vectors are decoded and L2-normalised before storage. The key
+   is never returned, logged, or shipped to the client.
+3. **`POST /api/admin/knowledge/embed-backfill`** (admin-only; `GET` = status probe)
+   — batched, resumable backfill of `embedding IS NULL` rows for **approved +
+   AI-active** sources only. Writes only the `embedding` column. If the provider is
+   unconfigured or failing it changes nothing and says so.
+4. **`api/_ans/hybridRetrieval.ts`** — vector-first retrieval with a deterministic
+   **lexical fallback**. Any vector-path problem (no column, all-NULL embeddings,
+   pgvector/RPC absent, provider unconfigured or erroring, zero matches) falls back
+   silently to the existing ranker. `grounding.retrieval` + `retrievalFallbackReason`
+   are returned so "RAG" is never claimed more strongly than earned.
+5. **HRV output rule** — `buildPassagePromptSection` now carries an explicit rule:
+   passages may mention generic HRV indices (SDNN, RMSSD, pNN50, LF/HF, ms² powers)
+   internally, but those must **never** be surfaced in HumanOS outputs; answers use
+   P&S measures (LFa, RFa, SB) instead.
+
+## Deployment steps (not performed here)
+
+```bash
+# 1. Apply the migration to the live project.
+supabase db push            # or paste 0006 into the SQL editor
+
+# 2. Verify the function is correct + the column exists.
+#    (expects: 0 rows but NO 42703 error)
+select * from public.match_ans_knowledge_chunks(array_fill(0::real,array[1024])::vector, 0, 1);
+
+# 3. Backfill embeddings (admin session required). Re-run until remaining = 0.
+curl -X POST https://<host>/api/admin/knowledge/embed-backfill \
+  -H 'content-type: application/json' -b "$ADMIN_COOKIE" -d '{"limit":32}'
+
+# 4. Confirm status.
+curl -s https://<host>/api/admin/knowledge/embed-backfill -b "$ADMIN_COOKIE"
+```
+
+## Required env (names only — never commit values)
+
+| Var | Purpose |
+| --- | --- |
+| `PPLX_API_KEY` | already present; now also used for embeddings |
+| `EMBEDDING_MODEL` | *optional* override (default `pplx-embed-v1-0.6b`) |
+| `EMBEDDING_DIMENSIONS` | *optional* override (default `1024`) — **must** match the DB `vector(N)` column and all stored vectors |

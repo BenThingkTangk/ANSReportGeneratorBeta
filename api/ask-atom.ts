@@ -8,6 +8,8 @@ import {
 } from "./_knowledgeCache.js";
 import { rankKnowledgeSources } from "./_knowledgeRetrieval.js";
 import { selectPassages, buildPassagePromptSection } from "./_ans/knowledgePassages.js";
+import { retrieveCandidates } from "./_ans/hybridRetrieval.js";
+import { createSupabaseAdmin } from "./_supabase.js";
 
 /**
  * /api/ask-atom — Colombo P&S grounded chat (Path B)
@@ -681,15 +683,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // and question-specific. When the question has no searchable terms the
     // ranker falls back to the first 6 in the original order. (To keep the old
     // breadth exactly while still ranking, raise the cap below to 12.)
-    const [allKnowledgeSources, corpus, candidatePassages] = await Promise.all([
-      getActiveKnowledgeSources(),
-      getKnowledgeCorpusStatus(),
-      // Full-text chunks from approved+active sources (filtered in SQL). Returns
-      // [] on any failure or on a corpus with no chunks.
-      getCandidatePassages(),
-    ]);
+    // The question drives retrieval, so resolve it BEFORE fetching candidates.
     const latestUserQuery =
       [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "";
+
+    const [allKnowledgeSources, corpus, retrieval] = await Promise.all([
+      getActiveKnowledgeSources(),
+      getKnowledgeCorpusStatus(),
+      // VECTOR-FIRST retrieval with a deterministic LEXICAL FALLBACK. Both paths
+      // return chunks from approved + AI-active sources only (filtered in SQL /
+      // in the RPC). Never throws: any vector-path problem (no embedding column,
+      // all-NULL embeddings, pgvector or RPC absent, provider unconfigured or
+      // erroring) degrades to the lexical ranker.
+      retrieveCandidates(
+        createSupabaseAdmin(),
+        [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "",
+        () => getCandidatePassages(),
+      ),
+    ]);
+    const candidatePassages = retrieval.rows;
     const knowledgeSources = rankKnowledgeSources(
       allKnowledgeSources,
       latestUserQuery,
@@ -726,8 +738,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           activeSources: corpus.activeSources,
           passages: passages.length,
           passageCitations: passages.map((p) => p.citation),
+          // Which retrieval path produced these passages, and (when degraded)
+          // exactly why — so "RAG" is never claimed more strongly than earned.
+          retrieval: retrieval.mode,
+          retrievalFallbackReason: retrieval.fallbackReason,
         }
       : { mode: "report_only" as const, chunks: 0, activeSources: corpus.activeSources,
+          retrieval: retrieval.mode,
+          retrievalFallbackReason: retrieval.fallbackReason,
           note: corpus.ragFunctional
             ? "No knowledge passage was relevant to this question; the answer is grounded in the report and clearly-labeled external evidence, not RAG."
             : "Private knowledge corpus has no full-text chunks; answer is grounded in the report and clearly-labeled external evidence, not RAG." };
