@@ -246,6 +246,7 @@ Data assessability & provenance rules (HIGHEST PRIORITY — these override every
 - The "DATA ASSESSABILITY & PROVENANCE" block is authoritative. When it conflicts with the Event Mean Data table, "Detected Colombo Indications", "Overall Clinical Impression", or any other legacy finding, follow the assessability block and treat the conflicting legacy item as unconfirmed / Not assessed. Privilege missingDomains, blocked claims, and provenance over legacy findings every time.
 - Blocked claims (listed as blocked for insufficient data) are explicitly NOT findings. Report each as "not assessed because required inputs were missing" — never as present or absent.
 - If the metrics needed to answer a question are Not assessed, say so plainly and recommend an adequate repeat recording instead of interpreting placeholder values.
+- EXCEPTION — attached vendor reports: when an "ATTACHED VENDOR REPORT(S)" block is present, its categorical findings and printed numbers ARE real attached evidence. A question about what the attached vendor report(s) found MUST be answered from that block, listing the vendor's findings and attributing them to the vendor report. Never answer such a question with only the deterministic domain list (e.g. "only cardiovagal was assessed") — that list describes this device's own .ans measurements, not the vendor's document. Keep the two classes separate, never merge a vendor category into a HumanOS score, and never claim HumanOS verified them.
 
 Evidence-grounding rules (HIGHEST PRIORITY — apply whenever a "KNOWLEDGE LIBRARY STATUS — METADATA ONLY" block is present):
 - The private knowledge corpus then has ZERO retrieved full-text passages. You must NOT cite the reference titles with bracketed numbers, and you must NOT state any quantitative diagnostic performance (sensitivity, specificity, PPV/NPV, AUC), prognosis, near-term risk/"lower risk", morbidity/mortality figures, or treatment-efficacy claims as if sourced from that corpus.
@@ -481,7 +482,90 @@ Claims BLOCKED for insufficient data — report each as "${NOT_ASSESSED}", never
 ${blockedStr}`;
 }
 
-export function buildPatientContext(report: any, viewerRole: string): string {
+/**
+ * ATTACHED VENDOR REPORT(S) — a SEPARATE evidence class.
+ *
+ * The signed P&S vendor documents carry categorical conclusions (e.g. "High
+ * sympathetic response to stand", "Abnormal changes in HR baseline→DB") and
+ * prose-printed numbers (e.g. SB = 2.59) that the raw .ans export cannot
+ * reproduce — the vendor's proprietary BP/spectral aggregates are not in the
+ * binary. Without this block the model only saw the deterministic engine's
+ * "Domains assessed: cardiovagal" and answered questions about the attached
+ * vendor reports by saying only cardiovagal was assessed, omitting the vendor's
+ * own findings.
+ *
+ * These are vendor-REPORTED, never HumanOS measurements: they are listed
+ * verbatim with provenance (source filename), explicitly excluded from the
+ * deterministic domain scores, and flagged as requiring clinician review.
+ * Returns "" when no vendor document is attached, so behaviour is unchanged for
+ * .ans-only uploads.
+ */
+export function buildVendorReportedSection(vendorExtraction: any): string {
+  const narrative = vendorExtraction?.narrative;
+  const findings: any[] = Array.isArray(narrative?.findings) ? narrative.findings : [];
+  const printed: any[] = Array.isArray(narrative?.printedNumbers) ? narrative.printedNumbers : [];
+  if (findings.length === 0 && printed.length === 0) return "";
+
+  const sourceFiles: string[] = Array.isArray(vendorExtraction?.merged?.sourceFiles)
+    ? vendorExtraction.merged.sourceFiles
+    : [];
+  const conflicts: any[] = Array.isArray(vendorExtraction?.merged?.conflicts)
+    ? vendorExtraction.merged.conflicts
+    : [];
+
+  const findingLines = findings.length
+    ? findings
+        .map((f: any) => {
+          const src = f?.sourceFile ? ` [source: ${f.sourceFile}]` : "";
+          return `- ${f?.label ?? f?.key}: ${f?.classification}${src}`;
+        })
+        .join("\n")
+    : "- None printed in the attached vendor document(s).";
+
+  const printedLines = printed.length
+    ? printed.map((n: any) => `- ${n?.key} = ${n?.value} (printed verbatim in the vendor document)`).join("\n")
+    : "- None.";
+
+  const conflictLines = conflicts.length
+    ? conflicts
+        .map((c: any) => {
+          const vals = (c?.values ?? [])
+            .map((v: any) => `${v?.value}${v?.sourceFile ? ` (${v.sourceFile})` : ""}`)
+            .join(" vs ");
+          return `- ${c?.field}: ${vals} — unresolved, do not pick one.`;
+        })
+        .join("\n")
+    : "- None.";
+
+  return `--------------------------------------------------
+ATTACHED VENDOR REPORT(S) — VENDOR-REPORTED EVIDENCE (SEPARATE CLASS — NOT HumanOS measurements)
+--------------------------------------------------
+Source document(s): ${sourceFiles.length ? sourceFiles.join(", ") : "attached vendor report"}
+
+These are the VENDOR'S OWN printed conclusions, read verbatim from the signed
+report/letter. They are REAL attached evidence and MUST be reported when the
+user asks what the attached vendor report(s) found — do NOT answer that only
+cardiovagal was assessed, and do NOT treat their absence from the deterministic
+domain scores as meaning nothing was found.
+
+Vendor-reported categorical findings (verbatim, with provenance):
+${findingLines}
+
+Vendor-printed numbers (verbatim — quote only these, never recompute):
+${printedLines}
+
+Unresolved conflicts between attached vendor documents (surface, never silently resolve):
+${conflictLines}
+
+Rules for this block (HIGHEST PRIORITY, alongside the assessability rules):
+- Attribute every item here to the attached vendor report ("the attached vendor report found…"), never to this device's own recording or to the deterministic engine.
+- Keep them SEPARATE from the raw .ans measurements: the deterministic domain scores and the "Domains NOT assessed" list describe only what HumanOS measured from the .ans, and do NOT include these vendor findings.
+- Do NOT convert a vendor category into a HumanOS severity, score, phenotype, or threshold classification, and do NOT infer any value the vendor did not print.
+- State plainly that the raw .ans export does not contain the vendor's blood-pressure/spectral values, so HumanOS cannot independently reproduce or verify these findings and they must be reviewed with the clinician.
+- In PATIENT view describe them in plain language (e.g. "a high fight-or-flight response when you stood up", "a possible risk of light-headedness on standing"), still attributed to the vendor report, without diagnosing or excluding any condition.`;
+}
+
+export function buildPatientContext(report: any, viewerRole: string, vendorExtraction?: any): string {
   if (!report) return "(no report attached)";
   const pd = report.patientData || {};
   const name = `${pd.firstName ?? ""} ${pd.lastName ?? ""}`.trim() || "Unknown";
@@ -498,6 +582,9 @@ export function buildPatientContext(report: any, viewerRole: string): string {
 
   const meanTable = buildEventMeanTable(report.phaseEvents);
   const assessability = buildAssessabilitySection(report);
+  // Vendor-reported evidence from any attached signed vendor PDF(s). Empty
+  // string when nothing is attached, so .ans-only context is unchanged.
+  const vendorSection = buildVendorReportedSection(vendorExtraction);
   const overall = report.overallImpression || "(none)";
   const contraindList = (report.contraindications ?? []).join("; ") || "None flagged.";
   const firstName = (pd.firstName ?? "").trim() || name;
@@ -535,7 +622,7 @@ Event Mean Data (a cell reading "${NOT_ASSESSED}", or any 0 / blank spectral val
 ${meanTable}
 
 ${assessability}
-
+${vendorSection ? `\n${vendorSection}\n` : ""}
 --------------------------------------------------
 LEGACY FINDINGS (SECONDARY — defer to the assessability block above whenever they disagree; never use these to assert anything about a ${NOT_ASSESSED} domain or value)
 --------------------------------------------------
@@ -563,6 +650,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let messages = Array.isArray(body?.messages) ? body.messages : [];
     const viewerRole = body?.viewerRole === "clinician" ? "clinician" : "patient";
     const report = body?.report;
+    // Attached paired vendor PDF extraction (merged across documents), when the
+    // clinician attached one. Grounded as a SEPARATE vendor-reported evidence
+    // class so questions about the attached report are answered from it.
+    const vendorExtraction = body?.vendorExtraction;
 
     // Back-compat: accept {question, context} shape
     if (messages.length === 0 && typeof body?.question === "string" && body.question.trim()) {
@@ -613,7 +704,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const systemContent = [
       SYSTEM_PROMPT,
       knowledgeSection,
-      buildPatientContext(report, viewerRole),
+      buildPatientContext(report, viewerRole, vendorExtraction),
     ]
       .filter(Boolean)
       .join("\n\n");
