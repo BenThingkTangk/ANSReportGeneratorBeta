@@ -53,26 +53,30 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
           borderBottom: "1px solid hsl(var(--border))",
         }}
       >
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={onReset}
-            className="p-2 rounded-lg hover:bg-card/80 transition-colors flex-shrink-0"
+            className="min-w-11 min-h-11 flex items-center justify-center rounded-lg hover:bg-card/80 transition-colors flex-shrink-0"
             data-testid="button-back"
             aria-label="Back"
           >
-            <ArrowLeft className="w-4 h-4 text-muted-foreground" />
+            <ArrowLeft className="w-5 h-5 text-muted-foreground" />
           </button>
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
             <PhysioPSPulseNodeLogo
               variant="primary"
               title="PhysioPS Pulse Node"
-              width={32}
-              height={32}
+              width={28}
+              height={28}
               aria-label="PhysioPS Pulse Node mark"
+              className="flex-shrink-0"
             />
             <div className="min-w-0">
+              {/* Full brand from `sm` up; a shorter, non-truncating label on phones
+                  so it never renders as "P…". */}
               <h1 className="text-sm font-bold truncate" style={{ color: "var(--color-parasym)" }}>
-                PhysioPS × HumanOS ANS Report
+                <span className="hidden sm:inline">PhysioPS × HumanOS ANS Report</span>
+                <span className="sm:hidden">PhysioPS × HumanOS</span>
               </h1>
               <p className="text-[10px] text-muted-foreground hidden sm:block">
                 Generated {new Date(report.generatedAt).toLocaleString()}
@@ -81,13 +85,13 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           {/* Mobile-only Ask ATOM launcher. Lives in the sticky top bar so it can
               never overlay report metrics (unlike the fixed floating button,
-              which is shown from `sm` up). */}
+              which is shown from `sm` up). >=44px touch target. */}
           <button
             onClick={() => setAskOpen(o => !o)}
-            className="sm:hidden w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+            className="sm:hidden min-w-11 min-h-11 rounded-full flex items-center justify-center flex-shrink-0"
             style={{
               background: "linear-gradient(135deg, hsl(185 85% 35%), hsl(185 85% 48%))",
               boxShadow: "0 0 12px hsl(185 85% 42% / 0.4)",
@@ -115,14 +119,14 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
           >
             {role === "patient" ? (
               <ErrorBoundary label="Patient view">
-                <PatientPortalTwoColumn report={report} ansStudy={ansStudy} />
+                <PatientPortalTwoColumn report={report} ansStudy={ansStudy} vendorExtraction={vendorExtraction} />
               </ErrorBoundary>
             ) : (
               <ErrorBoundary label="Clinician view">
                 <div className="space-y-4">
                   {/* Evidence tiers: measured vs hypotheses vs missing vs
                       investigational — separated so certainty is never blurred. */}
-                  <EvidenceStratification report={report} />
+                  <EvidenceStratification report={report} vendorExtraction={vendorExtraction} />
                   <ClinicianPortalLive
                     report={report}
                     ansStudy={ansStudy}

@@ -4,17 +4,20 @@ import { ansStudyToLegacy } from "./_ans/legacyAdapter.js";
 import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
 import { reconcileStudyWithReport } from "./_ans/reconcileStudy.js";
 import { reconcilePhenotypesWithVendor } from "./_ans/reconcilePhenotypesWithVendor.js";
+import { reconcileVendorIdentity } from "./_ans/reconcileVendorIdentity.js";
 import {
   EWING_THRESHOLDS,
   classifyEwing,
   ewingNormalRangeLabel,
   COLOMBO_NORMS,
   classifyLowSbDriver,
+  ageContinuousNorm,
 } from "../shared/colomboNorms.js";
 import {
   computedProvenance,
   unavailableProvenance,
   vendorReportedProvenance,
+  derivedFromVendorProvenance,
   mayInterpretClinically,
   type MetricProvenance,
 } from "../shared/metricProvenance.js";
@@ -33,6 +36,19 @@ export interface VendorReportedMetrics {
   SB?: number;
   SBP?: number;
   DBP?: number;
+}
+
+/**
+ * Result of reconciling a paired vendor-PDF's identity against the parsed .ans.
+ * "matched" is the positive status the clinician UI shows as a "Vendor report
+ * matched" badge; the others explain why vendor values were withheld.
+ */
+export interface VendorReconciliationStatus {
+  status: "matched" | "mismatch" | "malformed";
+  matchedName?: string;
+  matchedDate?: string;
+  checks?: { name: boolean | null; testDate: boolean | null; dob: boolean | null };
+  reason?: string;
 }
 
 export const config = {
@@ -95,11 +111,11 @@ interface PhaseMetrics {
   HRV_SDNN: number;
   HRV_RMSSD: number;
   /**
-   * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF). These
-   * are ALWAYS computed generically from the raw arrays — never substituted
-   * from a memorized vendor value. `estimated` means the value approximates the
-   * vendor's undisclosed proprietary algorithm and was not reproduced against a
-   * reference; `unavailable` means the phase had insufficient beats to compute.
+   * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF). The raw
+   * .ans is never used to synthesize LFa/RFa/SB: those are `unavailable` unless
+   * a paired vendor PDF supplied them (baseline A only), in which case they are
+   * `vendor_reported` (or `derived_from_vendor` for a computed SB = LFa/RFa).
+   * FRF is `computed` from the RR/peak envelope (a genuine time-domain measure).
    */
   provenance?: {
     LFa: MetricProvenance;
@@ -143,10 +159,14 @@ interface WellnessDriver {
 
 interface SubScore {
   score: number;        // 0–100, the sub-score itself
-  weight: number;       // fractional weight in the composite
-  contribution: number; // score × weight (points contributed to rawTotal out of 100)
+  weight: number;       // effective (renormalized-over-available) weight in the composite
+  contribution: number; // score × effective weight (points contributed to rawTotal out of 100)
   drivers: WellnessDriver[]; // ordered top-down by absolute |points|
   notes: string[];      // legacy plain-text notes for back-compat
+  // False when every component of this sub-score depends on unavailable
+  // proprietary spectral data (e.g. sympathovagal balance on a raw ECG-only
+  // file). The UI renders "Not assessed" instead of a number.
+  available?: boolean;
 }
 
 interface WellnessBreakdown {
@@ -209,14 +229,16 @@ interface MultiParameterGraphical {
   lfaTrend: TimeSeries;
   rfaTrend: TimeSeries;
   scatter: {
-    baselineLFa: number;
-    baselineRFa: number;
-    dbRFa: number;
-    valsalvaLFa: number;
-    standLFa: number;
-    standRFa: number;
-    rfaChangeValsalvaPct: number;
-    rfaChangeStandPct: number;
+    // null when the proprietary spectral aggregate is unavailable (raw
+    // ECG-only .ans). The UI must render "Not assessed", never plot a 0.
+    baselineLFa: number | null;
+    baselineRFa: number | null;
+    dbRFa: number | null;
+    valsalvaLFa: number | null;
+    standLFa: number | null;
+    standRFa: number | null;
+    rfaChangeValsalvaPct: number | null;
+    rfaChangeStandPct: number | null;
   };
   coupling: CardioRespiratoryWindow[];
   wavelet: { type: string; cycles: number; spectralUpdateSec: number };
@@ -265,11 +287,31 @@ interface ANSReport {
   // null when spectral is unavailable — FRF is a proprietary [P] measure.
   respiratoryFrequency: number | null;
   rPeakCount: number;
+  /**
+   * ENVELOPE METADATA — wall-clock time the report object was generated. This is
+   * NON-DETERMINISTic (changes every run) and is NOT part of the clinical
+   * content. It (and AnsStudy.parsedAt) MUST be excluded from any deterministic
+   * clinical snapshot / golden-master comparison; use `clinicalSnapshot()`.
+   */
   generatedAt: string;
   patientSynopsis?: string;
   clinicianSynopsis?: string;
   multiParameter?: MultiParameterGraphical;
   indications?: Indication[];
+  /**
+   * Present only when a paired vendor-PDF metrics payload was supplied but its
+   * identity (patient name / study date / DOB) did NOT reconcile with the
+   * uploaded .ans, so the vendor values were dropped. Surfaced so the UI can
+   * warn the clinician that the PDF and the study appear to be different
+   * patients/visits — never silently ignored.
+   */
+  vendorReconciliationWarnings?: string[];
+  /**
+   * Positive/negative reconciliation status for the paired vendor PDF. Drives
+   * the "Vendor report matched" badge (status="matched") or a mismatch warning.
+   * Absent when no vendor metrics were supplied.
+   */
+  vendorReconciliation?: VendorReconciliationStatus;
 }
 
 // ---- Multipart Parser -------------------------------------------------------
@@ -338,224 +380,27 @@ function parseMultipart(req: VercelRequest): Promise<{ buffer: Buffer; fileName?
 
 // ---- ANS Binary File Parser -------------------------------------------------
 
-function readUint32BE(buffer: Buffer, offset: number): number {
-  return buffer.readUInt32BE(offset);
-}
-
-function readLPString(buffer: Buffer, offset: number): { value: string; nextOffset: number } {
-  const length = readUint32BE(buffer, offset);
-  offset += 4;
-  const value = buffer.subarray(offset, offset + length).toString("ascii");
-  offset += length;
-  return { value, nextOffset: offset };
-}
-
 /**
- * Extract the test date from a .ans file.
+ * Parse a .ans file into the legacy ParsedANSData shape.
  *
- * Strategy chain:
- *   1. LabVIEW timestamp at offset 304 — int64 BE seconds since 1904-01-01.
- *      Verified for Pare-Alex (2024-07-11) and other PhysioPS exports.
- *   2. Filename regex (e.g. "Pare-Alex-Thu-Jul-11-2024.ans").
- *   3. Jill Shah special case (file has no embedded date).
- *   4. Today's date as a last-resort fallback.
+ * SINGLE CANONICAL PATH: this now delegates to the deterministic,
+ * provenance-gated engine in api/_ans (parseStudy + ansStudyToLegacy). The
+ * previous hand-rolled heuristic parser — which carried a per-patient
+ * `isJillShah` hardcode that fabricated Ewing ratios / BP / demographics, plus
+ * `weight=150` / `heightInMeters=1.73` demographic defaults — has been removed.
+ *
+ * Everything the old parser produced from directly-verifiable source bytes
+ * (identity, DOB, sex, physician, E/I / Valsalva / 30:15 ratios, ectopy note,
+ * study date via LabVIEW timestamp or filename, full int16 ECG waveform) is
+ * produced by the canonical engine with full per-field provenance and the
+ * "missing stays missing" invariant. Missing values (weight, BMI, cuff BP)
+ * stay absent rather than being defaulted.
+ *
+ * Kept as a thin exported wrapper because several tests import it directly.
  */
-function extractTestDate(
-  buffer: Buffer,
-  _isJillShah: boolean,
-  _lastName: string,
-  _firstName: string,
-  fileName?: string,
-): string {
-  // 1) LabVIEW int64 BE @ offset 304, seconds since 1904-01-01 UTC
-  try {
-    if (buffer.length >= 304 + 8) {
-      const hi = buffer.readUInt32BE(304);
-      const lo = buffer.readUInt32BE(308);
-      const total = hi * 0x1_0000_0000 + lo;
-      // Sanity: 1990..2050 in LabVIEW seconds
-      const min = 2713996800;  // 1990-01-01
-      const max = 4607020800;  // 2050-01-01
-      if (total >= min && total <= max) {
-        // LabVIEW epoch is 1904-01-01 UTC. JS Date epoch is 1970-01-01 UTC.
-        const labviewEpochOffsetSec = 2082844800; // (1970-01-01 - 1904-01-01) in seconds
-        const unixSec = total - labviewEpochOffsetSec;
-        const d = new Date(unixSec * 1000);
-        if (!isNaN(d.getTime())) {
-          return `${d.getUTCMonth() + 1}/${d.getUTCDate()}/${d.getUTCFullYear()}`;
-        }
-      }
-    }
-  } catch { /* fall through */ }
-
-  // 2) Filename regex: "...-Mon-Jul-11-2024.ans"
-  if (fileName) {
-    const m = fileName.match(/-([A-Z][a-z]{2})-(\d{1,2})-(\d{4})\.?/i);
-    if (m) {
-      const months: Record<string, number> = {
-        jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
-        jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
-      };
-      const mo = months[m[1].toLowerCase()];
-      if (mo) return `${mo}/${parseInt(m[2], 10)}/${m[3]}`;
-    }
-  }
-
-  // 3) Last resort. No patient-specific hard-coding: the .ans timestamp and the
-  // filename date (both handled above) are the authoritative sources; anything
-  // else is unknown rather than guessed per-patient.
-  return new Date().toLocaleDateString();
-}
-
 export function parseANSFile(buffer: Buffer, fileName?: string): ParsedANSData {
-  let pos = 0;
-
-  const lastNameResult = readLPString(buffer, pos);
-  pos = lastNameResult.nextOffset;
-  const firstNameResult = readLPString(buffer, pos);
-  pos = firstNameResult.nextOffset;
-  pos += 8; // dob raw bytes skipped
-  const genderResult = readLPString(buffer, pos);
-  pos = genderResult.nextOffset;
-  const physicianResult = readLPString(buffer, pos);
-  pos = physicianResult.nextOffset;
-
-  // ASCII metadata section — look for ratios, notes, height, BP, medications
-  const fullContent = buffer.toString("ascii", 0, Math.min(buffer.length, 4096));
-  const eiMatch = fullContent.match(/E\/I Ratio\s*=\s*([\d.]+)/);
-  const valsalvaMatch = fullContent.match(/Valsalva Ratio\s*=\s*([\d.]+)/);
-  const thirtyFifteenMatch = fullContent.match(/30:15 Ratio\s*=\s*([\d.]+)/);
-  const prematureMatch = fullContent.match(/(\d+)\s*possible (?:premature beat|ectop)/i);
-  const heightMatch = fullContent.match(/(\d+)\s*ft\s*(\d+)\s*in/);
-  const weightMatch = fullContent.match(/(\d{2,3})\s*(?:lb|lbs|pounds)/i);
-  const bpMatch = fullContent.match(/(?:BP|Blood Pressure)\D*(\d{2,3})[\/\s]+(\d{2,3})/i);
-  const medsMatch = fullContent.match(/Medications?\s*[:\-]?\s*([^\x00\r\n]{1,200})/i);
-
-  let age = 0;
-  const physicianEnd = physicianResult.nextOffset;
-  for (let i = physicianEnd; i < physicianEnd + 20; i++) {
-    const b = buffer[i];
-    if (b > 15 && b < 120 && buffer[i - 1] === 0 && buffer[i + 1] === 0) {
-      age = b;
-      break;
-    }
-  }
-
-  const notesMatch = fullContent.match(/([\d:]+\s*[AP]M\s+\w+[\s\S]*?talking)/);
-  const testNotes = notesMatch ? notesMatch[0].replace(/\x00/g, "").trim() : "";
-  const procMatch = fullContent.match(/Procedure/);
-  const procedureType = procMatch ? "Procedure" : "Unknown";
-
-  let dataStart = -1;
-  let samplingInterval = 0.004;
-  let dataPointCount = 0;
-  for (let i = physicianEnd + 50; i < Math.min(buffer.length, 600); i += 1) {
-    if (i + 12 <= buffer.length) {
-      try {
-        const dblBuf = Buffer.alloc(8);
-        buffer.copy(dblBuf, 0, i, i + 8);
-        const val = dblBuf.readDoubleBE(0);
-        if (val > 0.001 && val < 0.02) {
-          samplingInterval = val;
-          const count = buffer.readUInt32BE(i + 8);
-          if (count > 10000 && count < 1000000) {
-            dataPointCount = count;
-            dataStart = i + 12;
-            break;
-          }
-        }
-      } catch (e) { continue; }
-    }
-  }
-
-  const ecgData: number[] = [];
-  if (dataStart > 0 && dataPointCount > 0) {
-    const maxSamples = Math.min(dataPointCount, (buffer.length - dataStart) / 2);
-    for (let i = 0; i < maxSamples; i++) {
-      const offset = dataStart + i * 2;
-      // ECG samples are signed big-endian int16. Reading them as unsigned
-      // causes the deep Q/S deflections (negative values) to wrap around to
-      // ~33000+, which then looks like huge one-sample spikes that break the
-      // Pan-Tompkins peak detector. Use readInt16BE.
-      if (offset + 2 <= buffer.length) ecgData.push(buffer.readInt16BE(offset));
-    }
-  }
-
-  // Height + weight defaults
-  let heightStr = heightMatch ? `${heightMatch[1]} ft ${heightMatch[2]} in` : "unknown";
-  let weight = weightMatch ? parseInt(weightMatch[1], 10) : 0;
-  let heightInMeters = 0;
-  if (heightMatch) {
-    const feet = parseInt(heightMatch[1]);
-    const inches = parseInt(heightMatch[2]);
-    heightInMeters = (feet * 12 + inches) * 0.0254;
-  }
-
-  // --- Demo signature: Jill Shah (matches the PDF exactly) ---
-  // The .ans binary does not carry BP/weight for this sample. When the patient
-  // last/first name matches "Shah"/"Jill", inject the PDF-known clinical metadata
-  // so the algorithm can reproduce the narrative (including ALA contraindication).
-  const lastName = lastNameResult.value.replace(/\x00/g, "").trim();
-  const firstName = firstNameResult.value.replace(/\x00/g, "").trim();
-  const isJillShah = /^shah$/i.test(lastName) && /^jill$/i.test(firstName);
-
-  let baselineSystolicBP: number | undefined;
-  let baselineDiastolicBP: number | undefined;
-  if (bpMatch) {
-    baselineSystolicBP = parseInt(bpMatch[1], 10);
-    baselineDiastolicBP = parseInt(bpMatch[2], 10);
-  }
-
-  if (isJillShah) {
-    age = age || 56;
-    heightStr = "5 ft 6 in";
-    heightInMeters = (5 * 12 + 6) * 0.0254;
-    weight = 124;
-    baselineSystolicBP = baselineSystolicBP ?? 92;
-    baselineDiastolicBP = baselineDiastolicBP ?? 55;
-  }
-
-  // Fallback weight so BMI remains computable
-  if (!weight || weight <= 0) weight = 150;
-  if (!heightInMeters) heightInMeters = 1.73;
-
-  const bmi = weight * 0.453592 / (heightInMeters * heightInMeters);
-
-  return {
-    lastName,
-    firstName,
-    gender: genderResult.value.replace(/\x00/g, "").trim() || (isJillShah ? "Female" : "Unknown"),
-    physician: (() => {
-      const raw = physicianResult.value.replace(/\x00/g, "").trim();
-      const cleaned = raw.replace(/^(?:dr\.?\s+|doctor\s+)+/i, "").trim();
-      return cleaned || (isJillShah ? "Colombo" : "Unknown");
-    })(),
-    height: heightStr,
-    age: age || 48,
-    weight,
-    bmi: Math.round(bmi * 100) / 100,
-    dobString: (() => {
-      const currentYear = new Date().getFullYear();
-      const birthYear = currentYear - (age || 48);
-      return `${birthYear}`;
-    })(),
-    testDate: extractTestDate(buffer, isJillShah, lastName, firstName, fileName),
-    eiRatio: eiMatch ? parseFloat(eiMatch[1]) : (isJillShah ? 1.21 : 0),
-    valsalvaRatio: valsalvaMatch ? parseFloat(valsalvaMatch[1]) : (isJillShah ? 1.43 : 0),
-    thirtyFifteenRatio: thirtyFifteenMatch ? parseFloat(thirtyFifteenMatch[1]) : (isJillShah ? 1.40 : 0),
-    ectopicBeats: prematureMatch ? parseInt(prematureMatch[1]) : (isJillShah ? 1 : 0),
-    testNotes,
-    procedureType,
-    samplingInterval,
-    dataPointCount: ecgData.length,
-    // Keep the full ECG on the server so spectral / wavelet analysis sees the
-    // entire recording. The handler trims the response payload before sending
-    // it back to the client so the JSON wire transport stays small.
-    ecgData,
-    anesMedications: medsMatch ? medsMatch[1] : undefined,
-    baselineSystolicBP,
-    baselineDiastolicBP,
-  };
+  const study = parseStudy({ buffer, fileName: fileName ?? "upload.ans" });
+  return ansStudyToLegacy(study, buffer);
 }
 
 // ============================================================================
@@ -691,112 +536,16 @@ function estimateRespiratoryFrequency(
 // STAGE 2 — Morlet-style Continuous Wavelet Transform on RR intervals
 // ============================================================================
 
-/**
- * Interpolate RR intervals onto a uniform 4 Hz time grid for spectral analysis.
- */
-function interpolateRR(rrMs: number[], targetFs: number): number[] {
-  if (rrMs.length < 4) return [];
-  // Cumulative time of each R-peak
-  const times = [0];
-  for (let i = 0; i < rrMs.length; i++) times.push(times[i] + rrMs[i] / 1000);
-  const duration = times[times.length - 1];
-  const n = Math.floor(duration * targetFs);
-  const out = new Array(n).fill(0);
-  for (let i = 0; i < n; i++) {
-    const t = i / targetFs;
-    // Find bracketing times
-    let k = 0;
-    while (k < times.length - 1 && times[k + 1] < t) k++;
-    if (k >= times.length - 1) { out[i] = rrMs[rrMs.length - 1]; continue; }
-    const frac = (t - times[k]) / Math.max(1e-6, times[k + 1] - times[k]);
-    const rrLo = k < rrMs.length ? rrMs[k] : rrMs[rrMs.length - 1];
-    const rrHi = k + 1 < rrMs.length ? rrMs[k + 1] : rrLo;
-    out[i] = rrLo + frac * (rrHi - rrLo);
-  }
-  // Detrend
-  const mean = out.reduce((a, b) => a + b, 0) / out.length;
-  for (let i = 0; i < out.length; i++) out[i] -= mean;
-  return out;
-}
-
-/**
- * Morlet CWT power in a specified frequency band.
- * Q = number of cycles (Colombo uses Q=5). fs = signal sample rate.
- * Returns integrated power (bpm²) in the band.
- */
-function morletBandPower(
-  signal: number[],
-  fs: number,
-  fLo: number,
-  fHi: number,
-  Q: number = 5
-): number {
-  if (signal.length < 16 || fLo >= fHi) return 0;
-
-  // Convert HRV signal (ms variations) to bpm² units for Colombo convention:
-  // bpm variation ≈ (mean_hr / 60000) * rr_variation_ms
-  // We approximate by treating detrended signal magnitude; final scaling is
-  // calibrated against Jill Shah baseline to reproduce reported RFa/LFa values.
-  const N = signal.length;
-  const freqs: number[] = [];
-  const step = Math.max(0.005, (fHi - fLo) / 16);
-  for (let f = fLo; f <= fHi; f += step) freqs.push(f);
-
-  let totalPower = 0;
-  for (const f of freqs) {
-    const sigma = Q / (2 * Math.PI * f); // seconds (time resolution)
-    // Wavelet evaluated at center of signal; slide in coarse steps
-    const stepN = Math.max(1, Math.floor(fs * 0.25));
-    let fPower = 0;
-    let count = 0;
-    for (let center = Math.floor(N / 4); center < Math.floor((3 * N) / 4); center += stepN) {
-      let re = 0, im = 0;
-      const window = Math.floor(sigma * fs * 3);
-      const i0 = Math.max(0, center - window);
-      const i1 = Math.min(N, center + window);
-      for (let i = i0; i < i1; i++) {
-        const t = (i - center) / fs;
-        const envelope = Math.exp(-t * t / (2 * sigma * sigma));
-        const phase = 2 * Math.PI * f * t;
-        re += signal[i] * envelope * Math.cos(phase);
-        im += signal[i] * envelope * Math.sin(phase);
-      }
-      // Normalize
-      const norm = 1 / (Math.sqrt(Math.PI) * sigma * fs);
-      fPower += (re * re + im * im) * norm * norm;
-      count++;
-    }
-    if (count > 0) totalPower += (fPower / count) * step;
-  }
-
-  // Colombo bpm² calibration: empirical scale factor derived so that a
-  // physiologically healthy resting HRV series yields RFa ≈ 2-8 bpm² range.
-  const SCALE = 0.0018;
-  return Math.round(totalPower * SCALE * 100) / 100;
-}
-
-// ============================================================================
-// STAGE 3 — Dynamic Colombo Bands (THE core gap closure)
-// ============================================================================
-
-/**
- * Colombo's dynamic RFa/LFa band definition:
- *   - RFa (parasympathetic): centered on respFreq ± 0.15 Hz (clamped to ≥ 0.04)
- *   - LFa (sympathetic):     0.04 Hz → MIN(respFreq − 0.15, 0.15 Hz)
- *
- * This is the critical gap the user highlighted — without dynamic bands,
- * we're approximating. With it, we match the physio PS methodology.
- */
-function colomboBands(respFreq: number): {
-  lfLo: number; lfHi: number;
-  hfLo: number; hfHi: number;
-} {
-  const hfLo = Math.max(0.04, respFreq - 0.15);
-  const hfHi = respFreq + 0.15;
-  const lfLo = 0.04;
-  const lfHi = Math.min(hfLo, 0.15); // cap at 0.15 to preserve sympathetic band
-  return { lfLo, lfHi, hfLo, hfHi };
-}
+// NOTE: The Morlet-CWT band-power routine (`morletBandPower`) with its
+// empirical `SCALE=0.0018` calibration, its `interpolateRR` helper, and the
+// `colomboBands` band-definition helper have been REMOVED. They estimated the
+// proprietary LFa/RFa/SB spectral aggregates from the raw waveform and scaled
+// them by a constant curve-fit to one patient, then surfaced the result as a
+// clinical value. Spectral aggregates now come exclusively from the vendor's
+// signed PDF (OCR / x-vendor-metrics) with `vendor_reported` provenance, or are
+// reported as "Not assessed". FRF (respiratory frequency) is still derived
+// directly from the RR/peak envelope — it is a genuine time-domain measure and
+// is unaffected.
 
 // ============================================================================
 // STAGE 4 — Phase Segmentation (6 phases: A B C D E F)
@@ -857,7 +606,7 @@ function analyzePhase(
     return {
       phase: phaseName, label,
       duration: formatDuration(durationSec), durationSec,
-      meanHR: 0, rangeHR: 0, FRF: 0, LFa: 0, RFa: 0, SB: 0,
+      meanHR: 0, rangeHR: 0, FRF: 0, LFa: null, RFa: null, SB: null,
       HRV_SDNN: 0, HRV_RMSSD: 0,
       provenance: unavail,
     };
@@ -875,38 +624,36 @@ function analyzePhase(
   for (let i = 1; i < rrIntervalsMs.length; i++) ssd += (rrIntervalsMs[i] - rrIntervalsMs[i - 1]) ** 2;
   const rmssd = Math.sqrt(ssd / (rrIntervalsMs.length - 1));
 
-  // Respiratory frequency for THIS phase
+  // Respiratory frequency for THIS phase (derived from the RR/peak envelope —
+  // this is a genuine time-domain measure, not a proprietary spectral aggregate).
   const frf = estimateRespiratoryFrequency(indices, amplitudes, samplingRate);
 
-  // Interpolate RR → 4 Hz uniform signal
-  const rrSignal = interpolateRR(rrIntervalsMs, 4);
-
-  // Dynamic Colombo bands based on this phase's FRF
-  const { lfLo, lfHi, hfLo, hfHi } = colomboBands(frf);
-  const LFa = morletBandPower(rrSignal, 4, lfLo, lfHi);
-  const RFa = morletBandPower(rrSignal, 4, hfLo, hfHi);
-  const SB = RFa > 0.01 ? LFa / RFa : 0;
-
-  // These four are proprietary [P] aggregates: we compute them generically from
-  // the raw arrays but they only APPROXIMATE the vendor's undisclosed wavelet
-  // algorithm, so they are tagged `estimated` (never silently "validated" and
-  // never substituted with a memorized vendor scalar).
-  const spectralNote =
-    "Morlet-CWT band power over interpolated RR series (Colombo-style dynamic bands); approximates the undisclosed vendor algorithm and is not vendor-validated.";
+  // Proprietary spectral aggregates (LFa / RFa / SB) are NOT reproducible from
+  // the raw .ans waveform: the vendor's wavelet algorithm and its bpm²
+  // calibration are undisclosed. The previous code estimated them via a Morlet
+  // band-power routine scaled by an empirical constant (SCALE=0.0018) that was
+  // curve-fit to one patient — presenting a fabricated estimate as a
+  // measurement. That routine has been removed. These fields are emitted as
+  // `null` with `unavailable` provenance so nothing downstream can read an
+  // invented number. The only legitimate source of spectral values is the
+  // paired vendor PDF (OCR / x-vendor-metrics), applied to baseline A in
+  // generateColomboReport with `vendor_reported` provenance.
+  const spectralUnavailableNote =
+    "Proprietary spectral aggregate (LFa/RFa/SB) is not reproducible from the raw .ans waveform; the vendor value is available only in the signed PDF.";
   return {
     phase: phaseName, label,
     duration: formatDuration(durationSec), durationSec,
     meanHR, rangeHR,
     FRF: Math.round(frf * 100) / 100,
-    LFa: Math.round(LFa * 100) / 100,
-    RFa: Math.round(RFa * 100) / 100,
-    SB: Math.round(SB * 100) / 100,
+    LFa: null,
+    RFa: null,
+    SB: null,
     HRV_SDNN: Math.round(sdnn * 10) / 10,
     HRV_RMSSD: Math.round(rmssd * 10) / 10,
     provenance: {
-      LFa: computedProvenance("LFa", { note: spectralNote }),
-      RFa: computedProvenance("RFa", { note: spectralNote }),
-      SB: computedProvenance("SB", { note: "Ratio of estimated LFa/RFa; proprietary framing, not vendor-validated." }),
+      LFa: unavailableProvenance("LFa", spectralUnavailableNote),
+      RFa: unavailableProvenance("RFa", spectralUnavailableNote),
+      SB: unavailableProvenance("SB", "Sympathovagal balance depends on unavailable proprietary LFa/RFa."),
       FRF: computedProvenance("FRF", { note: "Fundamental respiratory frequency estimated from RR/peak envelope." }),
     },
   };
@@ -926,36 +673,10 @@ function formatDuration(sec: number): string {
  * Age-continuous P10/P90 normal ranges from Agelink & Gelber aggregated curves.
  * Returns { lo, hi } for a given parameter at a given age.
  */
-function norm(param: string, age: number): { lo: number; hi: number } {
-  // Reference curves: linear interpolation between anchor ages.
-  // Values derived from Agelink 2001 & Gelber 1997 tables.
-  const tables: Record<string, { age: number; lo: number; hi: number }[]> = {
-    HR:       [{ age: 20, lo: 60, hi: 90 }, { age: 40, lo: 58, hi: 92 }, { age: 65, lo: 55, hi: 95 }],
-    RFa:      [{ age: 20, lo: 0.8, hi: 10 }, { age: 40, lo: 0.5, hi: 10 }, { age: 65, lo: 0.3, hi: 10 }],
-    LFa:      [{ age: 20, lo: 0.5, hi: 10 }, { age: 40, lo: 0.5, hi: 10 }, { age: 65, lo: 0.3, hi: 10 }],
-    SB:       [{ age: 20, lo: 0.4, hi: 3.0 }, { age: 40, lo: 0.4, hi: 3.0 }, { age: 65, lo: 0.4, hi: 3.0 }],
-    // Ewing ratios — Agelink Table 2
-    EI:       [{ age: 20, lo: 1.15, hi: 1.60 }, { age: 40, lo: 1.10, hi: 1.40 }, { age: 60, lo: 1.05, hi: 1.30 }],
-    Valsalva: [{ age: 20, lo: 1.30, hi: 1.80 }, { age: 40, lo: 1.20, hi: 1.60 }, { age: 60, lo: 1.15, hi: 1.50 }],
-    ThirtyFifteen: [{ age: 20, lo: 1.15, hi: 1.50 }, { age: 40, lo: 1.10, hi: 1.40 }, { age: 60, lo: 1.05, hi: 1.30 }],
-    // DB range HR
-    DB_rangeHR: [{ age: 20, lo: 19, hi: 50 }, { age: 40, lo: 15, hi: 50 }, { age: 60, lo: 10, hi: 40 }],
-  };
-  const tbl = tables[param];
-  if (!tbl) return { lo: 0, hi: 1 };
-  if (age <= tbl[0].age) return { lo: tbl[0].lo, hi: tbl[0].hi };
-  if (age >= tbl[tbl.length - 1].age) return { lo: tbl[tbl.length - 1].lo, hi: tbl[tbl.length - 1].hi };
-  for (let i = 0; i < tbl.length - 1; i++) {
-    if (age >= tbl[i].age && age <= tbl[i + 1].age) {
-      const frac = (age - tbl[i].age) / (tbl[i + 1].age - tbl[i].age);
-      return {
-        lo: tbl[i].lo + frac * (tbl[i + 1].lo - tbl[i].lo),
-        hi: tbl[i].hi + frac * (tbl[i + 1].hi - tbl[i].hi),
-      };
-    }
-  }
-  return { lo: tbl[0].lo, hi: tbl[0].hi };
-}
+// Age-continuous P10/P90 normal ranges now live in the single source of truth,
+// shared/colomboNorms.ts (`ageContinuousNorm`). This thin alias keeps the many
+// call sites below readable.
+const norm = ageContinuousNorm;
 
 function classify(value: number, lo: number, hi: number, lowBorderMargin = 0.15, highBorderMargin = 0.15): Classification {
   const borderlineLow = lo * (1 + lowBorderMargin);
@@ -968,6 +689,27 @@ function classify(value: number, lo: number, hi: number, lowBorderMargin = 0.15,
   else if (value <= hi) { label = "Borderline High"; severity = "Warning"; }
   else { label = "High"; severity = "Abnormal"; }
   return { label, severity, value, lo, hi };
+}
+
+/**
+ * Per-phase-safe classification. Returns null when the value is null/undefined/
+ * non-finite/≤0 (i.e. the proprietary spectral aggregate for THIS phase was not
+ * captured), so a missing value can never be coerced to 0 and classified as
+ * "Low"/"Abnormal". This is the guard for the baseline-only vendor case, where
+ * the GLOBAL spectralAvailable gate is true (baseline A was vendor-reported) but
+ * phases B–F still carry null spectral — classifying those nulls fabricated
+ * Low/Abnormal Valsalva/stand responses and a spurious "advanced autonomic
+ * dysfunction" impression.
+ */
+function classifyOrNull(
+  value: number | null | undefined,
+  lo: number,
+  hi: number,
+  lowBorderMargin = 0.15,
+  highBorderMargin = 0.15,
+): Classification | null {
+  if (value == null || !Number.isFinite(value) || value <= 0) return null;
+  return classify(value, lo, hi, lowBorderMargin, highBorderMargin);
 }
 
 // ============================================================================
@@ -1081,13 +823,16 @@ function computeWellness(
   const B = phases[1]; // DB
   const F = phases[5]; // Stand
 
-  // Local safe reads: this internal index runs on the RAW numeric snapshot, but
-  // PhaseMetrics types spectral as number|null (report-facing). Coalesce to 0
-  // so the composite math is total; real clinical gating happens elsewhere.
-  const nz = (x: number | null): number => (x == null ? 0 : x);
-  const aRFa = nz(A.RFa), aLFa = nz(A.LFa), aSB = nz(A.SB);
-  const bRFa = nz(B.RFa);
-  const fRFa = nz(F.RFa), fLFa = nz(F.LFa), fSB = nz(F.SB);
+  // Spectral aggregates (LFa/RFa/SB) are only present when the paired vendor PDF
+  // supplied them (vendor_reported). For raw ECG-only .ans files they are null,
+  // and any sub-score component that depends on them is UNAVAILABLE — it is
+  // dropped from the composite and the remaining weights are renormalized, so
+  // the score reflects only measured data instead of collapsing a fabricated 0
+  // into ~85% of the weight. HR, Ewing ratios and HRV (SDNN/RMSSD) are always
+  // measured and always contribute.
+  const aRFa = A.RFa, aLFa = A.LFa, aSB = A.SB;
+  const bRFa = B.RFa;
+  const fRFa = F.RFa, fLFa = F.LFa, fSB = F.SB;
 
   const RFa_n = norm("RFa", age);
   const LFa_n = norm("LFa", age);
@@ -1099,61 +844,91 @@ function computeWellness(
 
   const W = { baseline: 0.22, sb: 0.20, reflex: 0.23, ortho: 0.20, hrv: 0.15 };
 
-  // ---- 1. Baseline Autonomic Tone ----
-  const baselineRFa = signedBandScore(aRFa, RFa_n.lo, RFa_n.hi, { lowPenalty: 1.2 });
-  const baselineLFa = signedBandScore(aLFa, LFa_n.lo, LFa_n.hi, { lowPenalty: 1.2 });
-  // HR: low side (<50) and high side (>95) both penalized, low side harsher (bradycardia)
-  const baselineHR  = signedBandScore(A.meanHR, HR_n.lo, HR_n.hi, { lowPenalty: 1.4, highPenalty: 1.1 });
-  const s1 = Math.round((baselineRFa * 0.40 + baselineLFa * 0.35 + baselineHR * 0.25) * 10) / 10;
-  const s1Drivers: WellnessDriver[] = [
-    mkDriver(`Resting RFa (parasympathetic)`, `${aRFa}`, baselineRFa, W.baseline * 0.40),
-    mkDriver(`Resting LFa (sympathetic)`,     `${aLFa}`, baselineLFa, W.baseline * 0.35),
-    mkDriver(`Resting heart rate`,            `${A.meanHR} bpm`, baselineHR, W.baseline * 0.25),
-  ];
+  // A weighted component that may be unavailable (null input). `combineComponents`
+  // computes the weighted average over AVAILABLE components only, renormalizing
+  // their nominal weights, and returns availability + the drivers to display.
+  interface WComp {
+    label: string;
+    value: string;
+    score: number;
+    nominalWeight: number; // within-subscore fraction (sums to 1 across the group)
+    available: boolean;
+  }
+  function combineComponents(subWeight: number, comps: WComp[]): {
+    score: number;
+    available: boolean;
+    drivers: WellnessDriver[];
+  } {
+    const avail = comps.filter((c) => c.available);
+    if (avail.length === 0) {
+      return { score: 0, available: false, drivers: [] };
+    }
+    const wSum = avail.reduce((s, c) => s + c.nominalWeight, 0) || 1;
+    const score = Math.round(avail.reduce((s, c) => s + c.score * (c.nominalWeight / wSum), 0) * 10) / 10;
+    const drivers = avail.map((c) =>
+      mkDriver(c.label, c.value, c.score, subWeight * (c.nominalWeight / wSum)),
+    );
+    return { score, available: true, drivers };
+  }
 
-  // ---- 2. Sympathovagal Balance ----
-  // SB low is parasympathetic dominance (bigger red flag); SB high is sympathetic excess.
-  const sbBaselineScore = signedBandScore(aSB, SB_n.lo, SB_n.hi, { lowPenalty: 1.5, highPenalty: 1.2 });
-  const sbStandScore    = signedBandScore(fSB, SB_n.lo, SB_n.hi * 1.3, { lowPenalty: 1.2, highPenalty: 1.0 });
-  const sbShift = fSB - aSB;
-  // Healthy: SB rises on stand (+0.5 to +2.0). Drop = sympathetic-failure flag.
-  let sbShiftScore: number;
-  if (sbShift < -0.5) sbShiftScore = Math.max(10, 40 + sbShift * 25);
-  else if (sbShift < 0) sbShiftScore = 60;
-  else if (sbShift <= 2.0) sbShiftScore = 100;
-  else if (sbShift <= 4.0) sbShiftScore = Math.max(40, 100 - (sbShift - 2.0) * 20);
-  else sbShiftScore = Math.max(20, 60 - (sbShift - 4.0) * 8);
-  sbShiftScore = Math.round(sbShiftScore * 10) / 10;
-  const s2 = Math.round((sbBaselineScore * 0.45 + sbStandScore * 0.30 + sbShiftScore * 0.25) * 10) / 10;
-  const s2Drivers: WellnessDriver[] = [
-    mkDriver(`Resting sympathovagal balance`,  `SB = ${aSB}`, sbBaselineScore, W.sb * 0.45),
-    mkDriver(`Standing sympathovagal balance`, `SB = ${fSB}`, sbStandScore,    W.sb * 0.30),
-    mkDriver(`SB shift from rest to stand`,    `${sbShift >= 0 ? "+" : ""}${Math.round(sbShift * 100) / 100}`, sbShiftScore, W.sb * 0.25),
-  ];
+  // ---- 1. Baseline Autonomic Tone (RFa/LFa spectral + resting HR) ----
+  const baselineHR = signedBandScore(A.meanHR, HR_n.lo, HR_n.hi, { lowPenalty: 1.4, highPenalty: 1.1 });
+  const c1 = combineComponents(W.baseline, [
+    { label: `Resting RFa (parasympathetic)`, value: aRFa == null ? "Not assessed" : `${aRFa}`,
+      score: aRFa == null ? 0 : signedBandScore(aRFa, RFa_n.lo, RFa_n.hi, { lowPenalty: 1.2 }), nominalWeight: 0.40, available: aRFa != null },
+    { label: `Resting LFa (sympathetic)`, value: aLFa == null ? "Not assessed" : `${aLFa}`,
+      score: aLFa == null ? 0 : signedBandScore(aLFa, LFa_n.lo, LFa_n.hi, { lowPenalty: 1.2 }), nominalWeight: 0.35, available: aLFa != null },
+    { label: `Resting heart rate`, value: `${A.meanHR} bpm`, score: baselineHR, nominalWeight: 0.25, available: true },
+  ]);
+  const s1 = c1.score;
+  const s1Drivers = c1.drivers;
 
-  // ---- 3. Reflex Integrity (Ewing battery) ----
+  // ---- 2. Sympathovagal Balance (entirely spectral) ----
+  const sbShift = aSB != null && fSB != null ? fSB - aSB : null;
+  let sbShiftScore = 0;
+  if (sbShift != null) {
+    if (sbShift < -0.5) sbShiftScore = Math.max(10, 40 + sbShift * 25);
+    else if (sbShift < 0) sbShiftScore = 60;
+    else if (sbShift <= 2.0) sbShiftScore = 100;
+    else if (sbShift <= 4.0) sbShiftScore = Math.max(40, 100 - (sbShift - 2.0) * 20);
+    else sbShiftScore = Math.max(20, 60 - (sbShift - 4.0) * 8);
+    sbShiftScore = Math.round(sbShiftScore * 10) / 10;
+  }
+  const c2 = combineComponents(W.sb, [
+    { label: `Resting sympathovagal balance`, value: aSB == null ? "Not assessed" : `SB = ${aSB}`,
+      score: aSB == null ? 0 : signedBandScore(aSB, SB_n.lo, SB_n.hi, { lowPenalty: 1.5, highPenalty: 1.2 }), nominalWeight: 0.45, available: aSB != null },
+    { label: `Standing sympathovagal balance`, value: fSB == null ? "Not assessed" : `SB = ${fSB}`,
+      score: fSB == null ? 0 : signedBandScore(fSB, SB_n.lo, SB_n.hi * 1.3, { lowPenalty: 1.2, highPenalty: 1.0 }), nominalWeight: 0.30, available: fSB != null },
+    { label: `SB shift from rest to stand`, value: sbShift == null ? "Not assessed" : `${sbShift >= 0 ? "+" : ""}${Math.round(sbShift * 100) / 100}`,
+      score: sbShiftScore, nominalWeight: 0.25, available: sbShift != null },
+  ]);
+  const s2 = c2.score;
+  const s2Drivers = c2.drivers;
+
+  // ---- 3. Reflex Integrity (Ewing battery — Ewing ratios always measured) ----
   const eiScore  = thresholdScoreV2(patient.eiRatio,          EI_n.lo * 0.85,  EI_n.lo);
   const valScore = thresholdScoreV2(patient.valsalvaRatio,    Val_n.lo * 0.85, Val_n.lo);
   const tfScore  = thresholdScoreV2(patient.thirtyFifteenRatio, Tf_n.lo * 0.85, Tf_n.lo);
-  const dbRFaGain = aRFa > 0 ? bRFa / aRFa : 1;
-  // DB should AUGMENT parasympathetic tone. Gain <1 = vagal-reflex failure.
-  let dbGainScore: number;
-  if (dbRFaGain >= 1.3) dbGainScore = 100;
-  else if (dbRFaGain >= 1.0) dbGainScore = 60 + (dbRFaGain - 1.0) * 133;
-  else if (dbRFaGain >= 0.7) dbGainScore = 20 + (dbRFaGain - 0.7) * 133;
-  else dbGainScore = Math.max(5, 20 * (dbRFaGain / 0.7));
-  dbGainScore = Math.round(dbGainScore * 10) / 10;
-  const s3 = Math.round((eiScore * 0.30 + valScore * 0.30 + tfScore * 0.25 + dbGainScore * 0.15) * 10) / 10;
-  const s3Drivers: WellnessDriver[] = [
-    mkDriver(`E/I ratio (deep-breathing vagal)`,    `${patient.eiRatio}`,          eiScore,     W.reflex * 0.30),
-    mkDriver(`Valsalva ratio`,                      `${patient.valsalvaRatio}`,    valScore,    W.reflex * 0.30),
-    mkDriver(`30:15 ratio (standing baroreflex)`,   `${patient.thirtyFifteenRatio}`, tfScore,   W.reflex * 0.25),
-    mkDriver(`DB RFa gain (vagal augmentation)`,    `${Math.round(dbRFaGain * 100) / 100}×`, dbGainScore, W.reflex * 0.15),
-  ];
+  const dbRFaGain = aRFa != null && bRFa != null && aRFa > 0 ? bRFa / aRFa : null;
+  let dbGainScore = 0;
+  if (dbRFaGain != null) {
+    if (dbRFaGain >= 1.3) dbGainScore = 100;
+    else if (dbRFaGain >= 1.0) dbGainScore = 60 + (dbRFaGain - 1.0) * 133;
+    else if (dbRFaGain >= 0.7) dbGainScore = 20 + (dbRFaGain - 0.7) * 133;
+    else dbGainScore = Math.max(5, 20 * (dbRFaGain / 0.7));
+    dbGainScore = Math.round(dbGainScore * 10) / 10;
+  }
+  const c3 = combineComponents(W.reflex, [
+    { label: `E/I ratio (deep-breathing vagal)`, value: `${patient.eiRatio}`, score: eiScore, nominalWeight: 0.30, available: true },
+    { label: `Valsalva ratio`, value: `${patient.valsalvaRatio}`, score: valScore, nominalWeight: 0.30, available: true },
+    { label: `30:15 ratio (standing baroreflex)`, value: `${patient.thirtyFifteenRatio}`, score: tfScore, nominalWeight: 0.25, available: true },
+    { label: `DB RFa gain (vagal augmentation)`, value: dbRFaGain == null ? "Not assessed" : `${Math.round(dbRFaGain * 100) / 100}×`,
+      score: dbGainScore, nominalWeight: 0.15, available: dbRFaGain != null },
+  ]);
+  const s3 = c3.score;
+  const s3Drivers = c3.drivers;
 
-  // ---- 4. Orthostatic Response ----
-  const standRFaScore = signedBandScore(fRFa, RFa_n.lo * 0.5, RFa_n.hi, { highPenalty: 1.2 });
-  const standLFaScore = signedBandScore(fLFa, LFa_n.lo, LFa_n.hi * 1.4, { lowPenalty: 1.2 });
+  // ---- 4. Orthostatic Response (HR delta always measured; LFa/RFa spectral) ----
   const hrDelta = F.meanHR - A.meanHR;
   let hrDeltaScore: number;
   if (hrDelta < 0) hrDeltaScore = 20;               // HR drop on stand = chronotropic failure
@@ -1163,22 +938,28 @@ function computeWellness(
   else if (hrDelta <= 30) hrDeltaScore = Math.max(55, 100 - (hrDelta - 20) * 4.5);
   else hrDeltaScore = Math.max(10, 55 - (hrDelta - 30) * 3.5);   // POTS territory
   hrDeltaScore = Math.round(hrDeltaScore * 10) / 10;
-  const standLFaGain = aLFa > 0 ? fLFa / aLFa : 1;
-  let standLFaGainScore: number;
-  if (standLFaGain >= 1.4) standLFaGainScore = 100;
-  else if (standLFaGain >= 1.1) standLFaGainScore = 60 + (standLFaGain - 1.1) * 133;
-  else if (standLFaGain >= 0.8) standLFaGainScore = 25 + (standLFaGain - 0.8) * 117;
-  else standLFaGainScore = Math.max(5, 25 * (standLFaGain / 0.8));
-  standLFaGainScore = Math.round(standLFaGainScore * 10) / 10;
-  const s4 = Math.round((hrDeltaScore * 0.35 + standLFaScore * 0.25 + standRFaScore * 0.15 + standLFaGainScore * 0.25) * 10) / 10;
-  const s4Drivers: WellnessDriver[] = [
-    mkDriver(`HR response to stand`,           `Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm`, hrDeltaScore, W.ortho * 0.35),
-    mkDriver(`Standing LFa (sympathetic)`,     `${fLFa}`, standLFaScore, W.ortho * 0.25),
-    mkDriver(`Standing LFa gain`,              `${Math.round(standLFaGain * 100) / 100}×`, standLFaGainScore, W.ortho * 0.25),
-    mkDriver(`Standing RFa (parasympathetic)`, `${fRFa}`, standRFaScore, W.ortho * 0.15),
-  ];
+  const standLFaGain = aLFa != null && fLFa != null && aLFa > 0 ? fLFa / aLFa : null;
+  let standLFaGainScore = 0;
+  if (standLFaGain != null) {
+    if (standLFaGain >= 1.4) standLFaGainScore = 100;
+    else if (standLFaGain >= 1.1) standLFaGainScore = 60 + (standLFaGain - 1.1) * 133;
+    else if (standLFaGain >= 0.8) standLFaGainScore = 25 + (standLFaGain - 0.8) * 117;
+    else standLFaGainScore = Math.max(5, 25 * (standLFaGain / 0.8));
+    standLFaGainScore = Math.round(standLFaGainScore * 10) / 10;
+  }
+  const c4 = combineComponents(W.ortho, [
+    { label: `HR response to stand`, value: `Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm`, score: hrDeltaScore, nominalWeight: 0.35, available: true },
+    { label: `Standing LFa (sympathetic)`, value: fLFa == null ? "Not assessed" : `${fLFa}`,
+      score: fLFa == null ? 0 : signedBandScore(fLFa, LFa_n.lo, LFa_n.hi * 1.4, { lowPenalty: 1.2 }), nominalWeight: 0.25, available: fLFa != null },
+    { label: `Standing LFa gain`, value: standLFaGain == null ? "Not assessed" : `${Math.round(standLFaGain * 100) / 100}×`,
+      score: standLFaGainScore, nominalWeight: 0.25, available: standLFaGain != null },
+    { label: `Standing RFa (parasympathetic)`, value: fRFa == null ? "Not assessed" : `${fRFa}`,
+      score: fRFa == null ? 0 : signedBandScore(fRFa, RFa_n.lo * 0.5, RFa_n.hi, { highPenalty: 1.2 }), nominalWeight: 0.15, available: fRFa != null },
+  ]);
+  const s4 = c4.score;
+  const s4Drivers = c4.drivers;
 
-  // ---- 5. HRV Reserve ----
+  // ---- 5. HRV Reserve (SDNN — always measured from the raw waveform) ----
   const expectedSDNN = age < 36 ? 55 : age < 56 ? 45 : 35;
   const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
   let sdnnScore = avgSDNN >= expectedSDNN
@@ -1194,8 +975,22 @@ function computeWellness(
     mkDriver(`HRV dynamic range`,     `${Math.round(sdnnSpread * 10) / 10} ms spread`, spreadScore, W.hrv * 0.30),
   ];
 
-  // ---- Composite raw total ----
-  const rawTotal = Math.round((s1 * W.baseline + s2 * W.sb + s3 * W.reflex + s4 * W.ortho + s5 * W.hrv) * 10) / 10;
+  // ---- Composite raw total (renormalized over AVAILABLE sub-scores) ----
+  // Each sub-score contributes only if it has at least one available component.
+  // Sub-scores 3 (Ewing) and 5 (HRV) are always available; 1 and 4 always have
+  // an HR-based component; only 2 (sympathovagal balance) drops out entirely
+  // when spectral is unavailable. Weights are renormalized so the final score
+  // is a true weighted average of what was actually measured.
+  const subScores: Array<{ score: number; weight: number; available: boolean }> = [
+    { score: s1, weight: W.baseline, available: c1.available },
+    { score: s2, weight: W.sb,       available: c2.available },
+    { score: s3, weight: W.reflex,   available: c3.available },
+    { score: s4, weight: W.ortho,    available: c4.available },
+    { score: s5, weight: W.hrv,      available: true },
+  ];
+  const availSubs = subScores.filter((s) => s.available);
+  const availWeightSum = availSubs.reduce((s, x) => s + x.weight, 0) || 1;
+  const rawTotal = Math.round(availSubs.reduce((s, x) => s + x.score * (x.weight / availWeightSum), 0) * 10) / 10;
   const ageMul = age < 36 ? 1.00 : age < 56 ? 1.03 : 1.06;
   const ageAdjusted = Math.round(rawTotal * ageMul * 10) / 10;
 
@@ -1238,12 +1033,28 @@ function computeWellness(
   // ---- Headline ----
   const headline = buildHeadline(final, patterns, topNegativeDrivers, topPositiveDrivers);
 
+  // Effective weight of a sub-score = its nominal weight renormalized over the
+  // available set (0 when the sub-score itself is unavailable).
+  const effW = (nominal: number, available: boolean) =>
+    available ? Math.round((nominal / availWeightSum) * 1000) / 1000 : 0;
+  const subScore = (score: number, nominal: number, available: boolean, drivers: WellnessDriver[]): SubScore => {
+    const w = effW(nominal, available);
+    return {
+      score,
+      weight: w,
+      contribution: Math.round(score * w * 10) / 10,
+      drivers: drivers.slice().sort((a, b) => Math.abs(b.points) - Math.abs(a.points)),
+      notes: available ? drivers.map((d) => `${d.label}: ${d.value}`) : ["Not assessed — requires vendor spectral data"],
+      available,
+    };
+  };
+
   return {
-    baselineAutonomic:    { score: s1, weight: W.baseline, contribution: Math.round(s1 * W.baseline * 10) / 10, drivers: s1Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s1Drivers.map(d => `${d.label}: ${d.value}`) },
-    sympathovagalBalance: { score: s2, weight: W.sb,       contribution: Math.round(s2 * W.sb       * 10) / 10, drivers: s2Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s2Drivers.map(d => `${d.label}: ${d.value}`) },
-    reflexIntegrity:      { score: s3, weight: W.reflex,   contribution: Math.round(s3 * W.reflex   * 10) / 10, drivers: s3Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s3Drivers.map(d => `${d.label}: ${d.value}`) },
-    orthostaticResponse:  { score: s4, weight: W.ortho,    contribution: Math.round(s4 * W.ortho    * 10) / 10, drivers: s4Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s4Drivers.map(d => `${d.label}: ${d.value}`) },
-    hrvReserve:           { score: s5, weight: W.hrv,      contribution: Math.round(s5 * W.hrv      * 10) / 10, drivers: s5Drivers.sort((a,b)=>Math.abs(b.points)-Math.abs(a.points)), notes: s5Drivers.map(d => `${d.label}: ${d.value}`) },
+    baselineAutonomic:    subScore(s1, W.baseline, c1.available, s1Drivers),
+    sympathovagalBalance: subScore(s2, W.sb,       c2.available, s2Drivers),
+    reflexIntegrity:      subScore(s3, W.reflex,   c3.available, s3Drivers),
+    orthostaticResponse:  subScore(s4, W.ortho,    c4.available, s4Drivers),
+    hrvReserve:           subScore(s5, W.hrv,      true,         s5Drivers),
     patternPenalty:       { total: Math.round(patternPenaltyTotal * 10) / 10, items: patternDrivers },
     ageMultiplier: ageMul,
     rawTotal, ageAdjusted, final,
@@ -1501,44 +1312,20 @@ function breathingTrendFromPeaks(
 
 /**
  * Rolling LFa/RFa wavelet power over sliding windows.
- * Uses a 30-second window advancing every 4 seconds (Colombo "4 sec spectral update").
- * Uses the PHASE FRF where available to choose dynamic Colombo bands.
+ * LFa/RFa rolling trends are DELIBERATELY NOT computed from the raw waveform.
+ * They previously used the Morlet band-power estimate scaled by the empirical
+ * SCALE=0.0018 constant, which is not the vendor's proprietary algorithm and
+ * was curve-fit to one patient — so plotting them presented fabricated numbers
+ * as a clinician trend. Until a real vendor spectral time series is available,
+ * these charts stay empty and the UI renders "Not assessed" for spectral
+ * trends. HR and breathing trends (genuine time-domain measures) are unaffected.
  */
 function lfaRfaTrendsFromEcg(
-  ecg: number[], samplingRate: number,
-  phases: PhaseBoundary[],
-  phaseMetrics: PhaseMetrics[]
+  _ecg: number[], _samplingRate: number,
+  _phases: PhaseBoundary[],
+  _phaseMetrics: PhaseMetrics[]
 ): { lfa: TimeSeries; rfa: TimeSeries } {
-  const lfa: TimeSeries = { t: [], v: [] };
-  const rfa: TimeSeries = { t: [], v: [] };
-  const windowSec = 30;
-  const stepSec = 4;
-  const totalSec = ecg.length / samplingRate;
-  if (totalSec < windowSec) return { lfa, rfa };
-
-  for (let tCenter = windowSec / 2; tCenter + windowSec / 2 < totalSec; tCenter += stepSec) {
-    const t0 = Math.max(0, tCenter - windowSec / 2);
-    const t1 = Math.min(totalSec, tCenter + windowSec / 2);
-    const i0 = Math.floor(t0 * samplingRate);
-    const i1 = Math.floor(t1 * samplingRate);
-    const slice = ecg.slice(i0, i1);
-    const { rrIntervalsMs } = detectRPeaks(slice, samplingRate);
-    if (rrIntervalsMs.length < 6) continue;
-    // Find phase at tCenter to pick appropriate FRF for bands
-    const p = phases.find(ph => tCenter >= ph.startSec && tCenter < ph.endSec);
-    const phaseIdx = p ? "ABCDEF".indexOf(p.name) : 0;
-    const frf = (phaseMetrics[phaseIdx]?.FRF) || 0.2;
-    const { lfLo, lfHi, hfLo, hfHi } = colomboBands(frf);
-    const rr = interpolateRR(rrIntervalsMs, 4);
-    if (rr.length < 16) continue;
-    const lfPower = morletBandPower(rr, 4, lfLo, lfHi);
-    const rfPower = morletBandPower(rr, 4, hfLo, hfHi);
-    lfa.t.push(Math.round(tCenter * 10) / 10);
-    lfa.v.push(Math.max(0, lfPower));
-    rfa.t.push(Math.round(tCenter * 10) / 10);
-    rfa.v.push(Math.max(0, rfPower));
-  }
-  return { lfa, rfa };
+  return { lfa: { t: [], v: [] }, rfa: { t: [], v: [] } };
 }
 
 /**
@@ -1619,11 +1406,15 @@ function computeMultiParameterGraphical(
   data: ParsedANSData,
   phaseEvents: PhaseMetrics[]
 ): MultiParameterGraphical {
-  // These trend/scatter panels operate on the RAW numeric spectral estimates
-  // (passed as phaseEventsRaw). Spectral fields are typed number|null on
-  // PhaseMetrics; coalesce locally so chart math is total. The report-facing
-  // clinical claims remain gated separately upstream.
-  const nz = (x: number | null): number => (x == null ? 0 : x);
+  // Spectral fields (LFa/RFa/SB) are null unless the paired vendor PDF supplied
+  // them. The scatter panels preserve null (rendered "Not assessed") rather
+  // than coercing a fabricated 0. Percent-change is only defined when BOTH
+  // endpoints are present. HR + breathing trends are genuine time-domain
+  // measures and always plotted.
+  const rfaChangePct = (base: number | null, other: number | null): number | null =>
+    base != null && other != null && base > 0
+      ? Math.round(((other - base) / base) * 100 * 10) / 10
+      : null;
   const ecgAvailable = hasRealEcg(data.ecgData);
   // Short-circuit if the file has no real ECG — still emit scatter/ratios so
   // the clinician panels that rely on header metrics keep working.
@@ -1639,9 +1430,6 @@ function computeMultiParameterGraphical(
       name: phaseLabels[s.name], label: s.label, startSec: s.start, endSec: s.end,
     }));
     const A = phaseEvents[0], B = phaseEvents[1], D = phaseEvents[3], F = phaseEvents[5];
-    const aRFa = nz(A.RFa);
-    const rfaChangeValsalvaPct = aRFa > 0 ? ((nz(D.RFa) - aRFa) / aRFa) * 100 : 0;
-    const rfaChangeStandPct = aRFa > 0 ? ((nz(F.RFa) - aRFa) / aRFa) * 100 : 0;
     return {
       ecgAvailable: false,
       totalSec,
@@ -1651,12 +1439,12 @@ function computeMultiParameterGraphical(
       lfaTrend: { t: [], v: [] },
       rfaTrend: { t: [], v: [] },
       scatter: {
-        baselineLFa: nz(A.LFa), baselineRFa: nz(A.RFa),
-        dbRFa: nz(B.RFa),
-        valsalvaLFa: nz(D.LFa),
-        standLFa: nz(F.LFa), standRFa: nz(F.RFa),
-        rfaChangeValsalvaPct: Math.round(rfaChangeValsalvaPct * 10) / 10,
-        rfaChangeStandPct: Math.round(rfaChangeStandPct * 10) / 10,
+        baselineLFa: A.LFa, baselineRFa: A.RFa,
+        dbRFa: B.RFa,
+        valsalvaLFa: D.LFa,
+        standLFa: F.LFa, standRFa: F.RFa,
+        rfaChangeValsalvaPct: rfaChangePct(A.RFa, D.RFa),
+        rfaChangeStandPct: rfaChangePct(A.RFa, F.RFa),
       },
       coupling: [],
       wavelet: { type: "n/a", cycles: 0, spectralUpdateSec: 0 },
@@ -1688,14 +1476,13 @@ function computeMultiParameterGraphical(
 
   // --- Scatter + % change ---
   const A = phaseEvents[0], B = phaseEvents[1], D = phaseEvents[3], F = phaseEvents[5];
-  const aRFa = nz(A.RFa);
-  const rfaChangeValsalvaPct = aRFa > 0 ? ((nz(D.RFa) - aRFa) / aRFa) * 100 : 0;
-  const rfaChangeStandPct = aRFa > 0 ? ((nz(F.RFa) - aRFa) / aRFa) * 100 : 0;
 
   // --- Coupling windows (4 panels: Baseline / DB / Valsalva / Stand) ---
+  // Baseline spectral annotations are shown only when vendor spectral exists;
+  // otherwise they read "Not assessed" rather than a fabricated 0.00.
   const testClock = parseTestStartClockSec(data);
   const couplingSpecs: Array<{ phase: CardioRespiratoryWindow["phase"]; label: string; idx: number; win: number; annots: () => string[] }> = [
-    { phase: "Baseline", label: "Baseline (1 min)", idx: 2, win: 60, annots: () => [`RFA = ${nz(A.RFa).toFixed(2)}`, `LFA/RFA = ${nz(A.SB).toFixed(2)}`] },
+    { phase: "Baseline", label: "Baseline (1 min)", idx: 2, win: 60, annots: () => [`RFA = ${A.RFa == null ? "Not assessed" : A.RFa.toFixed(2)}`, `LFA/RFA = ${A.SB == null ? "Not assessed" : A.SB.toFixed(2)}`] },
     { phase: "DeepBreathing", label: "Deep Breathing (1 min)", idx: 1, win: 60, annots: () => [`E/I Ratio = ${data.eiRatio.toFixed(2)}`, `ref (1.2 - 1.6)`] },
     { phase: "Valsalva", label: "Valsalva (1 min)", idx: 3, win: 60, annots: () => [`Valsalva Ratio = ${data.valsalvaRatio.toFixed(2)}`, `ref (1.2 - 1.6)`] },
     { phase: "Stand", label: "Stand (1 min)", idx: 5, win: 90, annots: () => [`30:15 Ratio = ${data.thirtyFifteenRatio.toFixed(2)}`, `ref (1.15 - 1.5)`] },
@@ -1717,15 +1504,15 @@ function computeMultiParameterGraphical(
     lfaTrend: lfa,
     rfaTrend: rfa,
     scatter: {
-      baselineLFa: nz(A.LFa), baselineRFa: nz(A.RFa),
-      dbRFa: nz(B.RFa),
-      valsalvaLFa: nz(D.LFa),
-      standLFa: nz(F.LFa), standRFa: nz(F.RFa),
-      rfaChangeValsalvaPct: Math.round(rfaChangeValsalvaPct * 10) / 10,
-      rfaChangeStandPct: Math.round(rfaChangeStandPct * 10) / 10,
+      baselineLFa: A.LFa, baselineRFa: A.RFa,
+      dbRFa: B.RFa,
+      valsalvaLFa: D.LFa,
+      standLFa: F.LFa, standRFa: F.RFa,
+      rfaChangeValsalvaPct: rfaChangePct(A.RFa, D.RFa),
+      rfaChangeStandPct: rfaChangePct(A.RFa, F.RFa),
     },
     coupling,
-    wavelet: { type: "normalized cmorl", cycles: 5, spectralUpdateSec: 4 },
+    wavelet: { type: "n/a (vendor spectral required)", cycles: 0, spectralUpdateSec: 0 },
   };
 }
 
@@ -1997,18 +1784,17 @@ export function generateColomboReport(
     return analyzePhase(ecgSlice, samplingRate, seg.name, seg.label, seg.end - seg.start);
   });
 
-  // --- No vendor-value substitution ------------------------------------------
-  // The per-phase spectral aggregates (LFa/RFa/FRF/SB) are NOT stored as scalars
-  // in the .ans binary; the vendor derives them via an undisclosed wavelet
-  // algorithm and prints them only in the signed PDF. We DELIBERATELY do not
-  // memorize or fingerprint-substitute those PDF values at runtime — doing so
-  // would silently pass off a per-file identity match as a generic computation
-  // and violate generic accuracy. Instead `analyzePhase` above computes each
-  // aggregate generically from the raw arrays and tags it `computed/estimated`
-  // (proprietary tier [P]) via its `provenance`. Consumers must render these as
-  // estimates, and unavailable phases as "unavailable" — never as vendor truth.
-  // The de-identified vendor scalars live ONLY in the offline regression oracle
-  // (eval/ ground-truth), which never touches this render path.
+  // --- No spectral synthesis, no vendor-value substitution -------------------
+  // The per-phase spectral aggregates (LFa/RFa/SB) are NOT stored as extractable
+  // scalars in the .ans binary; the vendor derives them via an undisclosed
+  // wavelet algorithm and prints them only in the signed PDF. This engine does
+  // NOT estimate them from the raw waveform (the former SCALE=0.0018 Morlet
+  // routine was removed) and does NOT memorize/fingerprint-substitute PDF
+  // values. `analyzePhase` therefore emits LFa/RFa/SB as null with `unavailable`
+  // provenance. The ONLY way a spectral value enters the report is a paired
+  // vendor PDF applied to baseline A below (`vendor_reported`, or
+  // `derived_from_vendor` for a computed SB) — after server-side identity
+  // reconciliation. Unavailable phases render "not assessed", never vendor truth.
 
   // Baseline A is the canonical resting measurement
   const A = phaseEvents[0];
@@ -2042,18 +1828,25 @@ export function generateColomboReport(
       A.RFa = vendorMetrics.RFa;
       if (A.provenance) A.provenance.RFa = vendorReportedProvenance("RFa");
     }
-    // SB: use the vendor's value if given, else derive from vendor LFa/RFa.
-    const vendorSB =
-      typeof vendorMetrics.SB === "number"
-        ? vendorMetrics.SB
-        : typeof vendorMetrics.LFa === "number" &&
-            typeof vendorMetrics.RFa === "number" &&
-            vendorMetrics.RFa !== 0
-          ? vendorMetrics.LFa / vendorMetrics.RFa
-          : undefined;
+    // SB: prefer the vendor's printed value; otherwise derive it from vendor
+    // LFa/RFa. The two cases carry DIFFERENT provenance — a printed SB is
+    // vendor_reported, a computed quotient is derived_from_vendor — so the
+    // report never overstates a locally-derived number as vendor-printed.
+    const vendorPrintedSB = typeof vendorMetrics.SB === "number";
+    const vendorSB = vendorPrintedSB
+      ? (vendorMetrics.SB as number)
+      : typeof vendorMetrics.LFa === "number" &&
+          typeof vendorMetrics.RFa === "number" &&
+          vendorMetrics.RFa !== 0
+        ? vendorMetrics.LFa / vendorMetrics.RFa
+        : undefined;
     if (typeof vendorSB === "number") {
       A.SB = vendorSB;
-      if (A.provenance) A.provenance.SB = vendorReportedProvenance("SB");
+      if (A.provenance) {
+        A.provenance.SB = vendorPrintedSB
+          ? vendorReportedProvenance("SB")
+          : derivedFromVendorProvenance("SB", "Computed here as vendor LFa ÷ vendor RFa; the vendor report printed LFa and RFa but not the ratio.");
+      }
     }
     if (typeof vendorMetrics.SBP === "number" && typeof vendorMetrics.DBP === "number") {
       A.SBP = vendorMetrics.SBP;
@@ -2064,13 +1857,14 @@ export function generateColomboReport(
   }
 
   // --- Spectral / BP availability gate ---------------------------------------
-  // The proprietary spectral aggregates (LFa/RFa/SB) are only ever `computed`
-  // (estimated) from the raw ECG for these files — never vendor-reported or
-  // validated — so they are NOT clinically actionable. An estimated LFa that
-  // collapses toward 0 must never be read as "sympathetic 0%" or trigger an
-  // autonomic-neuropathy / parasympathetic / treatment finding. We decide once,
-  // generically, from provenance (no patient/hash branching), then null the
-  // spectral fields and gate every spectral-derived consumer below.
+  // For a raw ECG-only .ans the proprietary spectral aggregates (LFa/RFa/SB) are
+  // `unavailable` (this engine never estimates them). They become clinically
+  // actionable ONLY when baseline A carries a vendor_reported/derived_from_vendor
+  // value from the paired PDF. mayInterpretClinically() encodes that rule, so a
+  // missing spectral value can never be read as "sympathetic 0%" or trigger an
+  // autonomic-neuropathy / parasympathetic / treatment finding. NOTE this is the
+  // GLOBAL (baseline-A) gate; per-phase narrative classification additionally
+  // checks each phase's own value (classifyOrNull) — see phaseFindings below.
   const spectralAvailable = !!(
     A.provenance &&
     mayInterpretClinically(A.provenance.LFa) &&
@@ -2228,14 +2022,22 @@ export function generateColomboReport(
   // Spectral (LFa/RFa/SB) modulation findings are only emitted when the
   // proprietary aggregates are clinically available. Otherwise we state, once,
   // that they were not assessed — never a fabricated Normal/Low classification.
-  if (spectralAvailable) {
-    const lfaA = classify(A.LFa as number, LFa_n.lo, LFa_n.hi);
-    if (lfaA.label === "Borderline Low") baselineFindings.push("Borderline low sympathetic modulation (LFa)");
-    else if (lfaA.severity === "Normal") baselineFindings.push("Normal sympathetic modulation (LFa)");
-    else baselineFindings.push(`${lfaA.label} sympathetic modulation (LFa)`);
-    const rfaA = classify(A.RFa as number, RFa_n.lo, RFa_n.hi);
-    if (rfaA.severity === "Normal") baselineFindings.push("Normal parasympathetic modulation (RFa)");
-    else baselineFindings.push(`${rfaA.label} parasympathetic modulation (RFa)`);
+  // Per-phase classification: only classify a phase's spectral value when THAT
+  // phase actually carries it (non-null). The global spectralAvailable gate is
+  // necessary but NOT sufficient — with baseline-only vendor metrics it is true
+  // while phases B–F are still null.
+  const lfaA = classifyOrNull(A.LFa, LFa_n.lo, LFa_n.hi);
+  const rfaA = classifyOrNull(A.RFa, RFa_n.lo, RFa_n.hi);
+  if (spectralAvailable && (lfaA || rfaA)) {
+    if (lfaA) {
+      if (lfaA.label === "Borderline Low") baselineFindings.push("Borderline low sympathetic modulation (LFa)");
+      else if (lfaA.severity === "Normal") baselineFindings.push("Normal sympathetic modulation (LFa)");
+      else baselineFindings.push(`${lfaA.label} sympathetic modulation (LFa)`);
+    }
+    if (rfaA) {
+      if (rfaA.severity === "Normal") baselineFindings.push("Normal parasympathetic modulation (RFa)");
+      else baselineFindings.push(`${rfaA.label} parasympathetic modulation (RFa)`);
+    }
     if (parasympatheticDominance) {
       // Describe the low ratio by its driver (generic) — reduced sympathetic
       // modulation vs genuine parasympathetic excess — WITHOUT asserting
@@ -2253,19 +2055,29 @@ export function generateColomboReport(
   phaseFindings.push({ phase: "INITIAL BASELINE", indication: "Indication of balance in the patient's Autonomic Nervous System (ANS) and protection of the heart", findings: baselineFindings });
 
   const dbFindings: string[] = [];
-  // lfaD/rfaD/lfaF are null when spectral is unavailable so the impression
-  // counting below can't treat a missing value as "Abnormal".
-  const lfaD = spectralAvailable ? classify(D.LFa as number, LFa_n.lo, LFa_n.hi) : null;
-  const rfaD = spectralAvailable ? classify(D.RFa as number, RFa_n.lo, RFa_n.hi) : null;
-  const lfaF = spectralAvailable ? classify(F.LFa as number, LFa_n.lo, LFa_n.hi) : null;
-  if (spectralAvailable) {
+  // Per-phase-null-safe: lfaD/rfaD/lfaF are null unless THAT phase carries a
+  // usable spectral value, so neither the findings below nor the impression
+  // counting can treat a missing value as "Abnormal". (Under baseline-only
+  // vendor metrics these are null even though spectralAvailable is true.)
+  const lfaD = classifyOrNull(D.LFa, LFa_n.lo, LFa_n.hi);
+  const rfaD = classifyOrNull(D.RFa, RFa_n.lo, RFa_n.hi);
+  const lfaF = classifyOrNull(F.LFa, LFa_n.lo, LFa_n.hi);
+  // "DB RFa low" is only a real finding when B's RFa was actually captured.
+  const dbSpectralAssessed = B_RFa != null;
+  const valsalvaSpectralAssessed = lfaD != null || rfaD != null;
+  if (spectralAvailable && (dbSpectralAssessed || valsalvaSpectralAssessed || highFRF)) {
     if (highFRF) {
       dbFindings.push(`NOTE: Fundamental Respiratory Frequency (FRF) is high during DB (${B.FRF.toFixed(2)} Hz; Normal: 0.09–0.15) which may artificially reduce the parasympathetic measure. High FRF may be associated with upper respiratory or pulmonary disorder and anxiety. Consider treating the patient and retesting to obtain the true interpretation for the DB phase.`);
     }
-    if (dbRFaLow) dbFindings.push("Low parasympathetic response (RFa) to DB suggesting possible autonomic dysfunction");
-    else dbFindings.push("Normal parasympathetic response (RFa) to DB");
-    dbFindings.push(`${lfaD!.severity === "Normal" ? "Normal" : lfaD!.label} sympathetic response (LFa) to Valsalva`);
-    dbFindings.push(`${rfaD!.severity === "Normal" ? "Normal" : rfaD!.label} parasympathetic response (RFa) to Valsalva`);
+    if (dbSpectralAssessed) {
+      if (dbRFaLow) dbFindings.push("Low parasympathetic response (RFa) to DB suggesting possible autonomic dysfunction");
+      else dbFindings.push("Normal parasympathetic response (RFa) to DB");
+    }
+    if (lfaD) dbFindings.push(`${lfaD.severity === "Normal" ? "Normal" : lfaD.label} sympathetic response (LFa) to Valsalva`);
+    if (rfaD) dbFindings.push(`${rfaD.severity === "Normal" ? "Normal" : rfaD.label} parasympathetic response (RFa) to Valsalva`);
+    if (!dbSpectralAssessed && !valsalvaSpectralAssessed) {
+      dbFindings.push("Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed for these phases — the vendor report supplied baseline values only.");
+    }
   } else {
     dbFindings.push("Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed — not reproducible from this recording.");
   }
@@ -2287,18 +2099,36 @@ export function generateColomboReport(
   phaseFindings.push({ phase: "DEEP BREATHING (DB) AND VALSALVA RESPONSES", indication: "Detection of early signs of autonomic dysfunction and chronic disease", findings: dbFindings });
 
   const standFindings: string[] = [];
-  if (spectralAvailable) {
-    standFindings.push(`${lfaF!.severity === "Normal" ? "Normal" : lfaF!.label} sympathetic response (LFa) to stand`);
+  // Standing spectral findings require the STAND phase's own spectral values —
+  // gated on standSpectralAvailable (true only when F's provenance is
+  // clinically interpretable), NOT the global spectralAvailable (which is true
+  // for a baseline-only vendor override while F stays null). lfaF is per-phase
+  // null-safe. preSyncope/vasovagal/parasympatheticExcess already derive from
+  // sfLFa/sfRFa which enforce the same gate.
+  if (standSpectralAvailable && lfaF) {
+    standFindings.push(`${lfaF.severity === "Normal" ? "Normal" : lfaF.label} sympathetic response (LFa) to stand`);
     if (preSyncopeRisk) standFindings.push('A higher peak sympathetic response (LFa) to stand compared to the response during Valsalva suggesting a possible risk of pre-syncope [Check "HR" and "Trends" plot and EKG Report to rule out ectopy]');
     if (vasovagalRisk) standFindings.push("Relatively higher parasympathetic activation (RFa) compared to sympathetic activation (LFa) throughout the test suggesting risk of possible vasovagal pre-syncope");
     if (parasympatheticExcess) standFindings.push("High parasympathetic activation (RFa) indicating excess parasympathetic activity ** [Check for symptoms such as unstable BP and dizziness]");
   } else {
     standFindings.push("Spectral response to standing (LFa/RFa) not assessed — not reproducible from this recording.");
   }
-  // HR response to standing IS supported (ECG-derived).
-  if (hrDelta >= 10 && hrDelta <= 30) standFindings.push("Normal HR response");
-  else if (hrDelta < 10) standFindings.push("Insufficient HR response to stand");
-  else standFindings.push(`Excessive HR rise of ${hrDelta} bpm — POTS criteria`);
+  // HR response to standing. The HR delta itself IS ECG-derived, but grading it
+  // as "Normal" vs "Insufficient" is an orthostatic judgment that requires
+  // standing blood-pressure context (an insufficient HR rise is only abnormal
+  // alongside a BP drop / symptoms). The .ans has no standing BP, so WITHOUT
+  // that evidence we report the measured delta as a neutral OBSERVATION and say
+  // the orthostatic adequacy is not assessed — never assert "Insufficient".
+  // POTS (>=30 bpm rise) is a validated HR-ONLY criterion and is retained.
+  if (POTS) {
+    standFindings.push(`Excessive HR rise of ${hrDelta} bpm on standing — meets the POTS heart-rate criterion (≥30 bpm); correlate with symptoms and standing BP.`);
+  } else if (orthostaticBpAssessable) {
+    // Standing BP is available (paired vendor/measured) → an adequacy verdict is supported.
+    if (hrDelta >= 10) standFindings.push(`Normal HR response to standing (Δ+${hrDelta} bpm).`);
+    else standFindings.push(`Blunted HR response to standing (Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm) with the available orthostatic BP.`);
+  } else {
+    standFindings.push(`Heart-rate change on standing: Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm (observed). Orthostatic adequacy not assessed — standing blood pressure was not recorded in this .ans; correlate with a cuff BP / the vendor report.`);
+  }
   phaseFindings.push({ phase: "STAND RESPONSES", indication: "Indication of proper autonomic coordination and possible causes of dizziness", findings: standFindings });
 
   // Overall impression — Colombo PDF counting rule.
@@ -2314,8 +2144,23 @@ export function generateColomboReport(
   if (valsalvaAbnormal) challenges.push("the sympathetic response (LFa) during Valsalva is abnormal");
   if (standAbnormal) challenges.push("the response to standing is abnormal");
   const abnormalChallengeCount = challenges.length;
+  // A challenge is ASSESSED only when its spectral input (or, for stand, HR/BP)
+  // was actually captured. With baseline-only vendor metrics, none of the DB /
+  // Valsalva / stand spectral responses are assessed, so the dysfunction-grading
+  // ladder below must NOT run — it would read the absence of abnormalities as
+  // "normal autonomic function" or (worse, via the old null-classify bug)
+  // fabricate "advanced autonomic dysfunction". standSpectralAvailable / POTS /
+  // orthostaticBpAssessable make the stand challenge assessable on HR/BP alone.
+  const dbChallengeAssessed = dbSpectralAssessed;
+  const valsalvaChallengeAssessed = valsalvaSpectralAssessed;
+  // The dysfunction-grading ladder is a spectral + orthostatic-BP construct; it
+  // runs only when at least one of those challenge measures was actually
+  // captured. HR-only findings (POTS / bradycardia) are surfaced in the
+  // supported-observations text via hrNote regardless.
+  const anyChallengeAssessed =
+    dbChallengeAssessed || valsalvaChallengeAssessed || standSpectralAvailable || orthostaticBpAssessable;
   let overall: string;
-  if (!spectralAvailable) {
+  if (!spectralAvailable || !anyChallengeAssessed) {
     // With only ECG-derived HR + Ewing ratios, we can only report those
     // supported observations — never an autonomic-dysfunction grading that
     // depends on spectral challenge responses.
@@ -2599,6 +2444,26 @@ export function generateColomboReport(
   };
 }
 
+/**
+ * Deterministic clinical snapshot of a report: the full object with the
+ * non-deterministic ENVELOPE METADATA (`generatedAt`, and the embedded
+ * `patientData` / AnsStudy `parsedAt` if present) stripped out. Two runs on the
+ * same input bytes produce byte-identical snapshots. Use this for golden-master
+ * comparisons and any content hash — never hash the raw report, whose
+ * `generatedAt` changes every call.
+ */
+export function clinicalSnapshot(report: ANSReport): Omit<ANSReport, "generatedAt"> {
+  const { generatedAt: _generatedAt, ...rest } = report;
+  // Strip parsedAt from any embedded ansStudy-like object without disturbing
+  // the clinical fields.
+  const anyRest = rest as Record<string, unknown>;
+  if (anyRest.ansStudy && typeof anyRest.ansStudy === "object") {
+    const { parsedAt: _p, ...study } = anyRest.ansStudy as Record<string, unknown>;
+    anyRest.ansStudy = study;
+  }
+  return rest;
+}
+
 // ---- Handler ----------------------------------------------------------------
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -2617,55 +2482,101 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ success: false, error: "No file uploaded" });
     }
 
-    // PR1: deterministic parser is the primary path. We translate the
-    // normalized AnsStudy back into the legacy ParsedANSData shape so the
-    // existing Colombo scoring algorithm is untouched.
-    //
-    // Fallback: if the new parser throws for ANY reason we fall back to the
-    // legacy parseANSFile so production uploads never start failing because
-    // of a parser regression. The fallback path is logged so we can audit
-    // it from Vercel logs.
+    // SINGLE CANONICAL PATH: the deterministic, provenance-gated api/_ans
+    // engine (parseStudy) is the ONLY parser for both /api/parse and
+    // /api/upload. We translate the normalized AnsStudy back into the legacy
+    // ParsedANSData shape (ansStudyToLegacy) so the Colombo scoring layer is
+    // untouched. There is no heuristic-parser fallback: the previous fallback
+    // fabricated per-patient values (isJillShah) and demographic defaults, so
+    // an honest hard failure is preferred over silently degraded data.
     let patientData;
-    let ansStudy: ReturnType<typeof parseStudy> | undefined;
+    let ansStudy: ReturnType<typeof parseStudy>;
     try {
       ansStudy = parseStudy({ buffer: fileBuffer, fileName: fileName ?? "upload.ans" });
       patientData = ansStudyToLegacy(ansStudy, fileBuffer);
-      // Belt-and-braces: if the new path produced a useless ParsedANSData
-      // (no names AND no ECG), bail out to the legacy parser instead of
-      // returning empty data to the client.
-      const useless =
-        !patientData.lastName && !patientData.firstName && patientData.ecgData.length === 0;
-      if (useless) {
-        console.warn("[ans-parser] new parser produced empty patient data; falling back to legacy");
-        patientData = parseANSFile(fileBuffer, fileName);
-        ansStudy = undefined;
-      }
     } catch (err: any) {
-      console.warn("[ans-parser] new parser threw, falling back to legacy:", err?.message ?? err);
-      patientData = parseANSFile(fileBuffer, fileName);
-      ansStudy = undefined;
+      console.error("[ans-parser] canonical parse failed:", err?.message ?? err);
+      return res.status(422).json({
+        success: false,
+        error:
+          "Could not parse the uploaded .ans file. The file may be corrupt or in an unsupported format.",
+        detail: err?.message ?? String(err),
+      });
     }
     // Optional paired vendor-PDF metrics: passed as a JSON header so the custom
     // single-part multipart parser above is untouched. Malformed input is
     // ignored (report falls back to the honest "Not assessed" gate).
+    //
+    // SAFETY (BLOCKER 2): vendor metrics are the sole trigger for the full
+    // spectral/BP interpretation pathway, so they are applied ONLY after the
+    // vendor PDF's identity (patient name + study date, DOB when present) is
+    // reconciled server-side against the parsed .ans. The client cannot be
+    // trusted to enforce this. A mismatch — or a payload that omits identity —
+    // drops the metrics and records an explicit warning; it NEVER silently
+    // overrides one patient's study with another's vendor numbers.
     let vendorMetrics: VendorReportedMetrics | undefined;
+    const vendorWarnings: string[] = [];
+    let vendorReconciliation: VendorReconciliationStatus | undefined;
     const vmHeader = req.headers["x-vendor-metrics"];
     if (typeof vmHeader === "string" && vmHeader.trim()) {
       try {
         const parsed = JSON.parse(vmHeader);
         const pick = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
-        vendorMetrics = {
+        const candidate: VendorReportedMetrics = {
           LFa: pick(parsed.LFa),
           RFa: pick(parsed.RFa),
           SB: pick(parsed.SB),
           SBP: pick(parsed.SBP),
           DBP: pick(parsed.DBP),
         };
+        const hasAnyMetric = Object.values(candidate).some((v) => v !== undefined);
+        if (hasAnyMetric) {
+          // Identity may be nested (`identity`) or flat on the payload.
+          const idIn = parsed.identity ?? {
+            patientName: parsed.patientName,
+            testDate: parsed.testDate,
+            dob: parsed.dob,
+          };
+          const recon = reconcileVendorIdentity(
+            {
+              patientName: typeof idIn?.patientName === "string" ? idIn.patientName : null,
+              testDate: typeof idIn?.testDate === "string" ? idIn.testDate : null,
+              dob: typeof idIn?.dob === "string" ? idIn.dob : null,
+            },
+            {
+              firstName: patientData.firstName,
+              lastName: patientData.lastName,
+              testDate: patientData.testDate,
+              dob: patientData.dobString,
+            },
+          );
+          if (recon.ok) {
+            vendorMetrics = candidate;
+            vendorReconciliation = {
+              status: "matched",
+              matchedName: `${patientData.firstName} ${patientData.lastName}`.trim(),
+              matchedDate: patientData.testDate,
+              checks: recon.checks,
+            };
+          } else {
+            vendorWarnings.push(recon.reason ?? "Vendor report identity could not be reconciled with the uploaded .ans; vendor values were not applied.");
+            vendorReconciliation = { status: "mismatch", checks: recon.checks, reason: recon.reason };
+            console.warn("[upload] vendor identity reconciliation FAILED:", recon.reason);
+          }
+        }
       } catch {
         console.warn("[upload] ignoring malformed x-vendor-metrics header");
+        vendorWarnings.push("The paired vendor-metrics payload was malformed and was ignored.");
+        vendorReconciliation = { status: "malformed" };
       }
     }
     const report = generateColomboReport(patientData, vendorMetrics);
+    if (vendorWarnings.length > 0) {
+      (report as { vendorReconciliationWarnings?: string[] }).vendorReconciliationWarnings = vendorWarnings;
+    }
+    if (vendorReconciliation) {
+      (report as { vendorReconciliation?: typeof vendorReconciliation }).vendorReconciliation = vendorReconciliation;
+    }
     // Send only a preview of the raw ECG to the client — the full waveform
     // stays server-side (we'd blow past the Vercel payload limit otherwise).
     // The Multi-Parameter Graphical and Colombo analysis have already run

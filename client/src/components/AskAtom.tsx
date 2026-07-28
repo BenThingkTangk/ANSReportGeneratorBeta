@@ -29,12 +29,20 @@ interface AskAtomProps {
 type ViewerRole = "patient" | "clinician";
 type ChatStatus = "streaming" | "done" | "error";
 
+interface AtomDiagnostics {
+  ttftMs: number | null;
+  sourceCount: number;
+  transport: "sse" | "json";
+  totalMs?: number;
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   citations?: string[];
   status?: ChatStatus;
+  diagnostics?: AtomDiagnostics;
 }
 
 const PATIENT_FOLLOWUPS = [
@@ -192,6 +200,13 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
   const [streaming, setStreaming] = useState(false);
   const [retryable, setRetryable] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  // Dev/test-only diagnostics: transport, time-to-first-token, retrieved source
+  // count. Surfaced behind a DEV gate so QA can verify streaming + grounding.
+  const [lastDiagnostics, setLastDiagnostics] = useState<AtomDiagnostics | null>(null);
+  // Grounding mode from the server: "rag" (retrievable corpus) vs "report_only"
+  // (no full-text chunks → answers grounded in the report + labeled external
+  // evidence, NOT the private RAG corpus). Disclosed to the user.
+  const [grounding, setGrounding] = useState<{ mode: "rag" | "report_only"; chunks?: number } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -273,18 +288,120 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
     }, 22);
   };
 
+  // Attempt TRUE server-sent-events streaming first (real token-by-token from
+  // the server, with time-to-first-token diagnostics). Returns false if
+  // streaming is unavailable/unsupported so the caller can fall back to JSON.
+  const streamQuery = async (base: ChatMessage[], controller: AbortController): Promise<boolean> => {
+    if (typeof fetch !== "function" || typeof ReadableStream === "undefined") return false;
+    const t0 = Date.now();
+    let res: Response;
+    try {
+      res = await fetch("/api/ask-atom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({
+          messages: base.map(m => ({ role: m.role, content: m.content })).slice(-10),
+          report,
+          viewerRole: mode,
+          stream: true,
+        }),
+        signal: controller.signal,
+      });
+    } catch {
+      return false; // network/transport failure → let caller fall back
+    }
+    const ctype = res.headers.get("content-type") ?? "";
+    if (!res.ok || !res.body || !ctype.includes("text/event-stream")) {
+      // Server returned JSON (e.g. 502 error or a non-streaming deployment).
+      return false;
+    }
+
+    // Live message we append deltas to.
+    const id = nextId();
+    setMessages(prev => [...prev, { id, role: "assistant", content: "", status: "streaming", citations: [] } as ChatMessage].slice(-10));
+    setLoading(false);
+    setStreaming(true);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+    let ttft: number | null = null;
+    let citations: string[] = [];
+    let sawError: string | null = null;
+
+    const applyFrame = (frame: string) => {
+      const evLine = frame.split("\n").find(l => l.startsWith("event:"));
+      const dataLine = frame.split("\n").find(l => l.startsWith("data:"));
+      if (!dataLine) return;
+      const event = evLine ? evLine.slice(6).trim() : "message";
+      let payload: any = {};
+      try { payload = JSON.parse(dataLine.slice(5).trim()); } catch { return; }
+      if (event === "delta" && payload.text) {
+        if (ttft === null) ttft = Date.now() - t0;
+        full += payload.text;
+        setMessages(prev => prev.map(m => (m.id === id ? { ...m, content: stripProvenanceMarkers(full) } : m)));
+      } else if (event === "done") {
+        citations = dedupeCitations([...(payload.citations ?? []), ...(payload.webCitations ?? [])]);
+        if (payload.grounding?.mode) setGrounding({ mode: payload.grounding.mode, chunks: payload.grounding.chunks });
+      } else if (event === "error") {
+        sawError = payload.error || "stream error";
+      }
+    };
+
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const f of frames) applyFrame(f);
+      }
+    } catch (e) {
+      if (isAbortError(e)) { setStreaming(false); return true; }
+      // Mid-stream transport drop with partial text: keep what we have but flag.
+      if (!full) return false;
+      sawError = sawError ?? "stream interrupted";
+    }
+
+    setStreaming(false);
+    if (sawError && !full) {
+      // No content at all → let the caller show the actionable fallback.
+      setMessages(prev => prev.filter(m => m.id !== id));
+      return false;
+    }
+    setMessages(prev => prev.map(m => (m.id === id
+      ? { ...m, content: stripProvenanceMarkers(full), status: "done", citations,
+          diagnostics: { ttftMs: ttft, sourceCount: citations.length, transport: "sse" } }
+      : m)));
+    setLastDiagnostics({ ttftMs: ttft, sourceCount: citations.length, transport: "sse", totalMs: Date.now() - t0 });
+    return true;
+  };
+
   const runQuery = async (base: ChatMessage[]) => {
     setRetryable(false);
     setLoading(true);
     const controller = new AbortController();
     abortRef.current = controller;
+    const t0 = Date.now();
 
+    // 1) Try true SSE streaming.
+    try {
+      const streamed = await streamQuery(base, controller);
+      if (streamed) { abortRef.current = null; return; }
+    } catch (e) {
+      if (isAbortError(e)) { abortRef.current = null; setLoading(false); setRetryable(true); return; }
+      // fall through to JSON
+    }
+
+    // 2) Fallback: non-streaming JSON (also the path unit tests exercise).
     try {
       const res = await apiRequest(
         "POST",
         "/api/ask-atom",
         {
-          // Send only role/content — never internal ids/status/citations.
           messages: base.map(m => ({ role: m.role, content: m.content })).slice(-10),
           report,
           viewerRole: mode,
@@ -296,7 +413,9 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
       abortRef.current = null;
       if (!data?.success || !data?.message) throw new Error(data?.error || "No response");
       const citations = dedupeCitations([...(data.citations ?? []), ...(data.webCitations ?? [])]);
+      if (data.grounding?.mode) setGrounding({ mode: data.grounding.mode, chunks: data.grounding.chunks });
       setLoading(false);
+      setLastDiagnostics({ ttftMs: Date.now() - t0, sourceCount: citations.length, transport: "json", totalMs: Date.now() - t0 });
       startReveal(stripProvenanceMarkers(String(data.message)), citations);
     } catch (e) {
       abortRef.current = null;
@@ -305,13 +424,16 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
         setRetryable(true);
         return;
       }
+      // Actionable, non-fabricating fallback: no invented clinical content, a
+      // clear next step, and the deterministic report remains fully available.
       setMessages(prev =>
         [
           ...prev,
           {
             id: nextId(),
             role: "assistant" as const,
-            content: "I'm having trouble connecting right now. Please try again in a moment.",
+            content:
+              "I couldn't reach the assistant just now, so I won't guess. Your report above is complete and accurate on its own — every measured value and finding is shown there. Tap Retry to ask again, or continue reading the report.",
             status: "error" as const,
           },
         ].slice(-10),
@@ -775,8 +897,42 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
                   </div>
                 </div>
               )}
+              {/* Dev/test diagnostics: transport + time-to-first-token + retrieved
+                  source count. Hidden in production; used by visual QA. */}
+              {import.meta.env?.DEV && lastDiagnostics && (
+                <div
+                  className="text-[10px] text-muted-foreground/70 text-center pt-1 font-mono"
+                  data-testid="atom-diagnostics"
+                  data-transport={lastDiagnostics.transport}
+                  data-ttft={lastDiagnostics.ttftMs ?? ""}
+                  data-sources={lastDiagnostics.sourceCount}
+                >
+                  {lastDiagnostics.transport.toUpperCase()} · TTFT{" "}
+                  {lastDiagnostics.ttftMs != null ? `${lastDiagnostics.ttftMs}ms` : "n/a"} ·{" "}
+                  {lastDiagnostics.sourceCount} source{lastDiagnostics.sourceCount === 1 ? "" : "s"}
+                  {lastDiagnostics.totalMs != null ? ` · ${lastDiagnostics.totalMs}ms total` : ""}
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
+
+            {/* Grounding disclosure: when the private corpus has no full-text
+                chunks, tell the user answers are report-only/external, not RAG. */}
+            {grounding?.mode === "report_only" && (
+              <div
+                className="px-3 py-2 text-[10.5px] leading-snug border-t flex items-start gap-1.5 flex-shrink-0"
+                style={{ borderColor: "hsl(38 92% 50% / 0.25)", background: "hsl(38 92% 50% / 0.06)", color: "hsl(38 90% 78%)" }}
+                data-testid="atom-grounding-disclosure"
+                data-grounding="report_only"
+              >
+                <span aria-hidden="true">ⓘ</span>
+                <span>
+                  Answers are grounded in <strong>your report</strong> and clearly-labeled external
+                  sources. The private knowledge base has <strong>no full-text chunks indexed</strong>,
+                  so this is not retrieval-augmented (RAG) grounding.
+                </span>
+              </div>
+            )}
 
             {/* Input bar */}
             <div

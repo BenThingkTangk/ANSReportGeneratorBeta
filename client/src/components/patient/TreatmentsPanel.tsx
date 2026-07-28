@@ -4,9 +4,12 @@ import { Activity } from "lucide-react";
 
 interface TreatmentsPanelProps {
   recommendations: TherapyRecommendation[];
+  /** True when an attached vendor report flagged notable findings. Changes the
+   *  empty-state copy so we don't imply "nothing to do" on incomplete evidence. */
+  vendorHasNotableFindings?: boolean;
 }
 
-export function TreatmentsPanel({ recommendations }: TreatmentsPanelProps) {
+export function TreatmentsPanel({ recommendations, vendorHasNotableFindings }: TreatmentsPanelProps) {
   const treatments = recommendations.filter(r =>
     r.category === "Lifestyle" || r.category === "Exercise" || r.category === "Pharmacological"
   );
@@ -27,7 +30,11 @@ export function TreatmentsPanel({ recommendations }: TreatmentsPanelProps) {
       </div>
 
       {treatments.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No specific lifestyle interventions flagged.</p>
+        <p className="text-sm text-muted-foreground" data-testid="treatments-empty">
+          {vendorHasNotableFindings
+            ? "No automated intervention recommendation; review vendor findings with clinician."
+            : "No specific lifestyle interventions flagged."}
+        </p>
       ) : (
         <div className="space-y-4">
           {treatments.map((r, i) => (

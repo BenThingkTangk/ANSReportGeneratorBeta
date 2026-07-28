@@ -9,6 +9,7 @@ import {
   type VendorReportExtraction,
 } from "./_ans/vendorOcrParse.js";
 import { vendorReportedProvenance, type MetricKey } from "../shared/metricProvenance.js";
+import { extractVendorNarrative } from "./_ans/vendorNarrative.js";
 
 /**
  * POST /api/upload-vendor — optional paired vendor-PDF ingestion.
@@ -71,6 +72,30 @@ function parseSinglePdf(rawBody: Buffer, contentType: string): { buffer: Buffer;
     return { buffer: Buffer.from(body, "binary"), fileName };
   }
   return null;
+}
+
+/**
+ * Fill null identity fields on the tabular extraction from identity parsed out
+ * of vendor PROSE (e.g. the letter's "RE: Alex Pare, dob 9/17/1975"). Only fills
+ * ABSENT fields — never overwrites a value the grid parser already read — so a
+ * narrative-only document can still be identity-reconciled during a merge.
+ */
+function backfillIdentityFromNarrative(
+  extraction: VendorReportExtraction,
+  narr: { identity?: { patientName: string | null; dob: string | null; testDate: string | null } } | null,
+): void {
+  const src = narr?.identity;
+  if (!src) return;
+  const id = extraction.identity;
+  const fill = (field: { value: string | null; provenance: any }, value: string | null) => {
+    if (field.value == null && value) {
+      field.value = value;
+      field.provenance = { page: 1, confidence: 0.9, sourceText: value };
+    }
+  };
+  fill(id.patientName, src.patientName);
+  fill(id.dob, src.dob);
+  fill(id.testDate, src.testDate);
 }
 
 /**
@@ -137,30 +162,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const text = await extractPdfText(file.buffer);
 
-    // Decide the fast path by EXTRACTION SUCCESS, not by a length/keyword guess:
-    // run the structured parser on the text layer and take the text path only if
-    // it actually yields vendor fields. A scanned PDF with a few stray glyphs
-    // parses to 0 fields and correctly falls through to OCR.
+    // Decide the fast path by EXTRACTION SUCCESS across ALL text extractors —
+    // the tabular grid parser (parseVendorOcrPages), the prose metric parser
+    // (parseVendorReportText, e.g. "SB = 2.59"), AND the narrative findings
+    // extractor (categorical findings like "Borderline low RFa"). A narrative
+    // letter/summary has no grid, so the previous grid-only gate wrongly fell
+    // through to OCR and lost the letter's SB and the summary's findings.
     const textExtraction = text ? parseVendorOcrPages(textToPages(text)) : null;
-    const textHasFields = !!textExtraction && textExtraction.fieldCount > 0;
+    const textMetrics = text ? parseVendorReportText(text) : null;
+    const textNarrative = text ? extractVendorNarrative(text) : null;
+    const textHasContent =
+      (!!textExtraction && textExtraction.fieldCount > 0) ||
+      (!!textMetrics && textMetrics.metrics.length > 0) ||
+      (!!textNarrative && (textNarrative.findings.length > 0 || textNarrative.printedNumbers.length > 0));
 
     // --- Path 1: text-layer PDF (fast, exact) --------------------------------
-    if (textHasFields) {
-      const parsed = parseVendorReportText(text);
-      const extraction = textExtraction!;
+    if (textHasContent) {
+      const parsed = textMetrics!;
+      const extraction: VendorReportExtraction = {
+        ...textExtraction!,
+        narrative: textNarrative
+          ? { findings: textNarrative.findings, printedNumbers: textNarrative.printedNumbers }
+          : undefined,
+      };
+      // Narrative-only docs (e.g. the letter) carry identity in prose — backfill
+      // so they can be identity-reconciled when merged with the tabular report.
+      backfillIdentityFromNarrative(extraction, textNarrative);
+      const findingCount = textNarrative?.findings.length ?? 0;
       return res.status(200).json({
         success: true,
         fileName: file.fileName,
         textExtracted: true,
         ocrUsed: false,
         source: "text",
-        looksLikeVendorReport: parsed.looksLikeVendorReport,
+        looksLikeVendorReport: parsed.looksLikeVendorReport || !!textNarrative?.looksLikeVendorNarrative,
         metricCount: parsed.metrics.length,
+        findingCount,
         metrics: parsed.metrics,
         extraction,
-        note: parsed.looksLikeVendorReport
-          ? `${parsed.metrics.length} vendor-reported metric(s) extracted verbatim (text layer) and tagged vendor_reported.`
-          : "Text extracted, but it does not look like a P&S / ANS vendor report; nothing ingested.",
+        note:
+          `${parsed.metrics.length} printed metric(s) + ${findingCount} categorical finding(s) ` +
+          `extracted verbatim (text layer) and tagged vendor_reported.`,
       });
     }
 
@@ -185,8 +227,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    const extraction = parseVendorOcrPages(ocr.pages);
-    const metrics = extractionToVendorMetrics(extraction);
+    const ocrText = ocr.pages.map((p) => p.text).join("\n");
+    const ocrNarrative = extractVendorNarrative(ocrText);
+    const extraction: VendorReportExtraction = {
+      ...parseVendorOcrPages(ocr.pages),
+      narrative: ocrNarrative.findings.length > 0 || ocrNarrative.printedNumbers.length > 0
+        ? { findings: ocrNarrative.findings, printedNumbers: ocrNarrative.printedNumbers }
+        : undefined,
+    };
+    backfillIdentityFromNarrative(extraction, ocrNarrative);
+    // Numeric grid metrics (rare on narrative summaries) PLUS any prose numbers.
+    const gridMetrics = extractionToVendorMetrics(extraction);
+    const proseMetrics = parseVendorReportText(ocrText).metrics.filter(
+      (m) => !gridMetrics.some((g) => g.key === m.key),
+    );
+    const metrics = [...gridMetrics, ...proseMetrics];
+    const findingCount = ocrNarrative.findings.length;
     const avgPageConf =
       ocr.pages.reduce((s, p) => s + (p.confidence ?? 0), 0) / Math.max(1, ocr.pages.length);
 
@@ -198,14 +254,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       source: "ocr",
       pageCount: ocr.pages.length,
       ocrConfidence: Math.round(avgPageConf),
-      looksLikeVendorReport: extraction.looksLikeVendorReport,
+      looksLikeVendorReport: extraction.looksLikeVendorReport || ocrNarrative.looksLikeVendorNarrative,
       metricCount: metrics.length,
+      findingCount,
       metrics,
       extraction,
-      note: extraction.looksLikeVendorReport
-        ? `OCR read ${metrics.length} vendor-reported metric(s) verbatim from the scanned report ` +
+      note: (extraction.looksLikeVendorReport || ocrNarrative.looksLikeVendorNarrative)
+        ? `OCR read ${metrics.length} printed metric(s) + ${findingCount} categorical finding(s) verbatim ` +
           `(mean field confidence ${(extraction.meanConfidence * 100).toFixed(0)}%). ` +
-          `Fields the scan could not resolve confidently are shown as unavailable, not guessed.`
+          `Values the scan could not resolve confidently are shown as unavailable, not guessed.`
         : "OCR ran but the pages do not look like a P&S / ANS vendor report; nothing ingested.",
     });
   } catch (err: any) {

@@ -194,38 +194,42 @@ export function AdminLayout({ children, title }: AdminLayoutProps) {
           {NAV_ITEMS.filter((item) => !item.superAdminOnly || isSuperAdmin).map((item) => {
             const isActive = location === item.href || location.startsWith(item.href + "/");
             return (
-              <Link key={item.href} href={item.href}>
-                <a
+              // wouter v3 <Link> renders its OWN <a>; nesting another <a> here
+              // produced two overlapping anchors for the same href, and the
+              // outer one intercepted pointer events (normal clicks timed out in
+              // QA). Style the single rendered anchor directly instead.
+              <Link
+                key={item.href}
+                href={item.href}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "9px 12px",
+                  borderRadius: 8,
+                  marginBottom: 2,
+                  textDecoration: "none",
+                  fontSize: 13,
+                  fontWeight: isActive ? 600 : 400,
+                  color: isActive
+                    ? "var(--color-brand-cyan)"
+                    : "var(--color-text-secondary)",
+                  background: isActive ? "rgba(0,229,255,0.08)" : "transparent",
+                  border: isActive
+                    ? "1px solid rgba(0,229,255,0.18)"
+                    : "1px solid transparent",
+                  transition: "all 160ms ease",
+                }}
+              >
+                <span
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "9px 12px",
-                    borderRadius: 8,
-                    marginBottom: 2,
-                    textDecoration: "none",
-                    fontSize: 13,
-                    fontWeight: isActive ? 600 : 400,
-                    color: isActive
-                      ? "var(--color-brand-cyan)"
-                      : "var(--color-text-secondary)",
-                    background: isActive ? "rgba(0,229,255,0.08)" : "transparent",
-                    border: isActive
-                      ? "1px solid rgba(0,229,255,0.18)"
-                      : "1px solid transparent",
-                    transition: "all 160ms ease",
+                    color: isActive ? "var(--color-brand-cyan)" : "var(--color-text-muted)",
+                    flexShrink: 0,
                   }}
                 >
-                  <span
-                    style={{
-                      color: isActive ? "var(--color-brand-cyan)" : "var(--color-text-muted)",
-                      flexShrink: 0,
-                    }}
-                  >
-                    {item.icon}
-                  </span>
-                  {item.label}
-                </a>
+                  {item.icon}
+                </span>
+                {item.label}
               </Link>
             );
           })}

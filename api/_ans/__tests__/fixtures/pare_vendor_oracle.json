@@ -1,0 +1,88 @@
+{
+  "_doc": "Ground-truth oracle for the Alex Pare (de-identified: 'John Faux') vendor documents. Two DISTINCT sources: (1) the P&S 4.0 ANS Diagnostic Implication Summary PDF (image-only → OCR), which carries identity + anthropometrics + QUALITATIVE per-phase findings and NO numeric LFa/RFa/SB grid; and (2) the Colombo consultation LETTER (text layer), which carries the numeric SB=2.59 and the interpretive/treatment prose. These are transcribed by hand from the signed documents and used as an assertion contract. do_not_load_at_runtime.",
+  "identity": {
+    "patientName": "Alex Pare",
+    "deidentifiedName": "John Faux",
+    "sex": "Male",
+    "age": 48,
+    "dob": "9/17/1975",
+    "deidentifiedDob": "1/1/1975",
+    "testDate": "7/11/2024",
+    "physician": "Colombo",
+    "height": "6 ft 2 in",
+    "weightLbs": 200,
+    "bmi": 25.68,
+    "ectopicBeats": 1
+  },
+  "reportSummary": {
+    "_source": "Diagnostic Implication Summary PDF (OCR)",
+    "hasNumericSpectralGrid": false,
+    "baseline": {
+      "narrative": "All parameters within normal ranges (includes borderline conditions)",
+      "hrbp": "normal",
+      "lfa": "normal",
+      "rfa": "borderline-low",
+      "sb": "high-normal"
+    },
+    "deepBreathingValsalva": {
+      "narrative": "All ANS responses within normal ranges (includes borderline conditions); Abnormal changes in HR (from baseline to DB)",
+      "spectralResponses": "normal",
+      "hrChangeBaselineToDb": "abnormal"
+    },
+    "stand": {
+      "narrative": "High sympathetic response to stand suggesting a possible risk of pre-syncope",
+      "standLfa": "high",
+      "preSyncopeRisk": true,
+      "standRfa": "normal",
+      "standHr": "normal",
+      "standBp": "unreported"
+    },
+    "therapyRecommendation": "none",
+    "retestMonths": 6
+  },
+  "colomboLetter": {
+    "_source": "Colombo consultation letter (text layer). Interpretive + treatment prose. MUST NOT be turned into automatic therapy recommendations by the engine.",
+    "sb": 2.59,
+    "restFindings": "normal HR & BP, low Parasympathetic activity indicating Advanced Autonomic Dysfunction (AAD), normal Sympathetic activity, high-normal Sympathovagal Balance (SB = 2.59), indicating high-morbidity risk",
+    "breathing": "normal",
+    "standing": "Sympathetic Excess (SE, beta-adrenergic), (pre-clinical) Syncope risk; Standing BP was not recorded; possible masked Sympathetic Withdrawal (SW)",
+    "rhythmStrip": "unremarkable",
+    "symptom": "Chronic Fatigue",
+    "treatmentProse": [
+      "hydration (6-8 glasses water/day, fewer caffeinated/sugar/alcohol)",
+      "additional salt in diet",
+      "compression garments",
+      "Alpha-Lipoic Acid (ALA; 600 mg tid, time release)",
+      "Nortriptyline (<=10mg once daily) for PE",
+      "Midodrine (2.5mg tid) for SW",
+      "low-and-slow exercise, walking at 2 mph up to 40 min/day for 6 months"
+    ],
+    "retestMonths": 3,
+    "note": "Letter retest is 3 months; the summary report states 6 months. These two vendor documents legitimately differ and both provenances are preserved."
+  },
+  "engineContract": {
+    "_doc": "What THIS engine must and must not do with the Pare inputs.",
+    "fromAnsAlone": {
+      "spectralAvailable": false,
+      "bpAvailable": false,
+      "eiRatio": 1.22,
+      "valsalvaRatio": 1.49,
+      "thirtyFifteenRatio": 1.33,
+      "ectopicBeats": 1,
+      "therapyRecommendations": "none",
+      "note": "Raw .ans yields Ewing ratios + ectopy + identity + waveform only. LFa/RFa/SB/BP stay Not assessed."
+    },
+    "withVendorSummaryOcr": {
+      "identityReconciles": true,
+      "weightLbs": 200,
+      "bmi": 25.68,
+      "note": "Vendor summary supplies identity + anthropometrics + qualitative findings; it carries NO numeric spectral grid, so per-phase LFa/RFa/SB remain Not assessed even when the summary is attached."
+    },
+    "mustNever": [
+      "generate LFa/RFa/SB phase numbers from the .ans waveform",
+      "emit ALA / hydration / salt / Nortriptyline / Midodrine as automatic therapy recommendations",
+      "treat the Colombo letter's treatment prose as an engine recommendation",
+      "show an ATOM connection error as the primary clinical summary"
+    ]
+  }
+}

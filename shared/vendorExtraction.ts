@@ -18,6 +18,8 @@ export interface VendorFieldProvenance {
   confidence: number;
   /** Verbatim source substring the value was read from. */
   sourceText: string;
+  /** Originating PDF filename (set when multiple vendor documents are merged). */
+  sourceFile?: string;
 }
 
 export interface VendorField<T> {
@@ -149,6 +151,35 @@ export interface VendorPhaseTable {
 }
 
 /**
+ * A CATEGORICAL vendor finding lifted verbatim from a narrative report/letter
+ * (e.g. "Borderline low parasympathetic modulation (RFa)"). Categorical only —
+ * never converted into an invented number. Present on narrative-style vendor
+ * PDFs (Diagnostic Implication Summary, Colombo letter) that carry no numeric
+ * A–F grid.
+ */
+export interface VendorNarrativeFinding {
+  key: string;
+  phase: "deep_breathing_valsalva" | "baseline" | "stand" | "overall";
+  label: string;
+  classification:
+    | "normal" | "borderline-low" | "borderline-high"
+    | "low" | "high" | "high-normal" | "abnormal" | "present";
+  sourceText: string;
+  /** Originating PDF filename (set when multiple vendor documents are merged). */
+  sourceFile?: string;
+}
+
+/**
+ * A conflict detected while merging multiple vendor documents: the same field
+ * carried different values across documents. Surfaced to the UI — NEVER silently
+ * resolved by overwrite.
+ */
+export interface VendorMergeConflict {
+  field: string;
+  values: Array<{ value: string; sourceFile?: string }>;
+}
+
+/**
  * Vendor-reported orthostatic (baseline → stand) BP observation, derived ONLY
  * from vendor-printed values (Phase A baseline BP vs Phase F stand BP) when BOTH
  * are present. This is a VENDOR OBSERVATION for clinician context — explicitly
@@ -189,10 +220,28 @@ export interface VendorReportExtraction {
    * both baseline and stand BP.
    */
   orthostatic?: VendorOrthostaticObservation;
+  /**
+   * Categorical findings from a NARRATIVE vendor document (summary / letter),
+   * plus any numbers the vendor printed in prose (e.g. SB = 2.59). Present when
+   * the PDF states findings in prose rather than a numeric grid.
+   */
+  narrative?: {
+    findings: VendorNarrativeFinding[];
+    printedNumbers: Array<{ key: "SB" | "LFa" | "RFa"; value: number; sourceText: string }>;
+  };
   /** Mean confidence (0..1) across the fields actually read. */
   meanConfidence: number;
   /** Count of fields successfully extracted. */
   fieldCount: number;
   /** Notes for admin transparency. */
   notes: string[];
+  /**
+   * Set when this extraction is the MERGE of multiple vendor documents: the
+   * source filenames combined, and any field-level conflicts surfaced (never
+   * silently overwritten). Absent for a single-document extraction.
+   */
+  merged?: {
+    sourceFiles: string[];
+    conflicts: VendorMergeConflict[];
+  };
 }

@@ -102,6 +102,13 @@ export interface SubScore {
   contribution: number;
   drivers?: WellnessDriver[];
   notes: string[];
+  /**
+   * False when every component of this sub-score depends on unavailable
+   * proprietary spectral data (e.g. sympathovagal balance on a raw ECG-only
+   * file). Omitted/true means the sub-score reflects measured data. The UI
+   * renders "Not assessed" for unavailable sub-scores instead of a number.
+   */
+  available?: boolean;
 }
 
 export interface WellnessBreakdown {
@@ -205,17 +212,26 @@ export interface MultiParameterGraphical {
   lfaTrend: TimeSeries;
   /** RFa (parasympathetic) trend — rolling wavelet power. */
   rfaTrend: TimeSeries;
-  /** Per-phase LFa/RFa scatter points with age-banded normal regions. */
+  /**
+   * Per-phase LFa/RFa scatter points with age-banded normal regions.
+   *
+   * Every field is `number | null`: the proprietary spectral aggregates are not
+   * reproducible from a raw ECG-only .ans, so on those files (and for phases a
+   * paired vendor PDF did not supply) the value is `null` and the panel must
+   * render "Not assessed" — it is NEVER coerced to 0. Consumers MUST null-check
+   * before calling numeric methods (e.g. `.toFixed()`).
+   */
   scatter: {
-    baselineLFa: number;      // A
-    baselineRFa: number;      // A
-    dbRFa: number;            // B
-    valsalvaLFa: number;      // D
-    standLFa: number;         // F
-    standRFa: number;         // F
-    /** % change A→D for Valsalva and A→F for Stand RFa, for the Excess panel. */
-    rfaChangeValsalvaPct: number;
-    rfaChangeStandPct: number;
+    baselineLFa: number | null;      // A
+    baselineRFa: number | null;      // A
+    dbRFa: number | null;            // B
+    valsalvaLFa: number | null;      // D
+    standLFa: number | null;         // F
+    standRFa: number | null;         // F
+    /** % change A→D for Valsalva and A→F for Stand RFa, for the Excess panel.
+     *  null when either endpoint's RFa is unavailable. */
+    rfaChangeValsalvaPct: number | null;
+    rfaChangeStandPct: number | null;
   };
   /** Per-phase cardio-respiratory coupling windows (60 s each for Baseline/DB/Valsalva; 90 s for Stand). */
   coupling: CardioRespiratoryWindow[];
@@ -272,6 +288,16 @@ export interface ANSReport {
   indications?: Indication[];
   /** PR2 — Deterministic scoring + confidence summary (back-compat optional). */
   diagnosticSummary?: import("./diagnosticSummary").DiagnosticSummary;
+  /** Warnings when a paired vendor PDF's identity did NOT reconcile. */
+  vendorReconciliationWarnings?: string[];
+  /** Paired vendor-PDF identity reconciliation status (drives the matched badge). */
+  vendorReconciliation?: {
+    status: "matched" | "mismatch" | "malformed";
+    matchedName?: string;
+    matchedDate?: string;
+    checks?: { name: boolean | null; testDate: boolean | null; dob: boolean | null };
+    reason?: string;
+  };
 }
 
 export interface UploadResponse {

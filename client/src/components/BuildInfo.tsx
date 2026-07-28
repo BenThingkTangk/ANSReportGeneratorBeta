@@ -47,11 +47,22 @@ export function BuildInfo() {
 
   return (
     <div
+      data-testid="build-info-badge"
+      // Hidden on phones: even a collapsed fixed badge can visually overlay the
+      // lower balance visualization on small screens. It is a developer/deploy
+      // aid, so it is shown only from `sm` up where the fixed corner is clear of
+      // content. (Tailwind `hidden` sets display:none, overriding position:fixed.)
+      className="hidden sm:block"
       style={{
         position: "fixed",
-        bottom: 8,
-        right: 8,
-        zIndex: 50,
+        // Sit inside the safe area; on mobile the report reserves bottom padding
+        // (safe-area + 7rem) so the collapsed badge does not overlay content.
+        bottom: "calc(env(safe-area-inset-bottom, 0px) + 8px)",
+        right: "calc(env(safe-area-inset-right, 0px) + 8px)",
+        zIndex: 40,
+        // Collapsed: don't intercept taps over the content beneath it; the small
+        // hit target is opt-in via the inner span. Expanded: fully interactive.
+        pointerEvents: expanded ? "auto" : "none",
         fontFamily: "var(--ps-font-mono, ui-monospace, SFMono-Regular, monospace)",
         fontSize: 10,
         color: "var(--color-text-muted, #64748b)",
@@ -62,12 +73,15 @@ export function BuildInfo() {
         backdropFilter: "blur(6px)",
         cursor: "pointer",
         userSelect: "none",
-        maxWidth: 320,
+        maxWidth: "min(320px, calc(100vw - 24px))",
+        opacity: expanded ? 1 : 0.6,
       }}
       onClick={() => setExpanded(e => !e)}
       title="Click for full build/deploy info"
     >
-      build {clientSha}
+      {/* Re-enable pointer events on just the label so the collapsed badge stays
+          clickable without its container blocking taps on the content beneath. */}
+      <span style={{ pointerEvents: "auto" }}>build {clientSha}</span>
       {expanded && (
         <div style={{ marginTop: 6, lineHeight: 1.4 }}>
           <div>client: {clientSha} @ {clientTime.slice(0, 19)}</div>

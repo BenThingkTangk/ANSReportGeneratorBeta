@@ -15,6 +15,7 @@ import type { VendorReportExtraction } from "@shared/vendorExtraction";
 import { apiRequest } from "@/lib/queryClient";
 import { buildClinicianSynopsis } from "@shared/deterministicSynopsis";
 import { VendorFamiliarReport } from "./clinician/VendorFamiliarReport";
+import { VendorReconciliationBanner } from "./VendorReconciliationBanner";
 import { ClinicianHeader } from "./clinician/ClinicianHeader";
 import { ClinicianSynopsis } from "./clinician/ClinicianSynopsis";
 import { DataQualityPanel } from "./clinician/DataQualityPanel";
@@ -86,11 +87,17 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
   // view (what Dr. Colombo reads from); otherwise only the HumanOS view exists.
   const hasVendor = !!vendorExtraction && vendorExtraction.fieldCount > 0;
   const [view, setView] = useState<ClinicianView>(hasVendor ? "vendor" : "humanos");
+  // Vendor-reported findings threaded as a SEPARATE evidence class (verbatim,
+  // with provenance) so the summary can never say "nothing flagged" when an
+  // attached signed vendor report has findings.
+  const vendorFindings = vendorExtraction?.narrative
+    ? { findings: vendorExtraction.narrative.findings, printedNumbers: vendorExtraction.narrative.printedNumbers }
+    : undefined;
   // Clinician synopsis is built deterministically from the report's phase metrics
   // and Colombo patterns, so it renders instantly with no network dependency.
   // Optional AI enrichment (below) only ever swaps in richer prose on success.
   const [synopsis, setSynopsis] = useState<string>(
-    () => report.clinicianSynopsis ?? buildClinicianSynopsis(report),
+    () => report.clinicianSynopsis ?? buildClinicianSynopsis(report, vendorFindings),
   );
   // Non-blocking flag: the deterministic synopsis is already on screen; this
   // only drives a small "Enhancing with AI…" badge while the fetch runs.
@@ -114,7 +121,11 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
   };
 
   useEffect(() => {
-    if (!report.clinicianSynopsis) {
+    // Skip vendor-blind AI enrichment when a vendor report has findings, so the
+    // deterministic vendor-aware synopsis (with the verbatim vendor block) is
+    // never overwritten by /api/synopsis prose that omits it.
+    const hasVendorFindings = (vendorFindings?.findings?.length ?? 0) > 0 || (vendorFindings?.printedNumbers?.length ?? 0) > 0;
+    if (!report.clinicianSynopsis && !hasVendorFindings) {
       enrichSynopsis();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -127,6 +138,8 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
       data-testid="clinician-portal"
     >
       <ClinicianHeader report={report} />
+
+      <VendorReconciliationBanner report={report} />
 
       {hasVendor && (
         <div className="flex items-center justify-between gap-3 flex-wrap">

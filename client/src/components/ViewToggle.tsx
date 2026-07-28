@@ -19,7 +19,7 @@ export function ViewToggle({ role, onChange }: ViewToggleProps) {
           key={r}
           onClick={() => onChange(r)}
           data-testid={`toggle-${r}`}
-          className="relative px-4 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize"
+          className="relative px-4 min-h-11 rounded-lg text-xs font-medium transition-colors capitalize"
           style={{
             color: role === r ? "white" : "hsl(210 10% 50%)",
             zIndex: 1,

@@ -377,66 +377,92 @@ export function AutonomicBalanceGauge({
           </div>
         </div>
 
-        {/* Sympathetic % — left circle */}
-        <div
-          className="absolute text-center"
-          style={{ top: "44%", left: "20%", transform: "translate(-50%, -50%)" }}
-        >
-          <div className="ps-overline" style={{ color: "hsl(18 90% 70%)", fontSize: fs(10, 8) }}>
-            Sympathetic
-          </div>
+        {/* When the sympathetic/parasympathetic split is NOT assessed, a single
+            centered label is shown instead of three overlapping "Not assessed"
+            strings (which collided at left/center/right on narrow viewports). */}
+        {!balanceAssessed ? (
           <div
-            className="ps-text-mono font-bold leading-none mt-1"
-            style={{
-              fontSize: fs(32, 18),
-              color: "hsl(18 95% 72%)",
-              textShadow: "0 0 16px hsl(18 95% 60% / 0.65)",
-            }}
-            data-testid="abg-symp"
+            className="absolute text-center px-4"
+            style={{ top: "44%", left: "50%", transform: "translate(-50%, -50%)", maxWidth: "90%" }}
+            data-testid="abg-not-assessed"
           >
-            {balanceAssessed ? `${sPct}%` : "Not assessed"}
+            <div className="ps-overline" style={{ color: "hsl(195 30% 80%)", fontSize: fs(10, 9) }}>
+              Sympathetic / parasympathetic balance
+            </div>
+            <div
+              className="font-semibold mt-1"
+              style={{ color: "hsl(195 85% 90%)", fontSize: fs(16, 13), textShadow: "0 0 12px hsl(195 70% 70% / 0.4)" }}
+            >
+              Not assessed
+            </div>
+            <div className="mt-1 text-muted-foreground" style={{ fontSize: fs(10, 9) }}>
+              requires the vendor spectral report
+            </div>
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Sympathetic % — left circle */}
+            <div
+              className="absolute text-center"
+              style={{ top: "44%", left: "20%", transform: "translate(-50%, -50%)" }}
+            >
+              <div className="ps-overline" style={{ color: "hsl(18 90% 70%)", fontSize: fs(10, 8) }}>
+                Sympathetic
+              </div>
+              <div
+                className="ps-text-mono font-bold leading-none mt-1"
+                style={{
+                  fontSize: fs(32, 18),
+                  color: "hsl(18 95% 72%)",
+                  textShadow: "0 0 16px hsl(18 95% 60% / 0.65)",
+                }}
+                data-testid="abg-symp"
+              >
+                {`${sPct}%`}
+              </div>
+            </div>
 
-        {/* Balance Zone — center */}
-        <div
-          className="absolute text-center"
-          style={{ top: "44%", left: "50%", transform: "translate(-50%, -50%)" }}
-        >
-          <div
-            className="uppercase tracking-[0.22em] font-medium"
-            style={{ color: "hsl(195 30% 85%)", fontSize: fs(9, 8) }}
-          >
-            Balance
-          </div>
-          <div
-            className="font-semibold mt-0.5"
-            style={{ color: "hsl(195 85% 92%)", fontSize: fs(11, 9), textShadow: "0 0 12px hsl(195 70% 70% / 0.4)" }}
-          >
-            {balanceAssessed ? (balanceLabel ?? "Zone") : "Not assessed"}
-          </div>
-        </div>
+            {/* Balance Zone — center */}
+            <div
+              className="absolute text-center"
+              style={{ top: "44%", left: "50%", transform: "translate(-50%, -50%)" }}
+            >
+              <div
+                className="uppercase tracking-[0.22em] font-medium"
+                style={{ color: "hsl(195 30% 85%)", fontSize: fs(9, 8) }}
+              >
+                Balance
+              </div>
+              <div
+                className="font-semibold mt-0.5"
+                style={{ color: "hsl(195 85% 92%)", fontSize: fs(11, 9), textShadow: "0 0 12px hsl(195 70% 70% / 0.4)" }}
+              >
+                {balanceLabel ?? "Zone"}
+              </div>
+            </div>
 
-        {/* Parasympathetic % — right circle */}
-        <div
-          className="absolute text-center"
-          style={{ top: "44%", left: "80%", transform: "translate(-50%, -50%)" }}
-        >
-          <div className="ps-overline" style={{ color: "hsl(185 85% 70%)", fontSize: fs(10, 8) }}>
-            Parasympathetic
-          </div>
-          <div
-            className="ps-text-mono font-bold leading-none mt-1"
-            style={{
-              fontSize: fs(32, 18),
-              color: "hsl(187 95% 75%)",
-              textShadow: "0 0 16px hsl(185 90% 60% / 0.65)",
-            }}
-            data-testid="abg-parasym"
-          >
-            {balanceAssessed ? `${pPct}%` : "Not assessed"}
-          </div>
-        </div>
+            {/* Parasympathetic % — right circle */}
+            <div
+              className="absolute text-center"
+              style={{ top: "44%", left: "80%", transform: "translate(-50%, -50%)" }}
+            >
+              <div className="ps-overline" style={{ color: "hsl(185 85% 70%)", fontSize: fs(10, 8) }}>
+                Parasympathetic
+              </div>
+              <div
+                className="ps-text-mono font-bold leading-none mt-1"
+                style={{
+                  fontSize: fs(32, 18),
+                  color: "hsl(187 95% 75%)",
+                  textShadow: "0 0 16px hsl(185 90% 60% / 0.65)",
+                }}
+                data-testid="abg-parasym"
+              >
+                {`${pPct}%`}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* SDNN — bottom-left. Fixed-width, centered, nowrap box so the value
             (e.g. "60.1 ms") never clips past the gauge edge. */}

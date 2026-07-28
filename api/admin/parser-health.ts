@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { parseStudy } from "../_ans/parseStudy.js";
 import { computeDiagnosticSummary } from "../_ans/scoring/index.js";
+import { detectChunkSchema } from "../_ans/knowledgeSchema.js";
+import { computeRagStatus } from "../_ans/ragStatus.js";
 import { PARSER_VERSION } from "../../shared/ansStudy.js";
 import {
   createSupabaseFromRequest,
@@ -91,6 +93,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ---- Knowledge base reachability --------------------------------------
     const knowledge: any = { ok: true };
     try {
+      // Detect the chunk schema first so no count query references a column
+      // that may not exist (legacy DB without migration 0005).
+      const schema = await detectChunkSchema(supabase);
       const [{ count: sourceCount }, { count: activeCount }, { count: chunkCount }] =
         await Promise.all([
           supabase.from("ans_knowledge_sources").select("id", { count: "exact", head: true }),
@@ -101,9 +106,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .eq("review_status", "approved"),
           supabase.from("ans_knowledge_chunks").select("id", { count: "exact", head: true }),
         ]);
+
+      // Metadata-only placeholder chunks (section='metadata') are NOT full-text
+      // RAG. Count them separately when the section column exists so health can
+      // honestly distinguish "indexed from source documents" from "metadata
+      // placeholders only". On the legacy schema we cannot tell them apart.
+      let metadataChunks: number | null = null;
+      if (schema.hasSection) {
+        const { count } = await supabase
+          .from("ans_knowledge_chunks")
+          .select("id", { count: "exact", head: true })
+          .eq("section", "metadata");
+        metadataChunks = count ?? 0;
+      }
+
+      const total = chunkCount ?? 0;
+      const rag = computeRagStatus({
+        totalSources: sourceCount ?? 0,
+        totalChunks: total,
+        metadataOnlyChunks: metadataChunks,
+      });
+
       knowledge.totalSources = sourceCount ?? 0;
       knowledge.activeApprovedSources = activeCount ?? 0;
-      knowledge.totalChunks = chunkCount ?? 0;
+      knowledge.totalChunks = total;
+      knowledge.metadataOnlyChunks = metadataChunks;
+      knowledge.fullTextChunks = rag.fullTextChunks;
+      knowledge.chunkSchemaVersion = schema.schemaVersion;
+      knowledge.hasPageColumn = schema.hasPage;
+      knowledge.hasSectionColumn = schema.hasSection;
+      knowledge.ragFunctional = rag.ragFunctional;
+      knowledge.ragStatus = rag.ragStatus;
+      if (rag.activation) knowledge.activation = rag.activation;
     } catch (e: any) {
       knowledge.ok = false;
       knowledge.detail = e?.message ?? "knowledge count failed";

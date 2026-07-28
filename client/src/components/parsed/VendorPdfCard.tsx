@@ -31,6 +31,7 @@ interface VendorResponse {
   looksLikeVendorReport?: boolean;
   metrics?: VendorMetric[];
   metricCount?: number;
+  findingCount?: number;
   extraction?: VendorReportExtraction;
   note?: string;
   error?: string;
@@ -44,42 +45,106 @@ interface Props {
     extraction: VendorReportExtraction,
     meta: { source?: "ocr" | "text"; ocrConfidence?: number; fileName: string },
   ) => void;
+  /** True while ≥1 selected PDF is still being read/OCR'd. Lets the parent
+   *  disable "Generate Report" until every document has finished so the report
+   *  is never generated on a half-merged vendor state. */
+  onProcessingChange?: (processing: boolean) => void;
 }
 
-export function VendorPdfCard({ onIngested, onExtraction }: Props) {
+/**
+ * Does an extraction carry ANY vendor-reported content worth merging?
+ *
+ * The signed categorical SUMMARY yields tabular identity fields (fieldCount>0),
+ * but Dr. Colombo's consultation LETTER is a narrative text-layer PDF with NO
+ * grid — its Sympathovagal Balance (SB=2.59) lives ONLY in
+ * narrative.printedNumbers. A `fieldCount > 0` gate therefore silently dropped
+ * the letter, so the merged state never contained SB. Accept a document when it
+ * has ANY tabular field OR any narrative finding OR any prose-printed number.
+ */
+function extractionHasContent(x: VendorReportExtraction | undefined): boolean {
+  if (!x) return false;
+  return (
+    (x.fieldCount ?? 0) > 0 ||
+    (x.narrative?.findings?.length ?? 0) > 0 ||
+    (x.narrative?.printedNumbers?.length ?? 0) > 0
+  );
+}
+
+/** Per-document processing status, shown so the clinician sees each file land. */
+interface DocStatus {
+  fileName: string;
+  state: "processing" | "done" | "empty" | "error";
+  source?: "text" | "ocr" | "none";
+  metricCount?: number;
+  findingCount?: number;
+  note?: string;
+}
+
+export function VendorPdfCard({ onIngested, onExtraction, onProcessingChange }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [result, setResult] = useState<VendorResponse | null>(null);
+  const [docStatuses, setDocStatuses] = useState<DocStatus[]>([]);
 
-  const handleFile = useCallback(async (file: File) => {
+  const handleOneFile = useCallback(async (file: File): Promise<{ json: VendorResponse; doc: DocStatus }> => {
+    const form = new FormData();
+    form.append("vendorPdf", file);
+    const res = await fetch("/api/upload-vendor", { method: "POST", body: form });
+    const json: VendorResponse = await res.json();
+    // Emit per-file extraction + metrics so the parent can cumulatively merge
+    // multiple documents (letter + signed report) rather than replace. Emit on
+    // ANY vendor content, not just tabular fieldCount — see extractionHasContent.
+    let emitted = false;
+    if (json.success && extractionHasContent(json.extraction)) {
+      onExtraction?.(json.extraction!, {
+        source: json.source === "ocr" ? "ocr" : json.source === "text" ? "text" : undefined,
+        ocrConfidence: json.ocrConfidence,
+        fileName: file.name,
+      });
+      emitted = true;
+    }
+    if (json.success && json.metrics && json.metrics.length > 0) {
+      onIngested?.(json.metrics);
+    }
+    const doc: DocStatus = {
+      fileName: file.name,
+      state: !json.success ? "error" : emitted ? "done" : "empty",
+      source: json.source,
+      metricCount: json.metricCount ?? json.metrics?.length ?? 0,
+      findingCount: json.findingCount ?? json.extraction?.narrative?.findings?.length ?? 0,
+      note: json.note ?? json.error,
+    };
+    return { json, doc };
+  }, [onIngested, onExtraction]);
+
+  const handleFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
     setStatus("loading");
     setResult(null);
+    onProcessingChange?.(true);
+    // Seed a "processing" row per file so the clinician sees every selected
+    // document immediately (not just the last one to complete).
+    setDocStatuses(files.map((f) => ({ fileName: f.name, state: "processing" as const })));
+    let last: VendorResponse | null = null;
     try {
-      const form = new FormData();
-      form.append("vendorPdf", file);
-      const res = await fetch("/api/upload-vendor", { method: "POST", body: form });
-      const json: VendorResponse = await res.json();
-      setResult(json);
-      if (json.success && json.extraction && json.extraction.fieldCount > 0) {
-        onExtraction?.(json.extraction, {
-          source: json.source === "ocr" ? "ocr" : json.source === "text" ? "text" : undefined,
-          ocrConfidence: json.ocrConfidence,
-          fileName: file.name,
-        });
+      // Process sequentially so the parent's cumulative ref-merge is
+      // deterministic and no late completion can clobber an earlier one.
+      for (const f of files) {
+        const { json, doc } = await handleOneFile(f);
+        last = json;
+        setDocStatuses((prev) => prev.map((d) => (d.fileName === doc.fileName ? doc : d)));
       }
-      if (json.success && json.metrics && json.metrics.length > 0) {
-        onIngested?.(json.metrics);
-        setStatus("done");
-      } else {
-        // Success:true with 0 metrics (e.g. OCR could not resolve anything) is
-        // not an error — it's an honest "nothing to ingest" outcome.
-        setStatus(json.success ? "done" : "error");
-      }
+      setResult(last);
+      setStatus(last?.success ? "done" : "error");
     } catch (e: any) {
       setResult({ success: false, error: e?.message || "Upload failed" });
       setStatus("error");
+      setDocStatuses((prev) => prev.map((d) => (d.state === "processing" ? { ...d, state: "error", note: e?.message } : d)));
+    } finally {
+      // Only clear the processing gate once EVERY file has settled.
+      onProcessingChange?.(false);
     }
-  }, [onIngested, onExtraction]);
+  }, [handleOneFile, onProcessingChange]);
 
   return (
     <div
@@ -101,27 +166,73 @@ export function VendorPdfCard({ onIngested, onExtraction }: Props) {
         values the scan can't resolve stay "not assessed" rather than being guessed.
       </p>
 
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        disabled={status === "loading"}
-        className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs uppercase tracking-[0.14em] border border-border/50 hover:bg-card/80 disabled:opacity-50 transition-colors"
+      {/* Accessible file control: a real <label> wraps the button styling and
+          points at a focusable sr-only input (not display:none), so it is
+          keyboard-operable, in the a11y tree, and automatable. */}
+      <label
+        htmlFor="vendor-pdf-input"
+        className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs uppercase tracking-[0.14em] border border-border/50 hover:bg-card/80 transition-colors cursor-pointer ${status === "loading" ? "opacity-50 pointer-events-none" : ""}`}
         data-testid="vendor-pdf-select"
+        tabIndex={0}
+        role="button"
+        aria-label="Attach paired vendor PDF report(s)"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
       >
         {status === "loading" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
-        {status === "loading" ? "Reading PDF…" : "Attach vendor PDF"}
-      </button>
+        {status === "loading" ? "Reading PDF…" : "Attach vendor PDF(s)"}
+      </label>
       <input
         ref={inputRef}
+        id="vendor-pdf-input"
+        name="vendorPdf"
         type="file"
         accept="application/pdf,.pdf"
-        className="hidden"
+        multiple
+        className="sr-only"
+        disabled={status === "loading"}
         data-testid="vendor-pdf-input"
         onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void handleFile(f);
+          const files = Array.from(e.target.files ?? []);
+          if (files.length) void handleFiles(files);
+          // Reset so re-selecting the same file(s) re-triggers change.
+          e.target.value = "";
         }}
       />
+
+      {/* Per-document status — one row per selected PDF, so a single change
+          event with the letter + report shows BOTH landing (not just the last
+          one). Each row reflects text/OCR source and what was read. */}
+      {docStatuses.length > 0 && (
+        <ul className="mt-4 space-y-1.5" data-testid="vendor-pdf-doc-statuses">
+          {docStatuses.map((d) => (
+            <li
+              key={d.fileName}
+              className="flex items-start gap-2 text-xs"
+              data-testid={`vendor-pdf-doc-${d.state}`}
+            >
+              {d.state === "processing" && <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-300 shrink-0 mt-0.5" />}
+              {d.state === "done" && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />}
+              {(d.state === "empty" || d.state === "error") && <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />}
+              <span className="min-w-0">
+                <span className="font-medium text-foreground/90 break-all">{d.fileName}</span>
+                {d.state === "processing" && <span className="text-muted-foreground"> — reading…</span>}
+                {d.state === "done" && (
+                  <span className="text-muted-foreground">
+                    {" "}— {d.source === "ocr" ? "OCR" : "text layer"} · {d.metricCount ?? 0} metric(s) · {d.findingCount ?? 0} finding(s)
+                  </span>
+                )}
+                {d.state === "empty" && <span className="text-amber-400/90"> — nothing ingested</span>}
+                {d.state === "error" && <span className="text-amber-400/90"> — {d.note || "failed"}</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {result && status === "done" && result.metrics && result.metrics.length > 0 && (
         <div className="mt-4" data-testid="vendor-pdf-metrics">

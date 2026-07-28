@@ -1,9 +1,11 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   getActiveKnowledgeSources,
+  getKnowledgeCorpusStatus,
   buildKnowledgePromptSection,
   toCitations,
 } from "./_knowledgeCache.js";
+import { rankKnowledgeSources } from "./_knowledgeRetrieval.js";
 
 /**
  * /api/ask-atom — Colombo P&S grounded chat (Path B)
@@ -46,6 +48,22 @@ function fnv1a(str: string): string {
   return h.toString(16);
 }
 
+/**
+ * Remove literature citation markers from patient-facing prose. Strips inline
+ * bracket refs like "[1]", "[2, 3]", "[1-15]" and a trailing "Sources:"/
+ * "References:" list. Patient answers are grounded in the patient's own report,
+ * not external literature, so these must never appear.
+ */
+export function stripCitationMarkers(text: string): string {
+  return text
+    // inline [1], [2,3], [1-15], [1][2]
+    .replace(/\s?\[\d+(?:\s*[-,]\s*\d+)*\]/g, "")
+    // a trailing Sources/References/Citations block to end of string
+    .replace(/\n+\s*(?:sources|references|citations)\s*:[\s\S]*$/i, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 function cacheGet(key: string): CachedAnswer | null {
   const hit = answerCache.get(key);
   if (!hit) return null;
@@ -65,6 +83,145 @@ function cacheSet(key: string, value: Omit<CachedAnswer, "expires">): void {
     if (oldest !== undefined) answerCache.delete(oldest);
   }
   answerCache.set(key, { ...value, expires: Date.now() + CACHE_TTL_MS });
+}
+
+/**
+ * Stream a Sonar completion to the client as Server-Sent Events.
+ *
+ * Events:
+ *   event: delta   data: {"text": "<token chunk>"}
+ *   event: done    data: {"message": "<full text>", "webCitations": [...], "citations": [...]}
+ *   event: error   data: {"error": "<message>"}
+ *
+ * The full answer is assembled server-side and written to the response cache on
+ * completion, so a subsequent non-streaming request replays instantly. The
+ * deterministic grounding/gating is unchanged — only the transport differs.
+ */
+async function streamSonar(opts: {
+  apiKey: string;
+  conversation: Array<{ role: string; content: string }>;
+  knowledgeCitations: unknown[];
+  grounding?: unknown;
+  patientMode?: boolean;
+  cacheKey: string;
+  res: VercelResponse;
+}): Promise<void> {
+  const { apiKey, conversation, knowledgeCitations, grounding, patientMode, cacheKey, res } = opts;
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  // Call upstream FIRST, before committing SSE headers/200. If it fails at the
+  // start, we can still return an honest non-200 JSON error (the reviewer's
+  // point: an upstream failure must not masquerade as a 200 SSE success).
+  let r: Response;
+  try {
+    r = await fetch(SONAR_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "sonar-pro",
+        messages: conversation,
+        temperature: 0.3,
+        max_tokens: 1200,
+        stream: true,
+      }),
+    });
+  } catch (err: any) {
+    res.status(502).json({ success: false, error: err?.message || "Upstream request failed" });
+    return;
+  }
+
+  if (!r.ok || !r.body) {
+    const text = r.ok ? "no response body" : await r.text();
+    // Headers not yet committed → surface a real error status, not a 200 stream.
+    res.status(502).json({
+      success: false,
+      error: `Sonar error ${r.status}: ${text.slice(0, 300)}`,
+    });
+    return;
+  }
+
+  // Upstream is good: NOW commit the SSE response (implicitly 200) and stream.
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+
+  try {
+    let full = "";
+    let emitted = ""; // for patient mode: how much sanitized text we've sent
+    let webCitations: unknown[] = [];
+    let buffer = "";
+    const decoder = new TextDecoder();
+    // Node 20 fetch bodies are async-iterable.
+    for await (const chunk of r.body as any) {
+      buffer += decoder.decode(chunk as Uint8Array, { stream: true });
+      // SSE frames from Perplexity are separated by double newlines.
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.split("\n").find((l) => l.startsWith("data:"));
+        if (!line) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const j = JSON.parse(payload);
+          const delta = j?.choices?.[0]?.delta?.content ?? "";
+          if (delta) {
+            full += delta;
+            if (patientMode) {
+              // Emit only the sanitized suffix so bracket citations never reach
+              // the patient client, even mid-stream. (A trailing '[' is held
+              // back until the next chunk resolves whether it's a citation.)
+              const safeFull = stripCitationMarkers(full);
+              const pendingBracket = /\[[\d\s,–-]*$/.test(safeFull);
+              const upTo = pendingBracket ? safeFull.replace(/\[[\d\s,–-]*$/, "") : safeFull;
+              if (upTo.length > emitted.length) {
+                send("delta", { text: upTo.slice(emitted.length) });
+                emitted = upTo;
+              }
+            } else {
+              send("delta", { text: delta });
+            }
+          }
+          const cites = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean);
+          if (Array.isArray(cites) && cites.length) webCitations = cites;
+        } catch {
+          /* ignore non-JSON keep-alive frames */
+        }
+      }
+    }
+
+    const rawMessage = full.trim();
+    // Patient mode: strip citation markers + suppress the web-citation list.
+    const message = patientMode ? stripCitationMarkers(rawMessage) : rawMessage;
+    const outWebCitations = patientMode ? [] : webCitations;
+    if (message) cacheSet(cacheKey, { message, webCitations: outWebCitations });
+    // Mid-stream truncation with no content is an explicit error event, not a
+    // silent empty success — the client must distinguish this from a real answer.
+    if (!message) {
+      send("error", { error: "Upstream stream ended before any content was received." });
+      res.end();
+      return;
+    }
+    // In patient mode emit any remaining sanitized tail so the final rendered
+    // text equals `message` even if the client concatenated deltas.
+    if (patientMode && message.length > emitted.length) {
+      send("delta", { text: message.slice(emitted.length) });
+    }
+    send("done", { message, webCitations: outWebCitations, citations: knowledgeCitations, grounding });
+    res.end();
+    return;
+  } catch (err: any) {
+    // Headers already sent → we cannot change the status now; emit an explicit
+    // error event (never a done event) so the client treats it as a failure.
+    send("error", { error: err?.message || "stream failed mid-response" });
+    res.end();
+    return;
+  }
 }
 
 export const SYSTEM_PROMPT = `You are Atom, a Colombo-grounded autonomic-health assistant powered by Perplexity Sonar.
@@ -90,9 +247,27 @@ Data assessability & provenance rules (HIGHEST PRIORITY — these override every
 - Blocked claims (listed as blocked for insufficient data) are explicitly NOT findings. Report each as "not assessed because required inputs were missing" — never as present or absent.
 - If the metrics needed to answer a question are Not assessed, say so plainly and recommend an adequate repeat recording instead of interpreting placeholder values.
 
-Audience mode (the PATIENT CONTEXT block states the viewer role — "clinician view" or "patient view"):
-- CLINICIAN VIEW: be scientifically deep. Use the full Colombo methodology — name the specific phase responses, LFa/RFa/SB values and their bpm² units, Ewing battery ratios and thresholds, the phenotype classifications (PE, SE, SW, OD, POTS, VVS, AAN, CAN) with their defining criteria, and the graded treatment protocol including doses and titration when the underlying metrics are assessed. Do not water this down; the clinician needs the mechanism and the numbers.
-- PATIENT VIEW: simplify the language WITHOUT omitting meaning. Translate every assessed finding into plain terms (e.g. "rest-and-digest" for parasympathetic, "fight-or-flight" for sympathetic) and connect it to how the patient may feel, but keep the actual finding, its significance, and the recommended direction of care. Simplify wording, never delete substance.
+Evidence-grounding rules (HIGHEST PRIORITY — apply whenever a "KNOWLEDGE LIBRARY STATUS — METADATA ONLY" block is present):
+- The private knowledge corpus then has ZERO retrieved full-text passages. You must NOT cite the reference titles with bracketed numbers, and you must NOT state any quantitative diagnostic performance (sensitivity, specificity, PPV/NPV, AUC), prognosis, near-term risk/"lower risk", morbidity/mortality figures, or treatment-efficacy claims as if sourced from that corpus.
+- Ground answers in (a) the PATIENT REPORT facts below, and (b) clearly-labeled general physiology stated as such. Any external claim MUST be labeled "External (web)" and carry a real, resolvable URL; if you cannot provide a URL, do not make the claim.
+- Prefer "I can't cite specific studies here because the knowledge base has no indexed full-text; based on your report …" over an unsupported cited statistic. Being explicit about the limitation is required, not optional.
+
+Audience mode (the PATIENT CONTEXT block states the viewer role — "clinician view" or "patient view"). Mode tone is STRICTLY isolated — never let clinician phrasing leak into a patient answer:
+
+- PATIENT VIEW (address the patient directly as "you"/"your", by the first name in the context):
+  • LEAD with THIS patient's actual measured values from the PATIENT CONTEXT (e.g. "Your E/I ratio was 1.22"), then explain in plain language what that means for them. Do NOT open with generic textbook thresholds or a definition.
+  • Speak to the patient, never about them: use "you"/"your". NEVER write "the patient", "your patient's", "this patient", "map your patient's ratios", or any phrasing addressed to a clinician.
+  • Do NOT diagnose OR exclude conditions. Never say a result "argues against"/"rules out"/"is consistent with" cardiovascular autonomic neuropathy (CAN/AAN), POTS, or any named disease. Say what was measured and that interpretation is for their clinician.
+  • Do NOT give prognosis, risk levels, sensitivity/specificity, or survival/morbidity statements.
+  • Plain terms only: "rest-and-digest" (parasympathetic), "fight-or-flight" (sympathetic), "calming reflex" (cardiovagal). You may still name a ratio and its number, but explain it.
+  • State the limitations plainly: the sympathetic/parasympathetic spectral split (LFa/RFa/SB) and blood pressure were NOT captured in this recording, so you cannot speak to them.
+  • Do NOT include bracketed reference markers ([1], [2], …) or a citations/sources list. Patient answers are grounded in the patient's own report, not literature.
+
+- CLINICIAN VIEW: be scientifically deep. Use the full Colombo methodology — specific phase responses, LFa/RFa/SB values and bpm² units, Ewing battery ratios and thresholds, phenotype classifications (PE, SE, SW, OD, POTS, VVS, AAN, CAN) with defining criteria, and the graded treatment protocol with doses/titration WHEN the underlying metrics are assessed. Additionally you MUST clearly separate three grounding tiers:
+  • MEASURED (report): facts from this patient's report/PATIENT CONTEXT — label them as measured.
+  • EXTERNAL (web): any general-literature claim must be labeled "External (web)" and carry a real, resolvable URL; without a URL, do not make the claim.
+  • PRIVATE CORPUS: state that the private knowledge base has no indexed full-text chunks, so nothing here is RAG-grounded.
+
 - In BOTH modes the assessability/provenance rules below are absolute: only speak to what was actually measured.
 
 When analyzing a patient's ANS state, structure your response in three sections (only on the first message or when the user asks for an interpretation; skip for follow-up clarifications):
@@ -325,14 +500,36 @@ export function buildPatientContext(report: any, viewerRole: string): string {
   const assessability = buildAssessabilitySection(report);
   const overall = report.overallImpression || "(none)";
   const contraindList = (report.contraindications ?? []).join("; ") || "None flagged.";
+  const firstName = (pd.firstName ?? "").trim() || name;
+
+  // Explicit measured Ewing (cardiovagal) ratios — THIS patient's actual values
+  // with their normal reference. These are ECG-derived and always present, so
+  // answers about the ratios must lead with these numbers rather than generic
+  // textbook thresholds.
+  const ratios = report.ratios ?? {};
+  const ratioLine = (label: string, r: any): string | null => {
+    if (!r || typeof r.value !== "number") return null;
+    const cls = r.classification?.label ?? r.classification?.severity ?? "";
+    return `- ${label}: ${r.value} (normal ${r.normal ?? "?"})${cls ? ` — ${cls}` : ""}`;
+  };
+  const ratioLines = [
+    ratioLine("E/I ratio (deep-breathing)", ratios.eiRatio),
+    ratioLine("Valsalva ratio", ratios.valsalvaRatio),
+    ratioLine("30:15 ratio (standing)", ratios.thirtyFifteenRatio),
+  ].filter(Boolean);
+  const ratiosBlock = ratioLines.length
+    ? `Measured cardiovagal (Ewing) ratios for ${firstName} — ECG-derived, actually measured:\n${ratioLines.join("\n")}`
+    : "Measured cardiovagal (Ewing) ratios: none available.";
 
   return `--------------------------------------------------
 PATIENT CONTEXT (${viewerRole} view)
 --------------------------------------------------
-Patient: ${name} | Age: ${age} | Sex: ${sex} | BMI: ${bmi}
+Patient: ${name} | First name (address the patient by this in patient view): ${firstName} | Age: ${age} | Sex: ${sex} | BMI: ${bmi}
 Physician: ${physician}
 Medications: ${meds}
 Reported Symptoms: ${symptoms}
+
+${ratiosBlock}
 
 Event Mean Data (a cell reading "${NOT_ASSESSED}", or any 0 / blank spectral value, means the metric was NOT captured — never treat it as a real measurement):
 ${meanTable}
@@ -383,10 +580,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Inject active knowledge sources into system prompt
-    const knowledgeSources = await getActiveKnowledgeSources();
-    const knowledgeSection = buildKnowledgePromptSection(knowledgeSources);
-    const knowledgeCitations = toCitations(knowledgeSources);
+    // Inject active knowledge sources into the system prompt, RANKED BY
+    // RELEVANCE to the latest user question and capped at the 6 most relevant,
+    // versus the previous "first 12 in year order for every question". This is a
+    // deliberate focus/breadth trade: the set is smaller (faster, less noise)
+    // and question-specific. When the question has no searchable terms the
+    // ranker falls back to the first 6 in the original order. (To keep the old
+    // breadth exactly while still ranking, raise the cap below to 12.)
+    const [allKnowledgeSources, corpus] = await Promise.all([
+      getActiveKnowledgeSources(),
+      getKnowledgeCorpusStatus(),
+    ]);
+    const latestUserQuery =
+      [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "";
+    const knowledgeSources = rankKnowledgeSources(
+      allKnowledgeSources,
+      latestUserQuery,
+      6,
+    );
+    // When there is no retrievable corpus (0 chunks), the source rows are
+    // metadata only — the prompt section reframes them as background reading and
+    // forbids bracketed citations / diagnostic-performance / prognosis claims.
+    const knowledgeSection = buildKnowledgePromptSection(knowledgeSources, corpus.ragFunctional);
+    // Citations we return to the client: real RAG citations only when the corpus
+    // is functional; otherwise none (report-only/external grounding).
+    const knowledgeCitations = corpus.ragFunctional ? toCitations(knowledgeSources) : [];
+    const grounding = corpus.ragFunctional
+      ? { mode: "rag" as const, chunks: corpus.totalChunks, activeSources: corpus.activeSources }
+      : { mode: "report_only" as const, chunks: 0, activeSources: corpus.activeSources,
+          note: "Private knowledge corpus has no full-text chunks; answer is grounded in the report and clearly-labeled external evidence, not RAG." };
 
     const systemContent = [
       SYSTEM_PROMPT,
@@ -408,7 +630,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         message: cached.message,
         webCitations: cached.webCitations,
         citations: knowledgeCitations,
+        grounding,
         cached: true,
+      });
+    }
+
+    // --- Opt-in true server streaming (SSE) ------------------------------------
+    // Enabled when the client sends { stream: true } (or Accept: text/event-stream).
+    // Emits token deltas as they arrive so time-to-first-token drops from
+    // "whole completion" to the first chunk. The default path (below) stays a
+    // single JSON response, so existing clients are unaffected. Grounding,
+    // gating and citations are identical — only the transport differs. Streamed
+    // responses are still written to the response cache on completion.
+    const wantsStream =
+      body?.stream === true ||
+      String(req.headers["accept"] || "").includes("text/event-stream");
+    if (wantsStream) {
+      return await streamSonar({
+        apiKey,
+        conversation,
+        knowledgeCitations,
+        grounding,
+        patientMode: viewerRole === "patient",
+        cacheKey,
+        res,
       });
     }
 
@@ -431,9 +676,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).json({ success: false, error: `Sonar error ${r.status}: ${text.slice(0, 300)}` });
     }
     const j = (await r.json()) as any;
-    const message = j?.choices?.[0]?.message?.content?.trim() || "";
+    const rawMessage = j?.choices?.[0]?.message?.content?.trim() || "";
     // Perplexity web citations renamed to webCitations to disambiguate from internal knowledge citations
-    const webCitations = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean) || [];
+    const rawWebCitations = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean) || [];
+    // Patient mode must never expose literature citations: strip bracket markers
+    // from the prose and drop the web-citation list. Clinician mode keeps them.
+    const message = viewerRole === "patient" ? stripCitationMarkers(rawMessage) : rawMessage;
+    const webCitations = viewerRole === "patient" ? [] : rawWebCitations;
 
     // Only cache non-empty answers so a transient blank never sticks.
     if (message) cacheSet(cacheKey, { message, webCitations });
@@ -443,6 +692,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       message,
       webCitations,
       citations: knowledgeCitations,
+      grounding,
       cached: false,
     });
   } catch (err: any) {

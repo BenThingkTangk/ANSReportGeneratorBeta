@@ -168,6 +168,14 @@ export function buildFieldRegex(s: FieldSynonym, label: string): RegExp {
 export const NUMBER_PATTERN = "-?\\d+(?:\\.\\d+)?";
 const INT_PATTERN = "\\d+";
 const TEXT_PATTERN = "[^\\r\\n;]+?";
+// Greedy printable-label value: a run of human-readable characters (letters,
+// digits, spaces, and common punctuation), stopping at control/binary bytes or
+// a line break. Used for free-text fields like Procedure so we capture the
+// whole label ("ANS Autonomic Study") instead of a single non-greedy char, and
+// so binary padding after a bare marker yields no printable value.
+// A single token may contain interior single spaces, but 2+ spaces (or a tab)
+// mark the next header field, so we stop there rather than swallowing it.
+const LABEL_TEXT_PATTERN = "[A-Za-z0-9](?:[A-Za-z0-9,.&()/+-]|[ ](?![ ]))*";
 
 export const FIELD_SYNONYMS: Record<string, FieldSynonym> = {
   // ---- Patient identifiers --------------------------------------------------
@@ -219,7 +227,7 @@ export const FIELD_SYNONYMS: Record<string, FieldSynonym> = {
   PROCEDURE: {
     key: "fileMetadata.procedureType",
     labels: ["Procedure", "Protocol", "Test Type"],
-    valuePattern: TEXT_PATTERN,
+    valuePattern: LABEL_TEXT_PATTERN,
   },
 
   // ---- Anthropometrics ------------------------------------------------------
