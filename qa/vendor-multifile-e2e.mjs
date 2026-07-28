@@ -102,6 +102,36 @@ try {
   ok(/sympathetic|pre-syncope|light-headed/i.test(patText), "patient copy names the standing/pre-syncope finding");
   ok(!/No specific lifestyle interventions flagged/i.test(patText),
     "Path Forward does not use the misleading empty-state copy");
+
+  // 7. Patient ATOM must send the attached vendor evidence as grounding, so
+  //    "What did the attached vendor reports find?" can be answered from the
+  //    vendor block instead of only the deterministic cardiovagal domain.
+  //    We capture the outgoing request body (no model call is needed).
+  let atomBody = null;
+  await page.route("**/api/ask-atom", async (route) => {
+    try { atomBody = JSON.parse(route.request().postData() || "{}"); } catch { /* ignore */ }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ success: true, message: "stubbed", grounding: { mode: "report_only", chunks: 0 } }),
+    });
+  });
+  await page.click('[data-testid="ask-atom-button-mobile"]');
+  await page.waitForSelector('[data-testid="ask-atom-input"]', { timeout: 20000 });
+  await page.fill('[data-testid="ask-atom-input"]', "What did the attached vendor reports find?");
+  await page.click('[data-testid="ask-atom-send"]');
+  await page.waitForFunction(() => true, { timeout: 1000 }).catch(() => {});
+  for (let i = 0; i < 40 && !atomBody; i++) await page.waitForTimeout(250);
+
+  ok(!!atomBody, "patient ATOM request was captured");
+  const findings = atomBody?.vendorExtraction?.narrative?.findings ?? [];
+  const keys = findings.map((f) => f.key);
+  ok(findings.length >= 9, `ATOM request carries the vendor findings (n=${findings.length})`);
+  ok(keys.includes("stand.presyncope"), "ATOM grounding includes possible pre-syncope");
+  ok(keys.includes("db.hr_change"), "ATOM grounding includes abnormal baseline→DB HR change");
+  ok(keys.includes("stand.sympathetic"), "ATOM grounding includes high standing sympathetic response");
+  const sb = (atomBody?.vendorExtraction?.narrative?.printedNumbers ?? []).find((n) => n.key === "SB");
+  ok(sb && Math.abs(sb.value - 2.59) < 0.005, "ATOM grounding includes the vendor-printed SB 2.59");
 } catch (e) {
   fails.push(`exception: ${e.message}`);
   console.log("✗ exception:", e.message);

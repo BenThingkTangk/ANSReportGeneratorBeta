@@ -143,7 +143,13 @@ export function ReportDashboard({ report, ansStudy, vendorExtraction, vendorSour
       {/* Atom chatbot (blue logo) — adapts to viewer role. Open state is
           controlled here so the mobile header trigger and the tablet/desktop
           floating launcher share one drawer. */}
-      <AskAtom report={report} viewerRole={role} open={askOpen} onOpenChange={setAskOpen} />
+      <AskAtom
+        report={report}
+        vendorExtraction={vendorExtraction}
+        viewerRole={role}
+        open={askOpen}
+        onOpenChange={setAskOpen}
+      />
     </div>
   );
 }

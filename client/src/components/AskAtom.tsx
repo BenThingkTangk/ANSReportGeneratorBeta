@@ -15,6 +15,13 @@ import type { ANSReport } from "@shared/schema";
 
 interface AskAtomProps {
   report: ANSReport;
+  /**
+   * Merged extraction from any attached paired vendor PDF(s). Forwarded to
+   * /api/ask-atom so questions about the attached vendor report are answered
+   * from its verbatim findings (a separate, provenance-labeled evidence class)
+   * rather than only the deterministic .ans domain list.
+   */
+  vendorExtraction?: import("@shared/vendorExtraction").VendorReportExtraction;
   viewerRole: "patient" | "clinician";
   /**
    * Optional controlled open state. When provided, AskAtom becomes controlled
@@ -184,7 +191,7 @@ function buildFollowUps(mode: ViewerRole, report: ANSReport, asked: string[]): s
   return out;
 }
 
-export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: AskAtomProps) {
+export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, onOpenChange }: AskAtomProps) {
   const controlled = openProp !== undefined;
   const [openState, setOpenState] = useState(false);
   const open = controlled ? (openProp as boolean) : openState;
@@ -302,6 +309,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
         body: JSON.stringify({
           messages: base.map(m => ({ role: m.role, content: m.content })).slice(-10),
           report,
+          vendorExtraction,
           viewerRole: mode,
           stream: true,
         }),
@@ -404,6 +412,7 @@ export function AskAtom({ report, viewerRole, open: openProp, onOpenChange }: As
         {
           messages: base.map(m => ({ role: m.role, content: m.content })).slice(-10),
           report,
+          vendorExtraction,
           viewerRole: mode,
         },
         undefined,
