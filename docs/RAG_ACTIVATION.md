@@ -63,7 +63,7 @@ page/section citation precision.
 
 Migration 0005 adds only the citation columns — it does NOT create chunks, so a
 freshly-migrated DB still has `totalChunks = 0` and `ragFunctional:false` until
-content is ingested. Two ingestion paths (neither invents content):
+content is ingested. Three ingestion paths (none invents content):
 
 1. **Metadata placeholders** (searchable, but NOT full-text RAG): call
    `POST /api/admin/knowledge/reindex`. This chunks each approved source's
@@ -75,11 +75,61 @@ content is ingested. Two ingestion paths (neither invents content):
    listed in `ans_knowledge_sources`). These files are **not in this repo** and
    must be supplied by an admin. Each upload chunks into `ans_knowledge_chunks`
    with `section='document'`.
-3. (Optional) apply `0005` first for page/section-accurate citations; retrieval
+3. **Pre-curated full-text chunks** (passages curated outside the app — e.g. a
+   consultation transcript already split into sections): call
+   `POST /api/admin/knowledge/ingest-chunks` with
+   `{ sourceId, chunks: [{ chunk_index, content, section?, page? }] }`.
+   Unlike `upload` it needs no binary file and preserves the curator's own chunk
+   indices and section titles; unlike `reindex` it writes REAL full text (never
+   the reserved `section='metadata'` marker), so health reports `indexed`.
+   Idempotent — `replace` defaults to true, so it deletes just that source's
+   chunks and rewrites them; re-running yields the same corpus, not duplicates.
+   It refuses unknown/unapproved sources, recomputes `tokens` from `content`,
+   omits `section`/`page` when the DB lacks migration 0005, and rejects the
+   whole batch if any chunk contains patient-identifier patterns. Pass
+   `{"dryRun": true}` to validate and write nothing.
+
+   **No embeddings are required.** Retrieval is deterministic lexical
+   term-overlap over `content` (`api/admin/retrieval-test.ts`,
+   `api/_ans/knowledgeChunking.ts`); the `embedding` column is never read or
+   written by any code path, so rows inserted with a NULL embedding are
+   immediately retrievable.
+4. (Optional) apply `0005` first for page/section-accurate citations; retrieval
    works without it via the fallback locator.
-4. Verify in Admin → **Parser & Model Health**: `Knowledge Base (RAG)` should
+5. Verify in Admin → **Parser & Model Health**: `Knowledge Base (RAG)` should
    read `indexed` with `fullTextChunks > 0`, and Admin → **Retrieval Test**
    should return ranked hits with citations.
+
+### What full-text chunks change for live Ask ATOM
+
+Once chunks exist, `/api/ask-atom` performs **true passage retrieval**:
+
+1. `getCandidatePassages()` (`api/_knowledgeCache.ts`) fetches chunks joined to
+   their source, filtered **in SQL** to `active_in_ai_analysis = true` and
+   `review_status = 'approved'`, and probes for `page`/`section` so a legacy
+   schema cannot 42703 the chat request.
+2. `selectPassages()` (`api/_ans/knowledgePassages.ts`) ranks them against the
+   user's question with the **same deterministic `scoreChunk()`** the admin
+   retrieval test uses, drops `section='metadata'` placeholders, and keeps the
+   top passages that clear a relevance floor.
+3. `buildPassagePromptSection()` injects those excerpts with
+   `Title (Year), page | section | chunk N` citations.
+
+**Grounding honesty is per-answer.** `ragFunctional` requires chunks to exist
+*and* at least one passage to be relevant to this question. A corpus that has
+chunks but nothing relevant reports `mode:"report_only"` with a note, so ATOM is
+not licensed to cite it for that answer.
+
+**Strict separation is enforced.** The passage block is labeled explanatory
+context only and appears *before* the patient/vendor blocks, which remain the
+last and most proximate authority. The prompt forbids using a passage to supply
+or infer a patient value, to change or re-grade any deterministic score or
+vendor finding, or to apply a quoted threshold to this patient's numbers.
+Passages from transcripts/consultations are marked `[TRANSCRIPT]` and framed as
+attributed explanatory speech that may require verification with the treating
+clinician. Retrieval never touches deterministic scoring — the rendered patient
+context is byte-identical with and without retrieval (asserted in
+`api/_ans/__tests__/atomPassageGroundingIntegration.spec.ts`).
 
 ### Never ingested into general RAG
 

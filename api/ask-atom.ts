@@ -2,10 +2,12 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   getActiveKnowledgeSources,
   getKnowledgeCorpusStatus,
+  getCandidatePassages,
   buildKnowledgePromptSection,
   toCitations,
 } from "./_knowledgeCache.js";
 import { rankKnowledgeSources } from "./_knowledgeRetrieval.js";
+import { selectPassages, buildPassagePromptSection } from "./_ans/knowledgePassages.js";
 
 /**
  * /api/ask-atom — Colombo P&S grounded chat (Path B)
@@ -246,6 +248,7 @@ Data assessability & provenance rules (HIGHEST PRIORITY — these override every
 - The "DATA ASSESSABILITY & PROVENANCE" block is authoritative. When it conflicts with the Event Mean Data table, "Detected Colombo Indications", "Overall Clinical Impression", or any other legacy finding, follow the assessability block and treat the conflicting legacy item as unconfirmed / Not assessed. Privilege missingDomains, blocked claims, and provenance over legacy findings every time.
 - Blocked claims (listed as blocked for insufficient data) are explicitly NOT findings. Report each as "not assessed because required inputs were missing" — never as present or absent.
 - If the metrics needed to answer a question are Not assessed, say so plainly and recommend an adequate repeat recording instead of interpreting placeholder values.
+- Retrieved knowledge passages: when a "RETRIEVED KNOWLEDGE PASSAGES" block is present it is EXPLANATORY CONTEXT ONLY — general reference material, never this patient's data. A passage may explain what a metric means; it may NEVER supply, infer, or fill in a patient value that is missing or Not assessed, and it may NEVER change, override, or re-grade a deterministic score, severity, domain assessment, or vendor-reported finding. Do not apply a threshold or cut-off quoted in a passage to this patient's numbers to produce a result or diagnosis. On any conflict, the PATIENT CONTEXT and ATTACHED VENDOR REPORT(S) blocks are authoritative and you must say so. Passages marked [TRANSCRIPT] are attributed explanatory speech from a recorded consultation/lecture — present them as a clinician's spoken teaching that may require verification with the treating clinician, not as established fact.
 - EXCEPTION — attached vendor reports: when an "ATTACHED VENDOR REPORT(S)" block is present, its categorical findings and printed numbers ARE real attached evidence. A question about what the attached vendor report(s) found MUST be answered from that block, listing the vendor's findings and attributing them to the vendor report. Never answer such a question with only the deterministic domain list (e.g. "only cardiovagal was assessed") — that list describes this device's own .ans measurements, not the vendor's document. Keep the two classes separate, never merge a vendor category into a HumanOS score, and never claim HumanOS verified them.
 
 Evidence-grounding rules (HIGHEST PRIORITY — apply whenever a "KNOWLEDGE LIBRARY STATUS — METADATA ONLY" block is present):
@@ -678,9 +681,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // and question-specific. When the question has no searchable terms the
     // ranker falls back to the first 6 in the original order. (To keep the old
     // breadth exactly while still ranking, raise the cap below to 12.)
-    const [allKnowledgeSources, corpus] = await Promise.all([
+    const [allKnowledgeSources, corpus, candidatePassages] = await Promise.all([
       getActiveKnowledgeSources(),
       getKnowledgeCorpusStatus(),
+      // Full-text chunks from approved+active sources (filtered in SQL). Returns
+      // [] on any failure or on a corpus with no chunks.
+      getCandidatePassages(),
     ]);
     const latestUserQuery =
       [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "";
@@ -689,21 +695,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       latestUserQuery,
       6,
     );
+
+    // TRUE passage retrieval: rank the corpus's full-text chunks against this
+    // question with the same deterministic lexical scorer the admin retrieval
+    // test uses, and quote only the top passages that clear the relevance bar.
+    // Metadata placeholder chunks (section='metadata') are excluded — they are
+    // not full-text grounding. When nothing clears the bar we inject NOTHING and
+    // fall back to metadata / no-RAG grounding below.
+    const passages = selectPassages(candidatePassages, latestUserQuery);
+    const passageSection = buildPassagePromptSection(passages);
+    const passagesGrounded = passages.length > 0;
+
+    // Grounding honesty: the corpus counts as functional for THIS answer only
+    // when we actually retrieved relevant passages for it. A corpus that exists
+    // but yields no relevant passage for this question is reported as
+    // report-only, so the model is not licensed to cite it.
+    const ragFunctionalForThisAnswer = corpus.ragFunctional && passagesGrounded;
+
     // When there is no retrievable corpus (0 chunks), the source rows are
     // metadata only — the prompt section reframes them as background reading and
     // forbids bracketed citations / diagnostic-performance / prognosis claims.
-    const knowledgeSection = buildKnowledgePromptSection(knowledgeSources, corpus.ragFunctional);
-    // Citations we return to the client: real RAG citations only when the corpus
-    // is functional; otherwise none (report-only/external grounding).
-    const knowledgeCitations = corpus.ragFunctional ? toCitations(knowledgeSources) : [];
-    const grounding = corpus.ragFunctional
-      ? { mode: "rag" as const, chunks: corpus.totalChunks, activeSources: corpus.activeSources }
+    const knowledgeSection = buildKnowledgePromptSection(knowledgeSources, ragFunctionalForThisAnswer);
+    // Citations we return to the client: real RAG citations only when passages
+    // were actually retrieved; otherwise none (report-only/external grounding).
+    const knowledgeCitations = ragFunctionalForThisAnswer ? toCitations(knowledgeSources) : [];
+    const grounding = ragFunctionalForThisAnswer
+      ? {
+          mode: "rag" as const,
+          chunks: corpus.totalChunks,
+          activeSources: corpus.activeSources,
+          passages: passages.length,
+          passageCitations: passages.map((p) => p.citation),
+        }
       : { mode: "report_only" as const, chunks: 0, activeSources: corpus.activeSources,
-          note: "Private knowledge corpus has no full-text chunks; answer is grounded in the report and clearly-labeled external evidence, not RAG." };
+          note: corpus.ragFunctional
+            ? "No knowledge passage was relevant to this question; the answer is grounded in the report and clearly-labeled external evidence, not RAG."
+            : "Private knowledge corpus has no full-text chunks; answer is grounded in the report and clearly-labeled external evidence, not RAG." };
 
+    // ORDER MATTERS: general reference passages come BEFORE the patient context
+    // so the patient/vendor blocks are the last and most proximate authority for
+    // any patient-specific fact.
     const systemContent = [
       SYSTEM_PROMPT,
       knowledgeSection,
+      passageSection,
       buildPatientContext(report, viewerRole, vendorExtraction),
     ]
       .filter(Boolean)
