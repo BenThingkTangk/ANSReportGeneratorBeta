@@ -63,7 +63,7 @@ page/section citation precision.
 
 Migration 0005 adds only the citation columns — it does NOT create chunks, so a
 freshly-migrated DB still has `totalChunks = 0` and `ragFunctional:false` until
-content is ingested. Two ingestion paths (neither invents content):
+content is ingested. Three ingestion paths (none invents content):
 
 1. **Metadata placeholders** (searchable, but NOT full-text RAG): call
    `POST /api/admin/knowledge/reindex`. This chunks each approved source's
@@ -75,11 +75,42 @@ content is ingested. Two ingestion paths (neither invents content):
    listed in `ans_knowledge_sources`). These files are **not in this repo** and
    must be supplied by an admin. Each upload chunks into `ans_knowledge_chunks`
    with `section='document'`.
-3. (Optional) apply `0005` first for page/section-accurate citations; retrieval
+3. **Pre-curated full-text chunks** (passages curated outside the app — e.g. a
+   consultation transcript already split into sections): call
+   `POST /api/admin/knowledge/ingest-chunks` with
+   `{ sourceId, chunks: [{ chunk_index, content, section?, page? }] }`.
+   Unlike `upload` it needs no binary file and preserves the curator's own chunk
+   indices and section titles; unlike `reindex` it writes REAL full text (never
+   the reserved `section='metadata'` marker), so health reports `indexed`.
+   Idempotent — `replace` defaults to true, so it deletes just that source's
+   chunks and rewrites them; re-running yields the same corpus, not duplicates.
+   It refuses unknown/unapproved sources, recomputes `tokens` from `content`,
+   omits `section`/`page` when the DB lacks migration 0005, and rejects the
+   whole batch if any chunk contains patient-identifier patterns. Pass
+   `{"dryRun": true}` to validate and write nothing.
+
+   **No embeddings are required.** Retrieval is deterministic lexical
+   term-overlap over `content` (`api/admin/retrieval-test.ts`,
+   `api/_ans/knowledgeChunking.ts`); the `embedding` column is never read or
+   written by any code path, so rows inserted with a NULL embedding are
+   immediately retrievable.
+4. (Optional) apply `0005` first for page/section-accurate citations; retrieval
    works without it via the fallback locator.
-4. Verify in Admin → **Parser & Model Health**: `Knowledge Base (RAG)` should
+5. Verify in Admin → **Parser & Model Health**: `Knowledge Base (RAG)` should
    read `indexed` with `fullTextChunks > 0`, and Admin → **Retrieval Test**
    should return ranked hits with citations.
+
+### Caveat: what full-text chunks change for live Ask ATOM
+
+Ingesting chunks flips `ragFunctional` to true (it is a COUNT over
+`ans_knowledge_chunks`), which switches the ATOM prompt from the
+"METADATA ONLY" disclaimer to the citable "Active Sources" block. Note that the
+live `/api/ask-atom` path today ranks **source metadata**
+(title/abstract/key_claims via `api/_knowledgeRetrieval.ts`) — it does not yet
+inject chunk passages; only Admin → Retrieval Test ranks chunk `content`.
+So after ingestion ATOM is permitted to cite those sources, but its grounding
+text is still source-level. Wiring chunk passages into the ATOM prompt is a
+separate change.
 
 ### Never ingested into general RAG
 
