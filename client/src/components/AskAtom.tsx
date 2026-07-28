@@ -48,6 +48,15 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   citations?: string[];
+  /**
+   * Knowledge-corpus passages actually retrieved for THIS answer, in the order
+   * the prompt numbered them — so index 0 is the `[P1]` marker the model may
+   * cite inline. Each entry is a display citation built server-side
+   * ("Title (Year), section | p.N | chunk N"); never an id, path, or URL.
+   * Stored per message because retrieval is per-question: one answer can be
+   * passage-grounded while the next is report-only.
+   */
+  passageCitations?: string[];
   status?: ChatStatus;
   diagnostics?: AtomDiagnostics;
 }
@@ -117,6 +126,34 @@ function isAbortError(e: unknown): boolean {
  * "[LEGACY FINDINGS]" (case-insensitively, and even when back-to-back), which are
  * grounding-prompt scaffolding rather than clinical content.
  */
+/**
+ * Sanitize the server's `grounding.passageCitations` for display.
+ *
+ * The server builds each entry as a human label ("Title (Year), section | p.N |
+ * chunk N"), but this is defence-in-depth for the UI: we drop anything that is
+ * not a non-empty string and refuse entries that look like internal plumbing
+ * rather than a citation — bare UUIDs, filesystem paths, URLs, or `key: value`
+ * id traces. A patient must never see a row id or a storage path in the sources
+ * panel. Order is preserved because index i maps to the `[P{i+1}]` marker.
+ */
+const UUID_ANYWHERE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+export function normalizePassageCitations(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((c) => (typeof c === "string" ? c.trim() : ""))
+    .filter((c) => {
+      if (c.length === 0) return false;
+      if (UUID_ANYWHERE.test(c)) return false;          // row / source id
+      if (/^[a-z]+:\/\//i.test(c)) return false;         // url
+      if (/(^|\s)\/[\w.\-/]{2,}/.test(c)) return false;  // absolute path
+      if (/\b(source_id|chunk_id|id)\s*[:=]/i.test(c)) return false; // id trace
+      return true;
+    })
+    // Bound what we render so a pathological payload cannot flood the panel.
+    .slice(0, 8);
+}
+
 function stripProvenanceMarkers(text: string): string {
   return text
     .replace(
@@ -213,7 +250,12 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
   // Grounding mode from the server: "rag" (retrievable corpus) vs "report_only"
   // (no full-text chunks → answers grounded in the report + labeled external
   // evidence, NOT the private RAG corpus). Disclosed to the user.
-  const [grounding, setGrounding] = useState<{ mode: "rag" | "report_only"; chunks?: number } | null>(null);
+  // `passages` is how many full-text passages were actually retrieved for the
+  // latest answer — the "Full-text RAG" indicator is gated on that being > 0,
+  // not merely on a corpus existing.
+  const [grounding, setGrounding] = useState<
+    { mode: "rag" | "report_only"; chunks?: number; passages?: number } | null
+  >(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -271,9 +313,9 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
   };
 
   // Progressive reveal: reveal the response word-by-word so long answers stream in.
-  const startReveal = (fullText: string, citations: string[]) => {
+  const startReveal = (fullText: string, citations: string[], passageCitations: string[] = []) => {
     const id = nextId();
-    setMessages(prev => [...prev, { id, role: "assistant", content: "", status: "streaming", citations } as ChatMessage].slice(-10));
+    setMessages(prev => [...prev, { id, role: "assistant", content: "", status: "streaming", citations, passageCitations } as ChatMessage].slice(-10));
     setStreaming(true);
 
     const tokens = fullText.split(/(\s+)/);
@@ -336,6 +378,7 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
     let full = "";
     let ttft: number | null = null;
     let citations: string[] = [];
+    let passageCitations: string[] = [];
     let sawError: string | null = null;
 
     const applyFrame = (frame: string) => {
@@ -351,7 +394,14 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
         setMessages(prev => prev.map(m => (m.id === id ? { ...m, content: stripProvenanceMarkers(full) } : m)));
       } else if (event === "done") {
         citations = dedupeCitations([...(payload.citations ?? []), ...(payload.webCitations ?? [])]);
-        if (payload.grounding?.mode) setGrounding({ mode: payload.grounding.mode, chunks: payload.grounding.chunks });
+        passageCitations = normalizePassageCitations(payload.grounding?.passageCitations);
+        if (payload.grounding?.mode) {
+          setGrounding({
+            mode: payload.grounding.mode,
+            chunks: payload.grounding.chunks,
+            passages: payload.grounding.passages,
+          });
+        }
       } else if (event === "error") {
         sawError = payload.error || "stream error";
       }
@@ -381,7 +431,7 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
       return false;
     }
     setMessages(prev => prev.map(m => (m.id === id
-      ? { ...m, content: stripProvenanceMarkers(full), status: "done", citations,
+      ? { ...m, content: stripProvenanceMarkers(full), status: "done", citations, passageCitations,
           diagnostics: { ttftMs: ttft, sourceCount: citations.length, transport: "sse" } }
       : m)));
     setLastDiagnostics({ ttftMs: ttft, sourceCount: citations.length, transport: "sse", totalMs: Date.now() - t0 });
@@ -422,10 +472,17 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
       abortRef.current = null;
       if (!data?.success || !data?.message) throw new Error(data?.error || "No response");
       const citations = dedupeCitations([...(data.citations ?? []), ...(data.webCitations ?? [])]);
-      if (data.grounding?.mode) setGrounding({ mode: data.grounding.mode, chunks: data.grounding.chunks });
+      const passageCitations = normalizePassageCitations(data.grounding?.passageCitations);
+      if (data.grounding?.mode) {
+        setGrounding({
+          mode: data.grounding.mode,
+          chunks: data.grounding.chunks,
+          passages: data.grounding.passages,
+        });
+      }
       setLoading(false);
       setLastDiagnostics({ ttftMs: Date.now() - t0, sourceCount: citations.length, transport: "json", totalMs: Date.now() - t0 });
-      startReveal(stripProvenanceMarkers(String(data.message)), citations);
+      startReveal(stripProvenanceMarkers(String(data.message)), citations, passageCitations);
     } catch (e) {
       abortRef.current = null;
       setLoading(false);
@@ -821,6 +878,57 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
                           )}
                         </div>
                       )}
+                      {/* Knowledge sources used: maps the [P1]/[P2] markers the
+                          answer cites to the passage citations the server
+                          actually retrieved for THIS answer. Rendered per message
+                          because retrieval is per-question. Patient-report and
+                          vendor-report evidence are NOT listed here — they are
+                          labeled separately in the report panels. */}
+                      {msg.status !== "streaming" && (msg.passageCitations?.length ?? 0) > 0 && (
+                        <div
+                          className="mx-1 mt-1 rounded-lg px-2.5 py-2"
+                          style={{
+                            background: "hsl(185 85% 42% / 0.06)",
+                            border: "1px solid hsl(185 85% 42% / 0.18)",
+                          }}
+                          data-testid="atom-passage-sources"
+                        >
+                          <div
+                            className="text-[9.5px] uppercase tracking-[0.12em] mb-1"
+                            style={{ color: "hsl(185 85% 62%)" }}
+                          >
+                            Knowledge sources used
+                          </div>
+                          <ul className="space-y-0.5 m-0 p-0 list-none">
+                            {msg.passageCitations!.map((c, pi) => (
+                              <li
+                                key={pi}
+                                // Wrap rather than truncate: on a 390px phone a
+                                // citation with a section title + timecode needs
+                                // two lines, and clipping it would hide the
+                                // locator that makes it verifiable.
+                                className="text-[10px] leading-snug flex gap-1.5 break-words"
+                                style={{ color: "hsl(210 15% 72%)" }}
+                                data-testid={`atom-passage-source-${pi}`}
+                              >
+                                <span
+                                  className="flex-shrink-0 font-medium"
+                                  style={{ color: "hsl(185 85% 60%)" }}
+                                >
+                                  [P{pi + 1}]
+                                </span>
+                                <span className="min-w-0">{c}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          <div
+                            className="text-[9px] mt-1.5 leading-snug"
+                            style={{ color: "hsl(210 12% 55%)" }}
+                          >
+                            Explanatory reference material — not your measurements.
+                          </div>
+                        </div>
+                      )}
                       {msg.status !== "streaming" && msg.citations && msg.citations.length > 0 && (
                         <div className="flex flex-wrap gap-1 px-1">
                           {msg.citations.map((c, ci) => (
@@ -927,6 +1035,32 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
 
             {/* Grounding disclosure: when the private corpus has no full-text
                 chunks, tell the user answers are report-only/external, not RAG. */}
+            {/* Full-text RAG indicator — shown ONLY when this answer actually
+                used retrieved passages. A corpus that exists but yielded no
+                relevant passage stays report-only (the server reports
+                mode:"report_only" in that case), so this can never overstate
+                grounding. */}
+            {grounding?.mode === "rag" && (grounding.passages ?? 0) > 0 && (
+              <div
+                className="px-3 py-2 text-[10.5px] leading-snug border-t flex items-start gap-1.5 flex-shrink-0"
+                style={{
+                  borderColor: "hsl(185 85% 42% / 0.25)",
+                  background: "hsl(185 85% 42% / 0.06)",
+                  color: "hsl(185 85% 72%)",
+                }}
+                data-testid="atom-grounding-disclosure"
+                data-grounding="rag"
+              >
+                <span aria-hidden="true">◆</span>
+                <span>
+                  <strong>Full-text RAG</strong> — this answer used{" "}
+                  {grounding.passages} retrieved knowledge{" "}
+                  {grounding.passages === 1 ? "passage" : "passages"}, listed under the answer.
+                  Your report and any attached vendor report are labeled separately.
+                </span>
+              </div>
+            )}
+
             {grounding?.mode === "report_only" && (
               <div
                 className="px-3 py-2 text-[10.5px] leading-snug border-t flex items-start gap-1.5 flex-shrink-0"
