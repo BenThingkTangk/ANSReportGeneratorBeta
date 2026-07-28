@@ -21,7 +21,14 @@
  * contract is unit-testable offline. It does NOT touch deterministic scoring.
  */
 
-/** A chunk as produced by an external curation pass. */
+/**
+ * A chunk as produced by an external curation pass.
+ *
+ * Unknown keys are IGNORED rather than rejected, so a curator's working fields
+ * never block ingestion. Three transcript fields are recognised and folded into
+ * the `section` locator (see buildSectionLocator) instead of being dropped:
+ * `timestamp_start`, `timestamp_end`, `provenance_note`.
+ */
 export interface CuratedChunkInput {
   chunk_index: number | string;
   content: string;
@@ -31,6 +38,11 @@ export interface CuratedChunkInput {
   page?: number | string | null;
   /** Optional — recomputed when absent so the stored value always matches content. */
   tokens?: number | string | null;
+  /** Optional transcript timecodes, appended to the section locator. */
+  timestamp_start?: string | null;
+  timestamp_end?: string | null;
+  /** Optional curator note; a short prefix is appended to the section locator. */
+  provenance_note?: string | null;
 }
 
 /** A row ready for insertion into ans_knowledge_chunks. */
@@ -96,6 +108,53 @@ function toInt(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return Math.trunc(v);
   if (typeof v === "string" && /^-?\d+$/.test(v.trim())) return parseInt(v.trim(), 10);
   return null;
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/** Cap so a long curator note can never crowd out the citation locator. */
+export const MAX_SECTION_CHARS = 300;
+
+/**
+ * Build the stored `section` locator from the curator's fields.
+ *
+ * The real curated batches are transcripts carrying `timestamp_start` /
+ * `timestamp_end` / `provenance_note` alongside `section`. Rather than dropping
+ * that provenance (or rejecting the file for having extra keys), we fold it
+ * compactly into the one column the schema has, so citations can point at
+ * "Section — 00:08:27–00:11:54". `section` is a free-text locator rendered in
+ * citations, so this is display-only: it never affects retrieval scoring, which
+ * reads `content` alone.
+ */
+export function buildSectionLocator(raw: {
+  section?: unknown;
+  timestamp_start?: unknown;
+  timestamp_end?: unknown;
+  provenance_note?: unknown;
+}): string {
+  const base = str(raw.section);
+  const start = str(raw.timestamp_start);
+  const end = str(raw.timestamp_end);
+  const note = str(raw.provenance_note);
+
+  const parts: string[] = [];
+  if (base) parts.push(base);
+  if (start && end) parts.push(`${start}–${end}`);
+  else if (start) parts.push(`from ${start}`);
+  else if (end) parts.push(`to ${end}`);
+
+  let locator = parts.join(" — ");
+  if (!locator && note) {
+    // No section/timecodes: fall back to a short slice of the note so the row
+    // still carries some provenance.
+    locator = note;
+  }
+  if (locator.length > MAX_SECTION_CHARS) {
+    locator = locator.slice(0, MAX_SECTION_CHARS - 1).trimEnd() + "…";
+  }
+  return locator;
 }
 
 /**
@@ -178,7 +237,9 @@ export function validateCuratedChunks(
       tokens: Math.ceil(content.length / 4),
     };
 
-    const section = typeof raw.section === "string" ? raw.section.trim() : "";
+    // Fold section + optional transcript timecodes / provenance note into the
+    // one locator column. Extra keys we do not recognise are simply ignored.
+    const section = buildSectionLocator(raw);
     if (section) {
       if (opts.hasSection) {
         // NOTE: 'metadata' is a reserved marker meaning "placeholder chunk, not

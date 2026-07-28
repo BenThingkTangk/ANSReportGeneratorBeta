@@ -100,17 +100,36 @@ content is ingested. Three ingestion paths (none invents content):
    read `indexed` with `fullTextChunks > 0`, and Admin → **Retrieval Test**
    should return ranked hits with citations.
 
-### Caveat: what full-text chunks change for live Ask ATOM
+### What full-text chunks change for live Ask ATOM
 
-Ingesting chunks flips `ragFunctional` to true (it is a COUNT over
-`ans_knowledge_chunks`), which switches the ATOM prompt from the
-"METADATA ONLY" disclaimer to the citable "Active Sources" block. Note that the
-live `/api/ask-atom` path today ranks **source metadata**
-(title/abstract/key_claims via `api/_knowledgeRetrieval.ts`) — it does not yet
-inject chunk passages; only Admin → Retrieval Test ranks chunk `content`.
-So after ingestion ATOM is permitted to cite those sources, but its grounding
-text is still source-level. Wiring chunk passages into the ATOM prompt is a
-separate change.
+Once chunks exist, `/api/ask-atom` performs **true passage retrieval**:
+
+1. `getCandidatePassages()` (`api/_knowledgeCache.ts`) fetches chunks joined to
+   their source, filtered **in SQL** to `active_in_ai_analysis = true` and
+   `review_status = 'approved'`, and probes for `page`/`section` so a legacy
+   schema cannot 42703 the chat request.
+2. `selectPassages()` (`api/_ans/knowledgePassages.ts`) ranks them against the
+   user's question with the **same deterministic `scoreChunk()`** the admin
+   retrieval test uses, drops `section='metadata'` placeholders, and keeps the
+   top passages that clear a relevance floor.
+3. `buildPassagePromptSection()` injects those excerpts with
+   `Title (Year), page | section | chunk N` citations.
+
+**Grounding honesty is per-answer.** `ragFunctional` requires chunks to exist
+*and* at least one passage to be relevant to this question. A corpus that has
+chunks but nothing relevant reports `mode:"report_only"` with a note, so ATOM is
+not licensed to cite it for that answer.
+
+**Strict separation is enforced.** The passage block is labeled explanatory
+context only and appears *before* the patient/vendor blocks, which remain the
+last and most proximate authority. The prompt forbids using a passage to supply
+or infer a patient value, to change or re-grade any deterministic score or
+vendor finding, or to apply a quoted threshold to this patient's numbers.
+Passages from transcripts/consultations are marked `[TRANSCRIPT]` and framed as
+attributed explanatory speech that may require verification with the treating
+clinician. Retrieval never touches deterministic scoring — the rendered patient
+context is byte-identical with and without retrieval (asserted in
+`api/_ans/__tests__/atomPassageGroundingIntegration.spec.ts`).
 
 ### Never ingested into general RAG
 

@@ -13,9 +13,11 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import {
   validateCuratedChunks,
+  buildSectionLocator,
   scanForPhi,
   MAX_CHUNKS,
   MAX_CONTENT_CHARS,
+  MAX_SECTION_CHARS,
 } from "../curatedChunks.js";
 import { scoreChunk, tokenizeQuery } from "../knowledgeChunking.js";
 
@@ -75,6 +77,67 @@ describe("validateCuratedChunks — happy path", () => {
     expect(out.ok).toBe(true);
     expect(out.rows[0].chunk_index).toBe(3);
     expect(out.rows[0].page).toBe(7);
+  });
+});
+
+describe("extra curator fields are accepted, not rejected", () => {
+  // The real batches carry timestamp_start / timestamp_end / provenance_note
+  // alongside the known fields. Ingestion must not fail on them.
+  const withExtras = {
+    chunk_index: 0,
+    content: "So the problem with the wellness score from the P&S test is that it is not a health rating.",
+    section: "Wellness Score - Conceptual Foundations",
+    timestamp_start: "00:08:27",
+    timestamp_end: "00:11:54",
+    provenance_note: "Speaker 3 (Joseph Colombo) only. Wording preserved verbatim.",
+    source_id: SRC,
+  };
+
+  it("accepts a chunk carrying transcript metadata", () => {
+    const r = validateCuratedChunks([withExtras], full);
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
+
+  it("folds the timecodes into the section locator (provenance preserved compactly)", () => {
+    const r = validateCuratedChunks([withExtras], full);
+    expect(r.rows[0].section).toBe("Wellness Score - Conceptual Foundations — 00:08:27–00:11:54");
+  });
+
+  it("falls back to the provenance note when there is no section or timecode", () => {
+    const r = validateCuratedChunks(
+      [{ chunk_index: 0, content: "body", provenance_note: "Speaker 3 only" }],
+      full,
+    );
+    expect(r.rows[0].section).toBe("Speaker 3 only");
+  });
+
+  it("handles a one-sided timecode", () => {
+    expect(buildSectionLocator({ section: "S", timestamp_start: "00:01:00" })).toBe("S — from 00:01:00");
+    expect(buildSectionLocator({ section: "S", timestamp_end: "00:02:00" })).toBe("S — to 00:02:00");
+  });
+
+  it("caps an over-long locator so it cannot crowd out the citation", () => {
+    const loc = buildSectionLocator({ section: "x".repeat(400) });
+    expect(loc.length).toBeLessThanOrEqual(MAX_SECTION_CHARS);
+    expect(loc.endsWith("…")).toBe(true);
+  });
+
+  it("ignores unknown keys entirely rather than failing", () => {
+    const r = validateCuratedChunks(
+      [{ chunk_index: 0, content: "body", speaker: "S3", confidence: 0.9, _internal: { x: 1 } }],
+      full,
+    );
+    expect(r.ok).toBe(true);
+    expect(r.rows[0]).not.toHaveProperty("speaker");
+    expect(r.rows[0]).not.toHaveProperty("confidence");
+  });
+
+  it("drops the enriched locator (with a warning) on a legacy DB", () => {
+    const r = validateCuratedChunks([withExtras], { sourceId: SRC, hasSection: false, hasPage: false });
+    expect(r.ok).toBe(true);
+    expect(r.rows[0]).not.toHaveProperty("section");
+    expect(r.warnings.join(" ")).toMatch(/section/i);
   });
 });
 
@@ -203,6 +266,8 @@ describe("real curated batch — colombo_0409_rag_chunks.json", () => {
       expect(row.tokens).toBeGreaterThan(0);
       expect(row.section).toBeTruthy();
       expect(row.section).not.toBe("metadata");
+      // The batch's timestamp_start/timestamp_end are preserved in the locator.
+      expect(row.section).toMatch(/\d{2}:\d{2}:\d{2}–\d{2}:\d{2}:\d{2}/);
     }
   });
 

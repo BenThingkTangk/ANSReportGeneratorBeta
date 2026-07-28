@@ -4,6 +4,8 @@
  * Avoids Supabase round-trips on every AI request.
  */
 import { createSupabaseAdmin } from "./_supabase.js";
+import { detectChunkSchema } from "./_ans/knowledgeSchema.js";
+import type { PassageRow } from "./_ans/knowledgePassages.js";
 import crypto from "crypto";
 
 export interface KnowledgeCitation {
@@ -179,6 +181,53 @@ export function buildKnowledgePromptSection(
 
   lines.push("---");
   return lines.join("\n");
+}
+
+/**
+ * Candidate FULL-TEXT chunks for live passage retrieval, joined to their source
+ * and filtered to approved + active sources IN THE QUERY, so an unapproved or
+ * deactivated source can never reach the prompt.
+ *
+ * Schema-safe: `page`/`section` exist only after migration 0005, so we probe
+ * before selecting them — referencing a missing column makes PostgREST return
+ * 42703, which would 500 the whole chat request. Any failure returns [] so ATOM
+ * degrades to metadata / no-RAG grounding instead of erroring.
+ *
+ * Ranking happens in-process (api/_ans/knowledgePassages.ts) with the same
+ * deterministic scorer the admin retrieval test uses.
+ */
+export async function getCandidatePassages(limit = 2000): Promise<PassageRow[]> {
+  try {
+    const admin = createSupabaseAdmin();
+    const schema = await detectChunkSchema(admin);
+    const optionalCols = [schema.hasPage ? "page" : null, schema.hasSection ? "section" : null]
+      .filter(Boolean)
+      .join(", ");
+
+    const { data, error } = await admin
+      .from("ans_knowledge_chunks")
+      .select(
+        `
+          id, source_id, chunk_index, content${optionalCols ? ", " + optionalCols : ""},
+          source:ans_knowledge_sources!inner (
+            id, title, authors, year, publication_type, url,
+            active_in_ai_analysis, review_status
+          )
+        `,
+      )
+      .eq("source.active_in_ai_analysis", true)
+      .eq("source.review_status", "approved")
+      .limit(limit);
+
+    if (error) {
+      console.warn("Passage fetch error:", error.message);
+      return [];
+    }
+    return (data ?? []) as unknown as PassageRow[];
+  } catch (e) {
+    console.warn("Passage fetch exception:", e);
+    return [];
+  }
 }
 
 export function toCitations(sources: KnowledgeSource[]): KnowledgeCitation[] {
