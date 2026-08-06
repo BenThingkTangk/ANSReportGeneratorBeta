@@ -39,12 +39,15 @@ import {
 } from "../shared/clinicalStates.js";
 import {
   computedProvenance,
+  ansStoredProvenance,
   unavailableProvenance,
   vendorReportedProvenance,
   derivedFromVendorProvenance,
   mayInterpretClinically,
   type MetricProvenance,
 } from "../shared/metricProvenance.js";
+import type { VendorPhaseMetrics } from "./_ans/vendorStored.js";
+import { roundHalfEven } from "./_ans/vendorStored.js";
 import {
   estimatePhaseSpectral,
   estimateRespiratoryFrequencyFromPeaks,
@@ -177,6 +180,8 @@ interface ParsedANSData {
   otherMedicationsSymptoms?: string;
   baselineSystolicBP?: number;
   baselineDiastolicBP?: number;
+  /** Exact six-phase PhysioPS analysis summary embedded in supported .ans files. */
+  vendorStoredPhases?: VendorPhaseMetrics[];
   /**
    * ECG signal-usability verdict from the deterministic parser. Interpretation
    * is GATED on this: an unusable recording may not produce a wellness score,
@@ -467,7 +472,7 @@ interface ANSReport {
    *     conclusion, pattern, therapy or composite score may use them.
    *   - "unavailable"        — neither source produced a value.
    */
-  spectralSource: "vendor_reported" | "humanos_estimated" | "unavailable";
+  spectralSource: "ans_stored" | "vendor_reported" | "humanos_estimated" | "unavailable";
   /**
    * Uncertainty envelope for the waveform-derived estimates. Present whenever
    * `spectralSource === "humanos_estimated"`.
@@ -2411,17 +2416,42 @@ export function generateColomboReport(
     return analyzePhase(ecgSlice, samplingRate, seg.name, seg.label, seg.end - seg.start);
   });
 
-  // --- No spectral synthesis, no vendor-value substitution -------------------
-  // The per-phase spectral aggregates (LFa/RFa/SB) are NOT stored as extractable
-  // scalars in the .ans binary; the vendor derives them via an undisclosed
-  // wavelet algorithm and prints them only in the signed PDF. This engine does
-  // NOT estimate them from the raw waveform (the former SCALE=0.0018 Morlet
-  // routine was removed) and does NOT memorize/fingerprint-substitute PDF
-  // values. `analyzePhase` therefore emits LFa/RFa/SB as null with `unavailable`
-  // provenance. The ONLY way a spectral value enters the report is a paired
-  // vendor PDF applied to baseline A below (`vendor_reported`, or
-  // `derived_from_vendor` for a computed SB) — after server-side identity
-  // reconciliation. Unavailable phases render "not assessed", never vendor truth.
+  // Prefer the complete PhysioPS A–F analysis table embedded in supported .ans
+  // files. These are direct stored values, not HumanOS waveform estimates and
+  // not values copied from a PDF. The waveform analysis above remains the safe
+  // fallback for older, truncated, or unknown schemas.
+  if (data.vendorStoredPhases?.length === 6) {
+    data.vendorStoredPhases.forEach((stored, index) => {
+      const phase = phaseEvents[index];
+      if (!phase || stored.index !== index) return;
+      phase.durationSec = stored.durationSec;
+      phase.duration = formatDuration(stored.durationSec);
+      phase.meanHR = roundHalfEven(stored.meanHr);
+      phase.rangeHR = roundHalfEven(stored.rangeHr);
+      phase.FRF = Math.round(stored.frf * 100) / 100;
+      phase.LFa = Math.round(stored.lfa * 100) / 100;
+      phase.RFa = Math.round(stored.rfa * 100) / 100;
+      phase.SB = Math.round(stored.ratio * 100) / 100;
+      phase.spectralEstimate = undefined;
+      phase.provenance = {
+        FRF: ansStoredProvenance("FRF"),
+        LFa: ansStoredProvenance("LFa"),
+        RFa: ansStoredProvenance("RFa"),
+        SB: ansStoredProvenance("SB"),
+      };
+      if (stored.systolic != null && stored.diastolic != null) {
+        phase.SBP = stored.systolic;
+        phase.DBP = stored.diastolic;
+        phase.PP = stored.pulsePressure ?? stored.systolic - stored.diastolic;
+        phase.MAP = stored.map ?? roundHalfEven((stored.systolic + 2 * stored.diastolic) / 3);
+      } else {
+        delete phase.SBP;
+        delete phase.DBP;
+        delete phase.PP;
+        delete phase.MAP;
+      }
+    });
+  }
 
   // Baseline A is the canonical resting measurement
   const A = phaseEvents[0];
@@ -2432,7 +2462,12 @@ export function generateColomboReport(
   const F = phaseEvents[5];
 
   // Add BP from parsed metadata (Jill: 92/55 at rest)
-  if (data.baselineSystolicBP && data.baselineDiastolicBP) {
+  if (
+    A.SBP == null &&
+    A.DBP == null &&
+    data.baselineSystolicBP &&
+    data.baselineDiastolicBP
+  ) {
     A.SBP = data.baselineSystolicBP;
     A.DBP = data.baselineDiastolicBP;
     A.PP = A.SBP - A.DBP;
@@ -2565,8 +2600,19 @@ export function generateColomboReport(
       ph.provenance?.RFa.method === "computed",
   );
   /** Where the published spectral numbers came from, for every surface to read. */
-  const spectralSource: "vendor_reported" | "humanos_estimated" | "unavailable" =
-    spectralAvailable ? "vendor_reported" : spectralEstimated ? "humanos_estimated" : "unavailable";
+  const spectralStored = phaseEvents.some(
+    (phase) =>
+      phase.provenance?.LFa.method === "ans_stored" ||
+      phase.provenance?.RFa.method === "ans_stored",
+  );
+  const spectralSource: "ans_stored" | "vendor_reported" | "humanos_estimated" | "unavailable" =
+    spectralStored
+      ? "ans_stored"
+      : spectralAvailable
+        ? "vendor_reported"
+        : spectralEstimated
+          ? "humanos_estimated"
+          : "unavailable";
   const spectralEstimateConfidence = spectralEstimated
     ? Math.max(
         0,
