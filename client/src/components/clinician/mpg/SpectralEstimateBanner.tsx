@@ -32,14 +32,17 @@ export function SpectralEstimateBanner({
     >
       <div className="flex items-start gap-3">
         <span
-          className="mt-0.5 shrink-0 rounded-md border border-violet-400/40 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-violet-200"
+          className="mt-0.5 shrink-0 rounded-md border border-violet-300/60 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-violet-100"
           aria-hidden="true"
         >
           est.
         </span>
         <div className="min-w-0 space-y-1.5">
-          <div className="text-[12px] font-semibold text-violet-100">{ESTIMATE_BADGE}</div>
-          <p className="text-[11px] leading-relaxed text-violet-100/80 max-w-3xl">
+          <div className="text-[13px] font-semibold text-violet-100">{ESTIMATE_BADGE}</div>
+          {/* Body/footer copy raised to 12-13px at full opacity: at 10-11px and
+             60-80% opacity this disclosure was the least readable text on the
+             dark surface, which is the wrong thing to have to squint at. */}
+          <p className="text-[12.5px] leading-relaxed text-violet-50/95 max-w-3xl">
             LFa, RFa and sympathovagal balance on the charts below are computed by
             HumanOS from the ECG-derived R-R series (Morlet wavelet band power in
             bpm²), not read from a PhysioPS report. They are genuine measurements
@@ -51,14 +54,14 @@ export function SpectralEstimateBanner({
             or anything the patient sees.
           </p>
           {conf ? (
-            <p className="text-[10px] text-violet-100/60 tabular-nums" data-testid="mpg-estimate-confidence">
+            <p className="text-[12px] text-violet-100/90 tabular-nums" data-testid="mpg-estimate-confidence">
               {conf} · attach the paired signed report to obtain vendor-reported values.
             </p>
           ) : null}
           {warnings.length > 0 && !compact ? (
             <ul className="mt-1 space-y-0.5" data-testid="mpg-estimate-warnings">
               {warnings.slice(0, 4).map((w) => (
-                <li key={w} className="text-[10px] leading-relaxed text-violet-100/60">
+                <li key={w} className="text-[12px] leading-relaxed text-violet-100/90">
                   · {w}
                 </li>
               ))}

@@ -39,12 +39,14 @@ export function CollapsibleSection({
         aria-expanded={open}
         data-testid={testId ? `${testId}-button` : undefined}
       >
+        {/* Titles wrap instead of truncating: on a phone the ellipsis hid the
+           distinguishing half of headers like "Heart Rate — Full Test Trend". */}
         <div className="min-w-0">
-          <div className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium truncate">
+          <div className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium break-words">
             {title}
           </div>
           {subtitle && (
-            <div className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">
+            <div className="text-[12px] text-muted-foreground mt-0.5 break-words">
               {subtitle}
             </div>
           )}

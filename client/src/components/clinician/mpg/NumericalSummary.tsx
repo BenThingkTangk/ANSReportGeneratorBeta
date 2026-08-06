@@ -28,11 +28,20 @@ const NORMS = {
   SB: { lo: COLOMBO_NORMS.SB.lo, hi: COLOMBO_NORMS.SB.hi },
 };
 
+/**
+ * Norm-tint palette. Lightness raised for WCAG-readable contrast on the dark
+ * clinician surface; the classification thresholds themselves are untouched and
+ * the legend below reuses these same constants so swatch and cell always match.
+ */
+const TINT_IN_BAND = "hsl(140 60% 68%)";
+const TINT_BELOW_NORM = "hsl(17 100% 72%)";
+const TINT_ABOVE_NORM = "hsl(0 80% 74%)";
+
 function cellColor(val: number | null | undefined, norm: { lo: number; hi: number }): string {
   if (val === undefined || val === null || !Number.isFinite(val)) return "inherit";
-  if (val < norm.lo) return "hsl(17 100% 60%)";
-  if (val > norm.hi) return "hsl(0 72% 62%)";
-  return "hsl(140 60% 55%)";
+  if (val < norm.lo) return TINT_BELOW_NORM;
+  if (val > norm.hi) return TINT_ABOVE_NORM;
+  return TINT_IN_BAND;
 }
 
 function fmt(v: number | null | undefined, digits = 2): string {
@@ -80,7 +89,7 @@ function SpectralCell({
       >
         {fmt(value, digits)}
         {value != null ? (
-          <span className="ml-1 text-[9px] uppercase tracking-wider opacity-70">est.</span>
+          <span className="ml-1 text-[11px] font-semibold uppercase tracking-wider text-violet-100/90">est.</span>
         ) : null}
       </td>
     );
@@ -113,24 +122,24 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
           <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium">
             Numerical Summary
           </h3>
-          <p className="text-[11px] text-muted-foreground/70 mt-1">
+          <p className="text-[12px] text-muted-foreground mt-1">
             Audit trail — every number the graphical charts are derived from
           </p>
         </div>
-        <div className="text-[10px] text-muted-foreground/70 tabular-nums text-right">
+        <div className="text-[12px] text-muted-foreground tabular-nums text-right">
           <div>HR {report.autonomicBalance.balance != null ? (Math.round(report.autonomicBalance.balance) || "—") : "—"} · RR cnt {report.rPeakCount}</div>
           <div>SR {report.samplingRate} Hz · FRF {report.respiratoryFrequency != null ? `${report.respiratoryFrequency.toFixed(2)} Hz` : "not assessed"}</div>
         </div>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-[11px] border-collapse min-w-[640px]">
+        <table className="w-full text-[12px] border-collapse min-w-[640px]">
           <thead>
             <tr className="border-b border-border/40">
               {["Phase", "Duration", "HR mean ± range", "FRF (Hz)", "LFa", "RFa", "LFa/RFa", "BP"].map((h) => (
                 <th
                   key={h}
-                  className="text-left py-2 pr-4 text-[9px] uppercase tracking-wider text-muted-foreground font-medium whitespace-nowrap"
+                  className="text-left py-2 pr-4 text-[11px] uppercase tracking-wider text-muted-foreground font-semibold whitespace-nowrap"
                 >
                   {h}
                 </th>
@@ -172,18 +181,18 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
         <MiniRatio label="30:15" value={report.ratios.thirtyFifteenRatio.value} normal={report.ratios.thirtyFifteenRatio.normal} />
       </div>
 
-      <div className="mt-3 pt-3 border-t border-border/20 text-[10px] text-muted-foreground leading-relaxed">
-        <span className="font-medium text-foreground/60">Legend:</span>{" "}
-        <span style={{ color: "hsl(140 60% 55%)" }}>■ In band</span>
+      <div className="mt-3 pt-3 border-t border-border/20 text-[12px] text-muted-foreground leading-relaxed">
+        <span className="font-semibold text-foreground/90">Legend:</span>{" "}
+        <span style={{ color: TINT_IN_BAND }}>■ In band</span>
         <span className="mx-2">·</span>
-        <span style={{ color: "hsl(17 100% 60%)" }}>■ Below norm</span>
+        <span style={{ color: TINT_BELOW_NORM }}>■ Below norm</span>
         <span className="mx-2">·</span>
-        <span style={{ color: "hsl(0 72% 62%)" }}>■ Above norm</span>
+        <span style={{ color: TINT_ABOVE_NORM }}>■ Above norm</span>
       </div>
 
       {/* Evidence-tier caveat: FRF/LFa/RFa/LFa-RFa are proprietary [P]. */}
       <div
-        className="mt-2 text-[10px] text-amber-500/80 leading-relaxed"
+        className="mt-2 text-[12px] text-amber-200 leading-relaxed"
         data-testid="num-provenance-caveat"
       >
         <span className="font-medium">FRF, LFa, RFa, LFa/RFa [P]:</span>{" "}
@@ -202,10 +211,10 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
 function MiniRatio({ label, value, normal }: { label: string; value: number | null; normal: string }) {
   return (
     <div className="rounded-xl bg-background/40 border border-border/20 px-3 py-2">
-      <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">{label}</div>
       <div className="flex items-baseline justify-between gap-2 mt-0.5">
         <span className="text-lg font-semibold tabular-nums">{value == null ? "Not read" : value.toFixed(2)}</span>
-        <span className="text-[10px] text-muted-foreground tabular-nums">{normal}</span>
+        <span className="text-[12px] text-muted-foreground tabular-nums">{normal}</span>
       </div>
     </div>
   );

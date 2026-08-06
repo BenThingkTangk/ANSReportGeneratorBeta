@@ -33,10 +33,18 @@ export const ESTIMATE_TITLE =
   "NOT a vendor-reported value, not validated against PhysioPS output, not colour-coded against " +
   "the Colombo norms, and not used for scoring, diagnosis or patient-facing interpretation.";
 
-/** Neutral series colours used when values are estimates (no norm semantics). */
-export const ESTIMATE_SERIES_COLOR = "hsl(var(--foreground) / 0.55)";
-export const ESTIMATE_LFA_COLOR = "hsl(258 30% 62%)";
-export const ESTIMATE_RFA_COLOR = "hsl(196 28% 58%)";
+/**
+ * Neutral series colours used when values are estimates (no norm semantics).
+ *
+ * Kept deliberately outside the clinical red/green/amber vocabulary so an
+ * estimate can never read as a normal/abnormal call. Lightness was raised for
+ * legibility on the dark clinician surface; the two traces are additionally
+ * separated by stroke pattern (see `chartTheme.ESTIMATE_*_DASH`) so hue is
+ * never the only differentiator.
+ */
+export const ESTIMATE_SERIES_COLOR = "hsl(var(--foreground) / 0.72)";
+export const ESTIMATE_LFA_COLOR = "hsl(258 45% 74%)";
+export const ESTIMATE_RFA_COLOR = "hsl(196 45% 68%)";
 
 /** True when this phase's spectral values were computed by HumanOS, not supplied. */
 export function isEstimatedPhase(m: PhaseMetrics | undefined | null): boolean {

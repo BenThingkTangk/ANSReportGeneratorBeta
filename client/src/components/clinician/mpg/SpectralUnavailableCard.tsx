@@ -42,14 +42,14 @@ export function SpectralUnavailableCard({
       <div className="flex items-start gap-3">
         <div className="mt-0.5 text-amber-300" aria-hidden="true">⚠</div>
         <div className="space-y-1.5 min-w-0">
-          <div className="text-[12px] font-semibold text-amber-200">{title}</div>
-          <p className="text-[11px] text-amber-200/80 leading-relaxed max-w-2xl">
+          <div className="text-[13px] font-semibold text-amber-100 break-words">{title}</div>
+          <p className="text-[12.5px] text-amber-50/95 leading-relaxed max-w-2xl">
             No spectral values exist for this view: the vendor's aggregates
             (LFa / RFa / sympathovagal balance) were not supplied, and the
             recording did not carry enough usable beats for HumanOS to compute
             an estimate either. Nothing is substituted or fabricated here.
           </p>
-          <p className="text-[11px] text-amber-200/60 leading-relaxed">
+          <p className="text-[12px] text-amber-100/90 leading-relaxed">
             Not assessed. Attach the paired vendor report (the exact printed
             values are read verbatim, via OCR for scanned PDFs) to populate the
             vendor-reported spectral and blood-pressure interpretation.

@@ -148,7 +148,7 @@ function EcgUnavailableNotice() {
           <p className="text-[11px] text-amber-200/80 leading-relaxed max-w-2xl">
             The uploaded file contains the time-domain cardiovagal ratios (E/I, Valsalva and 30:15) but does not include the beat-to-beat ECG samples needed for the HR, Breathing, LFa/RFa trend, and Cardio-Respiratory Coupling charts. Vendor spectral output (LFa/RFa/sympathovagal balance) is only present in the signed vendor PDF and is shown as “not assessed” where it cannot be reproduced from this recording.
           </p>
-          <p className="text-[11px] text-amber-200/60 leading-relaxed">
+          <p className="text-[12px] text-amber-100/90 leading-relaxed">
             To generate the trend charts, re-export the test from the PhysioPS system with the raw ECG waveform included.
           </p>
         </div>
@@ -166,8 +166,8 @@ function MethodFooter({ mpg }: { mpg: NonNullable<ANSReport["multiParameter"]> }
       className="rounded-2xl bg-card/30 border border-border/20 p-4"
       data-testid="mpg-method-footer"
     >
-      <div className="text-[10px] text-muted-foreground tabular-nums">
-        <span className="font-medium text-foreground/70">Spectral method:</span>{" "}
+      <div className="text-[12px] text-muted-foreground tabular-nums">
+        <span className="font-semibold text-foreground/90">Spectral method:</span>{" "}
         {mpg.wavelet.type} wavelet · {mpg.wavelet.cycles} cycles · spectral update every {mpg.wavelet.spectralUpdateSec}s
       </div>
       <ColomboExplainer chartKey="waveletMethod" />

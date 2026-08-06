@@ -62,7 +62,7 @@ function provenanceBadge(method: string | undefined): { label: string; color: st
 function EstimateNote() {
   return (
     <p
-      className="mt-3 text-[10px] leading-relaxed text-violet-200/75"
+      className="mt-3 text-[12px] leading-relaxed text-violet-100/95"
       data-testid="resting-baseline-estimated-note"
     >
       {ESTIMATE_BADGE}: LFa, RFa and sympathovagal balance above are computed by
@@ -121,7 +121,7 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
         <h3 className="ps-overline ps-underline-cyan">
           Resting Baseline (Phase A)
         </h3>
-        <span className="text-[10px] text-muted-foreground/70 ps-text-mono">
+        <span className="text-[12px] text-muted-foreground ps-text-mono">
           Sympathovagal balance & FRF flagged when out of Colombo norm
         </span>
       </div>
@@ -143,7 +143,7 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
               }}
               data-testid={`baseline-card-${c.label.split(" ")[0].toLowerCase()}`}
             >
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground/80 truncate">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground break-words">
                 {c.label}
               </div>
               <div className="mt-1 flex items-baseline gap-1.5">
@@ -154,9 +154,9 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
                 >
                   {hasValue ? (c.value as number).toFixed(2) : "—"}
                 </span>
-                {hasValue && c.unit && <span className="text-[10px] text-muted-foreground/70 ps-text-mono">{c.unit}</span>}
+                {hasValue && c.unit && <span className="text-[11px] text-muted-foreground ps-text-mono">{c.unit}</span>}
               </div>
-              <div className="mt-1 text-[10px]" style={{ color }}>
+              <div className="mt-1 text-[12px]" style={{ color }}>
                 {cls
                   ? `${classLabel(cls)} · norm ${c.norm.lo}–${c.norm.hi}`
                   : hasValue && estimated
@@ -168,7 +168,7 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
                 if (!badge) return null;
                 return (
                   <div
-                    className="mt-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide"
+                    className="mt-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide"
                     style={{ color: badge.color, background: `${badge.color.replace(")", " / 0.12)")}` }}
                     data-testid={`baseline-provenance-${c.label.split(" ")[0].toLowerCase()}`}
                     data-method={c.method}
@@ -178,7 +178,7 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
                 );
               })()}
               {isOut && c.explainer && (
-                <div className="mt-1 text-[10px] text-muted-foreground/70 leading-snug">
+                <div className="mt-1 text-[12px] text-muted-foreground leading-snug">
                   {c.explainer}
                 </div>
               )}

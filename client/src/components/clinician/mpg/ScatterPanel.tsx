@@ -21,6 +21,16 @@ import {
   ESTIMATE_SERIES_COLOR,
   ESTIMATE_TITLE,
 } from "@/lib/spectralProvenance";
+import {
+  AXIS_LINE_COLOR,
+  AXIS_TICK,
+  AXIS_TICK_COLOR,
+  AXIS_TICK_FONT_SIZE,
+  AXIS_TITLE_FONT_SIZE,
+  ESTIMATE_LEGEND_SHAPE,
+  TOOLTIP_CONTENT_STYLE,
+  type LegendSwatchShape,
+} from "@/lib/chartTheme";
 
 /**
  * Five small-multiple scatter/response charts that mirror the right-hand
@@ -87,7 +97,7 @@ export function ScatterPanel({
       className="rounded-2xl bg-card/50 border border-border/30 p-5"
       data-testid="mpg-scatter-panel"
     >
-      <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium mb-4">
+      <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium mb-4 break-words">
         Autonomic Response Maps
       </h3>
 
@@ -153,18 +163,22 @@ function BaselineLfaRfa({ mpg, est }: { mpg: MultiParameterGraphical; est: boole
             dataKey="x"
             name="LFa"
             domain={[0, Math.max(10, x * 1.4)]}
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
-            label={{ value: "LFa (Sympathetic) bpm²", fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideBottom", offset: -8 }}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
+            label={{ value: "LFa (Sympathetic) bpm²", fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideBottom", offset: -8 }}
           />
           <YAxis
             type="number"
             dataKey="y"
             name="RFa"
             domain={[0, Math.max(8, y * 1.4)]}
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
-            label={{ value: "RFa (Parasympathetic)", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
+            label={{ value: "RFa (Parasympathetic)", angle: -90, fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideLeft" }}
             width={44}
           />
           <ZAxis range={[120, 120]} />
@@ -176,7 +190,7 @@ function BaselineLfaRfa({ mpg, est }: { mpg: MultiParameterGraphical; est: boole
           ) : null}
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
-            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
+            contentStyle={TOOLTIP_CONTENT_STYLE}
           />
           <Scatter data={[{ x, y, label: "Resting" }]} fill={est ? ESTIMATE_SERIES_COLOR : "hsl(17 100% 60%)"}>
             <Cell
@@ -196,7 +210,7 @@ function BaselineLfaRfa({ mpg, est }: { mpg: MultiParameterGraphical; est: boole
       <LegendRow
         items={
           est
-            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (no norm window applied)" }]
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (no norm window applied)", shape: ESTIMATE_LEGEND_SHAPE }]
             : [
                 { swatch: "hsl(140 60% 55% / 0.30)", label: "Low-normal window (ratio 0.4–1.0)" },
                 { swatch: "hsl(0 72% 62%)", label: "Advanced dysfunction (ratio < 0.4)" },
@@ -250,18 +264,22 @@ function DeepBreathingRfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age
             type="number"
             dataKey="age"
             domain={[18, 75]}
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
-            label={{ value: "Age (years)", fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideBottom", offset: -8 }}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
+            label={{ value: "Age (years)", fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideBottom", offset: -8 }}
           />
           <YAxis
             type="number"
             dataKey="rfa"
             domain={[0, Math.max(10, band.hi * 1.3, val * 1.3)]}
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
             width={44}
-            label={{ value: "RFa (bpm²)", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
+            label={{ value: "RFa (bpm²)", angle: -90, fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideLeft" }}
           />
           {/* Age-normal band: SUPPRESSED for estimates. */}
           {(est ? [] : bandData).map((b) => (
@@ -278,7 +296,7 @@ function DeepBreathingRfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age
           ))}
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
-            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
+            contentStyle={TOOLTIP_CONTENT_STYLE}
           />
           <Scatter
             data={[{ age, rfa: val }]}
@@ -297,7 +315,7 @@ function DeepBreathingRfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age
       <LegendRow
         items={
           est
-            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (age-normal band not applied)" }]
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (age-normal band not applied)", shape: ESTIMATE_LEGEND_SHAPE }]
             : [
                 { swatch: "hsl(140 60% 50% / 0.45)", label: "Age-normal band" },
                 { swatch: "hsl(148 16% 60%)", label: "Outside band" },
@@ -351,18 +369,22 @@ function ValsalvaLfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age: num
             type="number"
             dataKey="age"
             domain={[18, 75]}
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
-            label={{ value: "Age (years)", fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideBottom", offset: -8 }}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
+            label={{ value: "Age (years)", fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideBottom", offset: -8 }}
           />
           <YAxis
             type="number"
             dataKey="lfa"
             domain={[0, Math.max(20, band.hi * 1.3, val * 1.3)]}
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
             width={44}
-            label={{ value: "LFa (bpm²)", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
+            label={{ value: "LFa (bpm²)", angle: -90, fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideLeft" }}
           />
           {/* Age-normal band: SUPPRESSED for estimates. */}
           {(est ? [] : bandData).map((b) => (
@@ -379,7 +401,7 @@ function ValsalvaLfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age: num
           ))}
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
-            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
+            contentStyle={TOOLTIP_CONTENT_STYLE}
           />
           <Scatter
             data={[{ age, lfa: val }]}
@@ -398,7 +420,7 @@ function ValsalvaLfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age: num
       <LegendRow
         items={
           est
-            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (age-normal band not applied)" }]
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (age-normal band not applied)", shape: ESTIMATE_LEGEND_SHAPE }]
             : [
                 { swatch: "hsl(140 60% 50% / 0.45)", label: "Age-normal band" },
                 { swatch: "hsl(148 16% 60%)", label: "Outside band" },
@@ -448,22 +470,26 @@ function StandResponse({ mpg, est }: { mpg: MultiParameterGraphical; est: boolea
           <XAxis
             type="category"
             dataKey="label"
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
             allowDuplicatedCategory={false}
           />
           <YAxis
             type="number"
             dataKey="value"
             domain={[0, maxV]}
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
             width={44}
-            label={{ value: "bpm²", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
+            label={{ value: "bpm²", angle: -90, fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideLeft" }}
           />
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
-            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
+            contentStyle={TOOLTIP_CONTENT_STYLE}
           />
           <Scatter data={data} fill={est ? ESTIMATE_SERIES_COLOR : "hsl(244 84% 68%)"}>
             {data.map((d, i) => (
@@ -492,7 +518,7 @@ function StandResponse({ mpg, est }: { mpg: MultiParameterGraphical; est: boolea
       <LegendRow
         items={
           est
-            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (no target marker applied)" }]
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (no target marker applied)", shape: ESTIMATE_LEGEND_SHAPE }]
             : [
                 { swatch: "hsl(0 72% 51%)", label: "LFa — Sympathetic" },
                 { swatch: "hsl(217 91% 55%)", label: "RFa — Parasympathetic" },
@@ -546,18 +572,22 @@ function RfaExcess({ mpg, est }: { mpg: MultiParameterGraphical; est: boolean })
           <XAxis
             type="category"
             dataKey="label"
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
             allowDuplicatedCategory={false}
           />
           <YAxis
             type="number"
             dataKey="value"
             domain={[-maxAbs, maxAbs]}
-            stroke="hsl(var(--muted-foreground))"
-            fontSize={10}
+            stroke={AXIS_LINE_COLOR}
+            tick={AXIS_TICK}
+            tickMargin={6}
+            fontSize={AXIS_TICK_FONT_SIZE}
             width={44}
-            label={{ value: "% change", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
+            label={{ value: "% change", angle: -90, fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideLeft" }}
           />
           <ReferenceLine y={0} stroke="hsl(var(--border))" />
           {/* Expected/excess zones are normative: suppressed for estimates. */}
@@ -565,7 +595,7 @@ function RfaExcess({ mpg, est }: { mpg: MultiParameterGraphical; est: boolean })
           {!est ? <ReferenceArea y1={-maxAbs} y2={-20} fill="hsl(140 60% 55% / 0.08)" /> : null}
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
-            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
+            contentStyle={TOOLTIP_CONTENT_STYLE}
             formatter={(v: number) => [`${v.toFixed(0)}%`, "Change"]}
           />
           <Scatter data={data}>
@@ -589,7 +619,7 @@ function RfaExcess({ mpg, est }: { mpg: MultiParameterGraphical; est: boolean })
       <LegendRow
         items={
           est
-            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (expected/excess zones not applied)" }]
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (expected/excess zones not applied)", shape: ESTIMATE_LEGEND_SHAPE }]
             : [
                 { swatch: "hsl(140 60% 55% / 0.30)", label: "Expected zone (RFa drops on challenge)" },
                 { swatch: "hsl(0 72% 62% / 0.30)", label: "Excess zone (RFa rises — parasympathetic excess)" },
@@ -627,19 +657,19 @@ function MiniCard({
     >
       <div className="mb-2">
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="text-[12px] font-semibold text-foreground/90">{title}</div>
+          <div className="text-[13px] font-semibold text-foreground break-words">{title}</div>
           {est ? (
-            <span className="rounded border border-violet-400/40 px-1 py-px text-[9px] font-semibold uppercase tracking-wider text-violet-200">
+            <span className="rounded border border-violet-300/60 px-1.5 py-px text-[11px] font-semibold uppercase tracking-wider text-violet-100">
               est.
             </span>
           ) : null}
         </div>
         {est ? (
-          <div className="text-[9px] uppercase tracking-wider text-violet-200/70 mt-0.5">
+          <div className="text-[11px] uppercase tracking-wider text-violet-100/90 mt-0.5 break-words">
             {ESTIMATE_BADGE}
           </div>
         ) : null}
-        {subtitle && <div className="text-[10px] text-muted-foreground/80 tabular-nums mt-0.5">{subtitle}</div>}
+        {subtitle && <div className="text-[12px] text-muted-foreground tabular-nums mt-0.5">{subtitle}</div>}
       </div>
       {children}
       <ColomboExplainer chartKey={chartKey} />
@@ -647,15 +677,63 @@ function MiniCard({
   );
 }
 
-function LegendRow({ items }: { items: { swatch: string; label: string }[] }) {
+/**
+ * Legend swatches carry a SHAPE as well as a colour: estimate series use a
+ * rotated diamond, vendor norm windows / clinical zones use a square. A reader
+ * with colour-vision deficiency (or a greyscale print of the report) can still
+ * tell an estimate entry from a normative one.
+ */
+function LegendRow({
+  items,
+}: {
+  items: { swatch: string; label: string; shape?: LegendSwatchShape }[];
+}) {
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
       {items.map((it) => (
-        <div key={it.label} className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-          <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: it.swatch }} />
+        <div
+          key={it.label}
+          className="flex items-center gap-1.5 text-[12px] leading-snug text-muted-foreground"
+        >
+          <LegendSwatch swatch={it.swatch} shape={it.shape ?? "square"} />
           <span>{it.label}</span>
         </div>
       ))}
     </div>
+  );
+}
+
+function LegendSwatch({ swatch, shape }: { swatch: string; shape: LegendSwatchShape }) {
+  if (shape === "diamond") {
+    return (
+      <span
+        className="inline-block w-3 h-3 shrink-0 rotate-45 rounded-[2px]"
+        style={{ background: swatch }}
+        data-legend-shape="diamond"
+        aria-hidden="true"
+      />
+    );
+  }
+  if (shape === "long-dash" || shape === "dotted-line") {
+    return (
+      <span
+        className="inline-block w-4 shrink-0"
+        style={{
+          borderTopWidth: 2,
+          borderTopStyle: shape === "long-dash" ? "dashed" : "dotted",
+          borderTopColor: swatch,
+        }}
+        data-legend-shape={shape}
+        aria-hidden="true"
+      />
+    );
+  }
+  return (
+    <span
+      className="inline-block w-3 h-3 shrink-0 rounded-sm"
+      style={{ background: swatch }}
+      data-legend-shape="square"
+      aria-hidden="true"
+    />
   );
 }

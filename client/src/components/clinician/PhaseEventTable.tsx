@@ -70,7 +70,7 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
         <thead>
           <tr className="border-b border-border/30">
             {["Phase", "Duration", "HR (mean ± range)", "FRF", "LFa", "RFa", "SB", "BP"].map(h => (
-              <th key={h} className="text-left py-2 pr-4 text-[10px] uppercase tracking-wider text-muted-foreground font-medium whitespace-nowrap">
+              <th key={h} className="text-left py-2 pr-4 text-[11px] uppercase tracking-wider text-muted-foreground font-medium whitespace-nowrap">
                 {h}
               </th>
             ))}
@@ -104,7 +104,7 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
                       >
                         {fmt(m?.[k])}
                         {m?.[k] != null ? (
-                          <span className="ml-1 text-[9px] uppercase tracking-wider opacity-70">
+                          <span className="ml-1 text-[11px] font-semibold uppercase tracking-wider text-violet-100/90">
                             est.
                           </span>
                         ) : null}
@@ -138,16 +138,16 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
 
       {/* Legend */}
       <div className="mt-3 pt-3 border-t border-border/20">
-        <p className="text-[10px] text-muted-foreground leading-relaxed">
-          <span className="font-medium text-foreground/60">Legend: </span>
+        <p className="text-[12px] text-muted-foreground leading-relaxed">
+          <span className="font-semibold text-foreground/90">Legend: </span>
           LFa = Sympathetic Activity (bpm²) · RFa = Parasympathetic Activity (bpm²) · FRF = Fundamental Respiratory Frequency (Hz) · SB = Sympathovagal Balance (LFa/RFa)
         </p>
         {anyEstimated ? (
           <p
-            className="text-[10px] text-muted-foreground leading-relaxed mt-1"
+            className="text-[12px] text-muted-foreground leading-relaxed mt-1"
             data-testid="phase-event-table-estimated-note"
           >
-            <span className="font-medium text-foreground/60">est. = </span>
+            <span className="font-semibold text-foreground/90">est. = </span>
             {ESTIMATE_BADGE}. Estimated by HumanOS from the ECG-derived R-R series
             (Morlet wavelet band power, bpm²). Not a vendor-reported value, not
             validated against PhysioPS output, deliberately not colour-coded
@@ -155,10 +155,10 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
             detection or anything the patient sees.
           </p>
         ) : null}
-        <p className="text-[10px] mt-1">
-          <span style={{ color: "hsl(17 100% 60%)" }}>■ Below norm</span>
+        <p className="text-[12px] mt-1">
+          <span style={{ color: "hsl(17 100% 72%)" }}>■ Below norm</span>
           <span className="mx-2 text-muted-foreground">·</span>
-          <span style={{ color: "hsl(0 72% 60%)" }}>■ Above norm</span>
+          <span style={{ color: "hsl(0 80% 74%)" }}>■ Above norm</span>
         </p>
       </div>
     </motion.div>
