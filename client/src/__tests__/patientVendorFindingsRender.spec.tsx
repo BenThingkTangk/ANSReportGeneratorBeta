@@ -146,13 +146,16 @@ describe("PatientPortalTwoColumn — vendor findings survive in the rendered cop
     expect(treatmentsEmpty.textContent).not.toMatch(/No specific lifestyle interventions flagged/i);
   });
 
-  it("STILL enriches + can say nothing flagged when there is NO vendor report", async () => {
+  it("does not let vendor-blind enrichment overstate an unscorable study", async () => {
     const { render } = await import("@testing-library/react");
     const { PatientPortalTwoColumn } = await import("../components/PatientPortalTwoColumn");
     const { container } = render(<PatientPortalTwoColumn report={report} />);
     await new Promise((r) => setTimeout(r, 50));
-    // With no vendor findings, the vendor-blind enrichment is allowed to apply.
+    // This real fixture is not scorable. The mocked AI response is intentionally
+    // unsafe, so it must not overwrite the deterministic guarded synopsis even
+    // when no vendor document is attached.
     const text = container.textContent || "";
-    expect(text).toMatch(/None of the specific autonomic dysfunction patterns|reassuring/i);
+    expect(text).not.toMatch(/None of the specific autonomic dysfunction patterns|reassuring/i);
+    expect(text).toMatch(/Not scorable/i);
   });
 });

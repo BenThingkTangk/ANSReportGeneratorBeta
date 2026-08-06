@@ -82,9 +82,46 @@ describe("vendor findings threaded into summaries (BLOCKER B)", () => {
       expect(withVendor).toMatch(/blood-pressure|spectral/i);
     });
 
-    it("STILL says nothing flagged when there is genuinely no vendor report", () => {
+    it("does not turn an incomplete tri-state screen into a negative finding", () => {
       const noVendor = buildPatientSynopsis(cleanReport(), undefined);
-      expect(noVendor).toMatch(/None of the specific autonomic dysfunction patterns/i);
+      expect(noVendor).not.toMatch(/None of the specific autonomic dysfunction patterns/i);
+      expect(noVendor).toMatch(/Not assessed/i);
+    });
+
+    it("does not describe an ECG-gated study as clean or reassuring", () => {
+      const unsafe = {
+        ...cleanReport(),
+        ecgQuality: {
+          snrDb: 46.6,
+          motionFraction: 0.28,
+          leadOff: false,
+          usable: false,
+          warnings: ["Excess motion or sentinel spikes detected."],
+        },
+        wellnessScore: null,
+        wellnessTier: null,
+        wellnessBreakdown: {
+          scorability: {
+            scorable: false,
+            unavailableWeight: 0.77,
+            missingDomains: ["Sympathovagal balance"],
+            blockers: [
+              {
+                code: "ECG_UNUSABLE",
+                message: "The ECG recording did not pass the signal-usability gate.",
+                domains: ["all"],
+              },
+            ],
+            notice: "Not scorable",
+          },
+        } as any,
+      } satisfies Partial<ANSReport>;
+      const synopsis = buildPatientSynopsis(unsafe);
+      expect(synopsis).toMatch(/composite wellness score is not available/i);
+      expect(synopsis).toMatch(/ECG quality gate did not pass/i);
+      expect(synopsis).not.toMatch(/captured clean/i);
+      expect(synopsis).not.toMatch(/None of the specific autonomic dysfunction patterns/i);
+      expect(synopsis).not.toMatch(/responding as expected/i);
     });
   });
 

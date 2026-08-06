@@ -23,6 +23,7 @@ import { BodyHeatmap } from "./patient/BodyHeatmap";
 import { SupplementsPanel } from "./patient/SupplementsPanel";
 import { TreatmentsPanel } from "./patient/TreatmentsPanel";
 import { NextTestCard } from "./patient/NextTestCard";
+import { WellnessMeter } from "./patient/WellnessMeter";
 
 interface PatientPortalProps {
   report: ANSReport;
@@ -52,6 +53,9 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
   const p = report.patientData;
   const ab = report.autonomicBalance;
   const tier = report.wellnessTier;
+  const notScorable =
+    report.wellnessScore == null ||
+    report.wellnessBreakdown?.scorability?.scorable === false;
   // When LFa/RFa/HRV were not captured the balance is 0/0; the gauge and the
   // interpretation below both switch to a "Not assessed" state in that case
   // instead of showing a fabricated split or a "Balanced sympathovagal tone" line.
@@ -107,7 +111,7 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
     const hasNotableVendor = (vendorFindings?.findings ?? []).some(
       (f) => f.classification === "abnormal" || f.classification === "high" || f.classification === "low" || f.key === "stand.presyncope",
     );
-    if (!report.patientSynopsis && !hasNotableVendor) enrichSynopsis();
+    if (!report.patientSynopsis && !hasNotableVendor && !notScorable) enrichSynopsis();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -162,6 +166,8 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
           </span>
         )}
       </motion.div>
+
+      {notScorable ? <WellnessMeter report={report} /> : null}
 
       {/* HERO — Cinematic Neural Profile + HRV Ring */}
       <motion.div

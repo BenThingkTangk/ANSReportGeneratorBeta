@@ -49,14 +49,14 @@ export function PhaseCard({ title, phaseId, phase }: Props) {
           checks that depend on it will be skipped.
         </p>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
-          <ProvFieldRow label="HR" field={phase.heartRate} unit="bpm" />
-          <ProvFieldRow label="SBP" field={phase.bp.sbp} unit="mmHg" />
-          <ProvFieldRow label="DBP" field={phase.bp.dbp} unit="mmHg" />
-          <ProvFieldRow label="MAP" field={phase.bp.map} unit="mmHg" />
-          <ProvFieldRow label="LFa (sympathetic)" field={phase.lfa} />
-          <ProvFieldRow label="RFa (parasympathetic)" field={phase.rfa} />
-          <ProvFieldRow label="SB (LFa/RFa)" field={phase.sb} />
+        <div className="grid grid-cols-1 gap-y-0.5">
+          <ProvFieldRow dense label="HR" field={phase.heartRate} unit="bpm" />
+          <ProvFieldRow dense label="SBP" field={phase.bp.sbp} unit="mmHg" />
+          <ProvFieldRow dense label="DBP" field={phase.bp.dbp} unit="mmHg" />
+          <ProvFieldRow dense label="MAP" field={phase.bp.map} unit="mmHg" />
+          <ProvFieldRow dense label="LFa (sympathetic)" field={phase.lfa} />
+          <ProvFieldRow dense label="RFa (parasympathetic)" field={phase.rfa} />
+          <ProvFieldRow dense label="SB (LFa/RFa)" field={phase.sb} />
         </div>
       )}
 

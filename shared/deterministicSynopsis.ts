@@ -303,6 +303,13 @@ export function buildPatientSynopsis(report: Partial<ANSReport>, vendor?: Vendor
   const patterns = activePatterns(report).patient;
   const balanceAssessed = hasAutonomicBalance(report);
   const vendorNotable = notableVendorFindings(vendor);
+  const compositeScorable =
+    report.wellnessScore != null &&
+    report.wellnessBreakdown?.scorability?.scorable !== false;
+  const ecgUsable = report.ecgQuality?.usable !== false;
+  const patternStates = Object.values(report.dysfunctionPatterns ?? {});
+  const patternScreenComplete =
+    patternStates.length > 0 && patternStates.every((value) => value === false);
 
   const sentences: string[] = [];
 
@@ -334,15 +341,10 @@ export function buildPatientSynopsis(report: Partial<ANSReport>, vendor?: Vendor
       }.`,
     );
   } else {
-    // IMPORTANT distinction (was previously misleading): the recording is fine.
-    // Time-domain ECG metrics and the Ewing cardiovagal ratios ARE measured
-    // below. What is missing is the vendor's PROPRIETARY spectral branch-balance
-    // aggregates (LFa/RFa and their sympathovagal-balance ratio) — those are not
-    // contained in the raw .ans export and are only available if the paired
-    // vendor PDF is supplied. So this is an export-format limitation, not a
-    // failed or low-quality recording.
     sentences.push(
-      `${name}, your recording captured clean heart-rhythm data — your measured ECG results and cardiovagal (Ewing) reflex ratios are shown below. The one piece not available is the sympathetic-vs-parasympathetic "branch balance" split: that comes from the device vendor's proprietary spectral analysis (LFa/RFa), which is not contained in the raw .ans export. It shows as "Not assessed" unless the paired vendor PDF values are supplied.`,
+      ecgUsable
+        ? `${name}, this upload contains measured ECG results and cardiovagal (Ewing) reflex ratios, shown below. The sympathetic-vs-parasympathetic "branch balance" split comes from the device vendor's proprietary spectral analysis (LFa/RFa), which is not contained in the raw .ans export. It shows as "Not assessed" unless the paired vendor PDF values are supplied.`
+        : `${name}, a composite wellness score is not available for this study because the ECG quality gate did not pass and the vendor's proprietary spectral analysis values for sympathetic-vs-parasympathetic balance (LFa/RFa) are not contained in the raw .ans export. Measured values that remain traceable to the file are shown below as observations, not as an overall autonomic assessment.`,
     );
   }
 
@@ -355,9 +357,11 @@ export function buildPatientSynopsis(report: Partial<ANSReport>, vendor?: Vendor
     const parts = ewing.map((e) => `${e.label} ${fmt(e.value, 2)} (${e.classification.toLowerCase()}; ref ${e.normal})`);
     sentences.push(
       `Measured cardiovagal reflexes: ${humanList(parts)}.${
-        allNormal
+        allNormal && ecgUsable
           ? " All three are within the normal range — your heart's calming (vagal) reflexes are responding as expected."
-          : ""
+          : allNormal
+            ? " The file's ratio values fall within their listed reference ranges, but the failed ECG quality gate means they must not be used to imply a normal overall autonomic result."
+            : ""
       }`,
     );
   }
@@ -368,11 +372,15 @@ export function buildPatientSynopsis(report: Partial<ANSReport>, vendor?: Vendor
     sentences.push(
       `The test picked up ${humanList(patterns)} — patterns in how your body regulates itself.`,
     );
-  } else if ((ewing.length > 0 || balanceAssessed) && vendorNotable.length === 0) {
-    // A clean cardiovagal screen is meaningful on its own even when the vendor
-    // spectral branch-balance is unavailable. Only say "nothing flagged" when
-    // the VENDOR report also flagged nothing — otherwise that would contradict
-    // an attached signed report (its findings are added below).
+  } else if (
+    compositeScorable &&
+    ecgUsable &&
+    patternScreenComplete &&
+    vendorNotable.length === 0
+  ) {
+    // A negative screen is only safe when the composite was scorable, ECG
+    // quality passed, and every pattern state was explicitly assessed false.
+    // Unknown/null states must never be summarized as "nothing flagged."
     sentences.push(
       "None of the specific autonomic dysfunction patterns this device's own signals screen for were flagged in the measured signals.",
     );
