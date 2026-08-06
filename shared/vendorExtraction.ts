@@ -233,10 +233,10 @@ export interface VendorReportExtraction {
    * Mean confidence (0..1) across the fields actually read. INTERNAL DIAGNOSTIC
    * ONLY — do not render it as the headline for a read failure. "18 fields, 0%
    * mean confidence" reads like a low-quality match; the truth in that case is
-   * "0 of 18 numeric fields read". Use `fieldCount` / `attemptedFieldCount`.
+   * "0 of 19 structured fields read". Use `fieldCount` / `attemptedFieldCount`.
    */
   meanConfidence: number;
-  /** Count of fields successfully extracted (READ). */
+  /** Count of attempted structured scalar fields successfully extracted (READ). */
   fieldCount: number;
   /**
    * Count of fields the extractor ATTEMPTED. `fieldCount` of

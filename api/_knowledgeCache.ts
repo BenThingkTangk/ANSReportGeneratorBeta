@@ -5,6 +5,7 @@
  */
 import { createSupabaseAdmin } from "./_supabase.js";
 import { detectChunkSchema } from "./_ans/knowledgeSchema.js";
+import { describeDbError, type DbFailureKind } from "./_ans/dbConfig.js";
 import type { PassageRow } from "./_ans/knowledgePassages.js";
 import crypto from "crypto";
 
@@ -42,9 +43,42 @@ export interface KnowledgeCorpusStatus {
    * report-only + clearly-labeled external grounding.
    */
   ragFunctional: boolean;
+  /** True only when both corpus count queries completed without a DB/API error. */
+  databaseReachable: boolean;
+  /** Secret-safe failure classification for operator diagnostics. */
+  failureKind: DbFailureKind | null;
 }
 
 let _statusCache: { value: KnowledgeCorpusStatus; fetchedAt: number } | null = null;
+
+interface CountResult {
+  count: number | null;
+  error?: unknown;
+}
+
+/**
+ * Convert the two PostgREST count responses into an honest corpus status.
+ * Supabase query builders return errors as values rather than throwing, so those
+ * errors must be inspected explicitly. Otherwise an invalid key looks exactly
+ * like a legitimate empty corpus because both `count` values are null.
+ */
+export function summarizeCorpusCounts(
+  sourceResult: CountResult,
+  chunkResult: CountResult,
+): KnowledgeCorpusStatus {
+  const queryError = sourceResult.error ?? chunkResult.error ?? null;
+  const activeSources = sourceResult.error ? 0 : (sourceResult.count ?? 0);
+  const totalChunks = chunkResult.error ? 0 : (chunkResult.count ?? 0);
+  const databaseReachable = queryError == null;
+  const failureKind = queryError ? describeDbError(queryError).kind : null;
+  return {
+    activeSources,
+    totalChunks,
+    ragFunctional: databaseReachable && totalChunks > 0,
+    databaseReachable,
+    failureKind,
+  };
+}
 
 /**
  * Cheap corpus status for grounding decisions. Counts chunks defensively — a
@@ -58,7 +92,7 @@ export async function getKnowledgeCorpusStatus(): Promise<KnowledgeCorpusStatus>
   let totalChunks = 0;
   try {
     const admin = createSupabaseAdmin();
-    const [{ count: src }, { count: ch }] = await Promise.all([
+    const [sourceResult, chunkResult] = await Promise.all([
       admin
         .from("ans_knowledge_sources")
         .select("id", { count: "exact", head: true })
@@ -66,18 +100,26 @@ export async function getKnowledgeCorpusStatus(): Promise<KnowledgeCorpusStatus>
         .eq("review_status", "approved"),
       admin.from("ans_knowledge_chunks").select("id", { count: "exact", head: true }),
     ]);
-    activeSources = src ?? 0;
-    totalChunks = ch ?? 0;
-  } catch {
-    /* fall through with zeros — RAG treated as non-functional */
+    const value = summarizeCorpusCounts(sourceResult, chunkResult);
+    if (!value.databaseReachable) {
+      const detail = describeDbError(sourceResult.error ?? chunkResult.error);
+      console.warn(`Knowledge corpus count unavailable (${detail.kind}): ${detail.message}`);
+    }
+    _statusCache = { value, fetchedAt: now };
+    return value;
+  } catch (error) {
+    const detail = describeDbError(error);
+    console.warn(`Knowledge corpus count exception (${detail.kind}): ${detail.message}`);
+    const value: KnowledgeCorpusStatus = {
+      activeSources,
+      totalChunks,
+      ragFunctional: false,
+      databaseReachable: false,
+      failureKind: detail.kind,
+    };
+    _statusCache = { value, fetchedAt: now };
+    return value;
   }
-  const value: KnowledgeCorpusStatus = {
-    activeSources,
-    totalChunks,
-    ragFunctional: totalChunks > 0,
-  };
-  _statusCache = { value, fetchedAt: now };
-  return value;
 }
 
 export async function getActiveKnowledgeSources(): Promise<KnowledgeSource[]> {

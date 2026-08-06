@@ -304,7 +304,9 @@ function countFields(x: VendorReportExtraction): number {
       if (f && typeof f === "object" && "value" in f && f.value != null) n++;
     }
   }
-  n += x.narrative?.findings.length ?? 0;
-  n += x.narrative?.printedNumbers.length ?? 0;
+  // fieldCount is paired with attemptedFieldCount in the clinician badge. Keep
+  // both at the same grain: the structured scalar fields the extractor actually
+  // attempted. Narrative findings and prose-printed numbers are separate evidence
+  // collections and must not inflate this count above its denominator.
   return n;
 }

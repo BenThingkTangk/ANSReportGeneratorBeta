@@ -220,10 +220,11 @@ export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileNa
             {source === "ocr" && typeof ocrConfidence === "number" && (
               <span className="px-2 py-0.5 rounded-full border border-border/40">scan quality {ocrConfidence}%</span>
             )}
-            {/* PLAIN COUNT. "18 fields · 0% mean conf" reads like a poor match;
-                the truth in that case is "0 of 18 numeric fields read". */}
+            {/* PLAIN COUNT at the same grain as attemptedFieldCount. Identity,
+                baseline and ratio scalars are structured fields; narrative
+                findings are shown separately and never inflate this badge. */}
             <span className="px-2 py-0.5 rounded-full border border-border/40" data-testid="vendor-field-count">
-              {extraction.fieldCount} of {extraction.attemptedFieldCount ?? extraction.fieldCount} numeric fields read
+              {extraction.fieldCount} of {extraction.attemptedFieldCount ?? extraction.fieldCount} structured fields read
             </span>
             {extraction.fieldCount === 0 && (
               <span

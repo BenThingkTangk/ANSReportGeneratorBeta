@@ -141,6 +141,12 @@ describe("vendor multi-document merge — letter (SB=2.59) + categorical summary
       it("surfaces no spurious field conflicts", () => {
         expect(conflicts).toHaveLength(0);
       });
+
+      it("does not inflate the structured-field badge with narrative evidence", () => {
+        expect(merged.attemptedFieldCount).toBe(19);
+        expect(merged.fieldCount).toBeLessThanOrEqual(merged.attemptedFieldCount!);
+        expect(merged.narrative!.findings.length).toBeGreaterThanOrEqual(9);
+      });
     });
   }
 

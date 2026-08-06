@@ -809,7 +809,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           // database configured" so an operator can tell misconfiguration apart
           // from an empty knowledge base.
           databaseConfigured: isDbConfigured(),
-          note: retrieval.mode === "unavailable"
+          databaseReachable: corpus.databaseReachable,
+          databaseFailureKind: corpus.failureKind,
+          note: !corpus.databaseReachable
+            ? `Knowledge retrieval could not authenticate or query the configured database (${corpus.failureKind ?? "unknown"}); the answer is grounded in the report and clearly-labeled external evidence only.`
+            : retrieval.mode === "unavailable"
             ? "Knowledge retrieval is unavailable because the database is not configured for this deployment; the answer is grounded in the report and clearly-labeled external evidence only."
             : corpus.ragFunctional
             ? "No knowledge passage was relevant to this question; the answer is grounded in the report and clearly-labeled external evidence, not RAG."
