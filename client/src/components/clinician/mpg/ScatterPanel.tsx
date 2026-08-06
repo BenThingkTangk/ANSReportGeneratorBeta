@@ -12,9 +12,15 @@ import {
   ReferenceLine,
   Cell,
 } from "recharts";
-import type { MultiParameterGraphical } from "@shared/schema";
+import type { ANSReport, MultiParameterGraphical } from "@shared/schema";
 import { ColomboExplainer } from "../ColomboExplainer";
 import { SpectralUnavailableCard } from "./SpectralUnavailableCard";
+import { SpectralEstimateBanner } from "./SpectralEstimateBanner";
+import {
+  ESTIMATE_BADGE,
+  ESTIMATE_SERIES_COLOR,
+  ESTIMATE_TITLE,
+} from "@/lib/spectralProvenance";
 
 /**
  * Five small-multiple scatter/response charts that mirror the right-hand
@@ -50,16 +56,29 @@ function valsalvaLfaNormalBand(age: number): { lo: number; hi: number } {
 interface ScatterPanelProps {
   mpg: MultiParameterGraphical;
   patientAge: number;
-  /**
-   * When false (raw-ECG .ans with no vendor wavelet output), every chart in
-   * this panel would rely on non-reproducible spectral aggregates, so the whole
-   * section is replaced with a single "not reproducible" card instead of
-   * plotting substitute/estimated LFa/RFa values.
-   */
+  /** True only for vendor-reported values: norm bands + colour-coding allowed. */
   spectralAvailable: boolean;
+  /**
+   * True when the plotted LFa/RFa are HumanOS waveform estimates. The maps ARE
+   * drawn — the values are real measurements of the R-R series — but every
+   * Colombo normative region, age band, target marker and normal/abnormal
+   * colour is suppressed, because judging an unvalidated estimate against the
+   * vendor's norms would be an unvalidated clinical call. Each card is labelled
+   * "est." and the section carries a prominent disclosure.
+   */
+  spectralEstimated?: boolean;
+  report?: ANSReport;
 }
 
-export function ScatterPanel({ mpg, patientAge, spectralAvailable }: ScatterPanelProps) {
+export function ScatterPanel({
+  mpg,
+  patientAge,
+  spectralAvailable,
+  spectralEstimated = false,
+  report,
+}: ScatterPanelProps) {
+  const plot = spectralAvailable || spectralEstimated;
+  const est = spectralEstimated;
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -72,24 +91,29 @@ export function ScatterPanel({ mpg, patientAge, spectralAvailable }: ScatterPane
         Autonomic Response Maps
       </h3>
 
-      {!spectralAvailable ? (
+      {!plot ? (
         <SpectralUnavailableCard
-          title="Autonomic response maps — spectral output not reproducible"
+          title="Autonomic response maps — spectral output not established"
           testId="mpg-scatter-unavailable"
         />
       ) : (
-        <>
+        <div data-testid={est ? "mpg-scatter-estimated" : "mpg-scatter-vendor"}>
+          {est && report ? (
+            <div className="mb-4">
+              <SpectralEstimateBanner report={report} testId="mpg-scatter-estimate-banner" compact />
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <BaselineLfaRfa mpg={mpg} />
-            <DeepBreathingRfa mpg={mpg} age={patientAge} />
-            <ValsalvaLfa mpg={mpg} age={patientAge} />
-            <StandResponse mpg={mpg} />
+            <BaselineLfaRfa mpg={mpg} est={est} />
+            <DeepBreathingRfa mpg={mpg} age={patientAge} est={est} />
+            <ValsalvaLfa mpg={mpg} age={patientAge} est={est} />
+            <StandResponse mpg={mpg} est={est} />
           </div>
 
           <div className="mt-5">
-            <RfaExcess mpg={mpg} />
+            <RfaExcess mpg={mpg} est={est} />
           </div>
-        </>
+        </div>
       )}
     </motion.div>
   );
@@ -97,7 +121,7 @@ export function ScatterPanel({ mpg, patientAge, spectralAvailable }: ScatterPane
 
 // --- 1. Baseline LFa vs RFa ------------------------------------------------
 
-function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
+function BaselineLfaRfa({ mpg, est }: { mpg: MultiParameterGraphical; est: boolean }) {
   const x = mpg.scatter.baselineLFa;
   const y = mpg.scatter.baselineRFa;
   // Per-phase null guard: baseline spectral may be absent even when the panel's
@@ -115,6 +139,7 @@ function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
 
   return (
     <MiniCard
+      est={est}
       title="Baseline LFa vs RFa"
       subtitle={`LFa/RFa = ${ratio.toFixed(2)} (resting balance)`}
       chartKey="baselineLfaRfa"
@@ -143,22 +168,40 @@ function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
             width={44}
           />
           <ZAxis range={[120, 120]} />
-          {/* Normal zone: ratio 0.4 - 1.0, RFa 0.5 - 6, LFa 0 - 8 */}
-          <ReferenceArea x1={0} x2={6} y1={0.5} y2={6} fill="hsl(140 60% 55% / 0.10)" stroke="hsl(140 60% 55% / 0.40)" strokeDasharray="3 3" />
+          {/* Normal zone: ratio 0.4 - 1.0, RFa 0.5 - 6, LFa 0 - 8.
+              SUPPRESSED for estimates — an unvalidated value must not be shown
+              inside or outside a normative region. */}
+          {!est ? (
+            <ReferenceArea x1={0} x2={6} y1={0.5} y2={6} fill="hsl(140 60% 55% / 0.10)" stroke="hsl(140 60% 55% / 0.40)" strokeDasharray="3 3" />
+          ) : null}
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
             contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
           />
-          <Scatter data={[{ x, y, label: "Resting" }]} fill="hsl(17 100% 60%)">
-            <Cell fill={ratio >= 0.4 && ratio <= 1.0 ? "hsl(140 60% 55%)" : ratio < 0.4 ? "hsl(0 72% 62%)" : "hsl(17 100% 60%)"} />
+          <Scatter data={[{ x, y, label: "Resting" }]} fill={est ? ESTIMATE_SERIES_COLOR : "hsl(17 100% 60%)"}>
+            <Cell
+              fill={
+                est
+                  ? ESTIMATE_SERIES_COLOR
+                  : ratio >= 0.4 && ratio <= 1.0
+                    ? "hsl(140 60% 55%)"
+                    : ratio < 0.4
+                      ? "hsl(0 72% 62%)"
+                      : "hsl(17 100% 60%)"
+              }
+            />
           </Scatter>
         </ScatterChart>
       </ResponsiveContainer>
       <LegendRow
-        items={[
-          { swatch: "hsl(140 60% 55% / 0.30)", label: "Low-normal window (ratio 0.4–1.0)" },
-          { swatch: "hsl(0 72% 62%)", label: "Advanced dysfunction (ratio < 0.4)" },
-        ]}
+        items={
+          est
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (no norm window applied)" }]
+            : [
+                { swatch: "hsl(140 60% 55% / 0.30)", label: "Low-normal window (ratio 0.4–1.0)" },
+                { swatch: "hsl(0 72% 62%)", label: "Advanced dysfunction (ratio < 0.4)" },
+              ]
+        }
       />
     </MiniCard>
   );
@@ -166,7 +209,7 @@ function BaselineLfaRfa({ mpg }: { mpg: MultiParameterGraphical }) {
 
 // --- 2. Deep-Breathing RFa vs Age -----------------------------------------
 
-function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }) {
+function DeepBreathingRfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age: number; est: boolean }) {
   const val = mpg.scatter.dbRFa;
   if (val == null) {
     return (
@@ -190,8 +233,13 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
 
   return (
     <MiniCard
+      est={est}
       title="Deep Breathing RFa vs Age"
-      subtitle={`Your RFa: ${val.toFixed(2)} · Age ${age} band: ${band.lo.toFixed(2)}–${band.hi.toFixed(2)}`}
+      subtitle={
+        est
+          ? `RFa (est.): ${val.toFixed(2)} bpm² · age norm band not applied to an estimate`
+          : `Your RFa: ${val.toFixed(2)} · Age ${age} band: ${band.lo.toFixed(2)}–${band.hi.toFixed(2)}`
+      }
       chartKey="deepBreathingRfa"
       testId="chart-db-rfa"
     >
@@ -215,8 +263,8 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
             width={44}
             label={{ value: "RFa (bpm²)", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
           />
-          {/* Age-normal band: clinical green = within norm. Outside band = gray/red flag. */}
-          {bandData.map((b) => (
+          {/* Age-normal band: SUPPRESSED for estimates. */}
+          {(est ? [] : bandData).map((b) => (
             <ReferenceArea
               key={b.age}
               x1={b.age - 2.5}
@@ -234,16 +282,28 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
           />
           <Scatter
             data={[{ age, rfa: val }]}
-            fill={inBand ? "hsl(140 60% 55%)" : val < band.lo ? "hsl(0 72% 62%)" : "hsl(17 100% 60%)"}
+            fill={
+              est
+                ? ESTIMATE_SERIES_COLOR
+                : inBand
+                  ? "hsl(140 60% 55%)"
+                  : val < band.lo
+                    ? "hsl(0 72% 62%)"
+                    : "hsl(17 100% 60%)"
+            }
           />
         </ScatterChart>
       </ResponsiveContainer>
       <LegendRow
-        items={[
-          { swatch: "hsl(140 60% 50% / 0.45)", label: "Age-normal band" },
-          { swatch: "hsl(148 16% 60%)", label: "Outside band" },
-          { swatch: "hsl(0 72% 62%)", label: "Below normal" },
-        ]}
+        items={
+          est
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (age-normal band not applied)" }]
+            : [
+                { swatch: "hsl(140 60% 50% / 0.45)", label: "Age-normal band" },
+                { swatch: "hsl(148 16% 60%)", label: "Outside band" },
+                { swatch: "hsl(0 72% 62%)", label: "Below normal" },
+              ]
+        }
       />
     </MiniCard>
   );
@@ -251,7 +311,7 @@ function DeepBreathingRfa({ mpg, age }: { mpg: MultiParameterGraphical; age: num
 
 // --- 3. Valsalva LFa vs Age -----------------------------------------------
 
-function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }) {
+function ValsalvaLfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age: number; est: boolean }) {
   const val = mpg.scatter.valsalvaLFa;
   if (val == null) {
     return (
@@ -274,8 +334,13 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
 
   return (
     <MiniCard
+      est={est}
       title="Valsalva LFa vs Age"
-      subtitle={`Your LFa: ${val.toFixed(2)} · Age ${age} band: ${band.lo.toFixed(2)}–${band.hi.toFixed(2)}`}
+      subtitle={
+        est
+          ? `LFa (est.): ${val.toFixed(2)} bpm² · age norm band not applied to an estimate`
+          : `Your LFa: ${val.toFixed(2)} · Age ${age} band: ${band.lo.toFixed(2)}–${band.hi.toFixed(2)}`
+      }
       chartKey="valsalvaLfa"
       testId="chart-valsalva-lfa"
     >
@@ -299,8 +364,8 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
             width={44}
             label={{ value: "LFa (bpm²)", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
           />
-          {/* Age-normal band: green = within norm. Outside band = gray/red flag. */}
-          {bandData.map((b) => (
+          {/* Age-normal band: SUPPRESSED for estimates. */}
+          {(est ? [] : bandData).map((b) => (
             <ReferenceArea
               key={b.age}
               x1={b.age - 2.5}
@@ -318,16 +383,28 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
           />
           <Scatter
             data={[{ age, lfa: val }]}
-            fill={inBand ? "hsl(140 60% 55%)" : val > band.hi ? "hsl(0 72% 62%)" : "hsl(17 100% 60%)"}
+            fill={
+              est
+                ? ESTIMATE_SERIES_COLOR
+                : inBand
+                  ? "hsl(140 60% 55%)"
+                  : val > band.hi
+                    ? "hsl(0 72% 62%)"
+                    : "hsl(17 100% 60%)"
+            }
           />
         </ScatterChart>
       </ResponsiveContainer>
       <LegendRow
-        items={[
-          { swatch: "hsl(140 60% 50% / 0.45)", label: "Age-normal band" },
-          { swatch: "hsl(148 16% 60%)", label: "Outside band" },
-          { swatch: "hsl(0 72% 62%)", label: "Above normal (stroke-risk signal)" },
-        ]}
+        items={
+          est
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (age-normal band not applied)" }]
+            : [
+                { swatch: "hsl(140 60% 50% / 0.45)", label: "Age-normal band" },
+                { swatch: "hsl(148 16% 60%)", label: "Outside band" },
+                { swatch: "hsl(0 72% 62%)", label: "Above normal (stroke-risk signal)" },
+              ]
+        }
       />
     </MiniCard>
   );
@@ -335,7 +412,7 @@ function ValsalvaLfa({ mpg, age }: { mpg: MultiParameterGraphical; age: number }
 
 // --- 4. Stand Response -----------------------------------------------------
 
-function StandResponse({ mpg }: { mpg: MultiParameterGraphical }) {
+function StandResponse({ mpg, est }: { mpg: MultiParameterGraphical; est: boolean }) {
   const { standLFa, standRFa } = mpg.scatter;
   if (standLFa == null || standRFa == null) {
     return (
@@ -355,8 +432,13 @@ function StandResponse({ mpg }: { mpg: MultiParameterGraphical }) {
 
   return (
     <MiniCard
+      est={est}
       title="Stand Response (Phase F)"
-      subtitle="Ideal: RFa drops first, LFa rises second"
+      subtitle={
+        est
+          ? "Estimated band powers plotted as measured — no expected-response target applied"
+          : "Ideal: RFa drops first, LFa rises second"
+      }
       chartKey="standResponse"
       testId="chart-stand-response"
     >
@@ -383,25 +465,40 @@ function StandResponse({ mpg }: { mpg: MultiParameterGraphical }) {
             cursor={{ strokeDasharray: "3 3" }}
             contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
           />
-          <Scatter data={data} fill="hsl(244 84% 68%)">
+          <Scatter data={data} fill={est ? ESTIMATE_SERIES_COLOR : "hsl(244 84% 68%)"}>
             {data.map((d, i) => (
-              <Cell key={i} fill={d.label === "Stand LFa" ? "hsl(0 72% 51%)" : "hsl(217 91% 55%)"} />
+              <Cell
+                key={i}
+                fill={
+                  est
+                    ? ESTIMATE_SERIES_COLOR
+                    : d.label === "Stand LFa"
+                      ? "hsl(0 72% 51%)"
+                      : "hsl(217 91% 55%)"
+                }
+              />
             ))}
           </Scatter>
-          {/* target markers */}
-          <Scatter data={data.map((d) => ({ label: d.label, value: d.target }))} fill="transparent" shape="cross" line={false}>
-            {data.map((_, i) => (
-              <Cell key={`t${i}`} fill="hsl(var(--foreground) / 0.6)" />
-            ))}
-          </Scatter>
+          {/* Target markers = a normative expectation: suppressed for estimates. */}
+          {!est ? (
+            <Scatter data={data.map((d) => ({ label: d.label, value: d.target }))} fill="transparent" shape="cross" line={false}>
+              {data.map((_, i) => (
+                <Cell key={`t${i}`} fill="hsl(var(--foreground) / 0.6)" />
+              ))}
+            </Scatter>
+          ) : null}
         </ScatterChart>
       </ResponsiveContainer>
       <LegendRow
-        items={[
-          { swatch: "hsl(0 72% 51%)", label: "LFa — Sympathetic" },
-          { swatch: "hsl(217 91% 55%)", label: "RFa — Parasympathetic" },
-          { swatch: "hsl(var(--foreground) / 0.6)", label: "Target marker (×)" },
-        ]}
+        items={
+          est
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (no target marker applied)" }]
+            : [
+                { swatch: "hsl(0 72% 51%)", label: "LFa — Sympathetic" },
+                { swatch: "hsl(217 91% 55%)", label: "RFa — Parasympathetic" },
+                { swatch: "hsl(var(--foreground) / 0.6)", label: "Target marker (×)" },
+              ]
+        }
       />
     </MiniCard>
   );
@@ -409,7 +506,7 @@ function StandResponse({ mpg }: { mpg: MultiParameterGraphical }) {
 
 // --- 5. RFa % Change (Excess) ---------------------------------------------
 
-function RfaExcess({ mpg }: { mpg: MultiParameterGraphical }) {
+function RfaExcess({ mpg, est }: { mpg: MultiParameterGraphical; est: boolean }) {
   const valsalva = mpg.scatter.rfaChangeValsalvaPct;
   const stand = mpg.scatter.rfaChangeStandPct;
 
@@ -433,8 +530,13 @@ function RfaExcess({ mpg }: { mpg: MultiParameterGraphical }) {
 
   return (
     <MiniCard
-      title="RFa Analysis — Parasympathetic Excess"
-      subtitle="% change in RFa from baseline during challenge"
+      est={est}
+      title={est ? "RFa Analysis — % change (est.)" : "RFa Analysis — Parasympathetic Excess"}
+      subtitle={
+        est
+          ? "% change between two estimated band powers — magnitude carries the uncertainty of both"
+          : "% change in RFa from baseline during challenge"
+      }
       chartKey="rfaExcess"
       testId="chart-rfa-excess"
     >
@@ -458,8 +560,9 @@ function RfaExcess({ mpg }: { mpg: MultiParameterGraphical }) {
             label={{ value: "% change", angle: -90, fill: "hsl(var(--muted-foreground))", fontSize: 10, position: "insideLeft" }}
           />
           <ReferenceLine y={0} stroke="hsl(var(--border))" />
-          <ReferenceArea y1={0} y2={maxAbs} fill="hsl(0 72% 62% / 0.08)" />
-          <ReferenceArea y1={-maxAbs} y2={-20} fill="hsl(140 60% 55% / 0.08)" />
+          {/* Expected/excess zones are normative: suppressed for estimates. */}
+          {!est ? <ReferenceArea y1={0} y2={maxAbs} fill="hsl(0 72% 62% / 0.08)" /> : null}
+          {!est ? <ReferenceArea y1={-maxAbs} y2={-20} fill="hsl(140 60% 55% / 0.08)" /> : null}
           <Tooltip
             cursor={{ strokeDasharray: "3 3" }}
             contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", fontSize: 11 }}
@@ -469,17 +572,29 @@ function RfaExcess({ mpg }: { mpg: MultiParameterGraphical }) {
             {data.map((d, i) => (
               <Cell
                 key={i}
-                fill={d.value > 0 ? "hsl(0 72% 62%)" : d.value <= -20 ? "hsl(140 60% 55%)" : "hsl(17 100% 60%)"}
+                fill={
+                  est
+                    ? ESTIMATE_SERIES_COLOR
+                    : d.value > 0
+                      ? "hsl(0 72% 62%)"
+                      : d.value <= -20
+                        ? "hsl(140 60% 55%)"
+                        : "hsl(17 100% 60%)"
+                }
               />
             ))}
           </Scatter>
         </ScatterChart>
       </ResponsiveContainer>
       <LegendRow
-        items={[
-          { swatch: "hsl(140 60% 55% / 0.30)", label: "Expected zone (RFa drops on challenge)" },
-          { swatch: "hsl(0 72% 62% / 0.30)", label: "Excess zone (RFa rises — parasympathetic excess)" },
-        ]}
+        items={
+          est
+            ? [{ swatch: ESTIMATE_SERIES_COLOR, label: "HumanOS estimate (expected/excess zones not applied)" }]
+            : [
+                { swatch: "hsl(140 60% 55% / 0.30)", label: "Expected zone (RFa drops on challenge)" },
+                { swatch: "hsl(0 72% 62% / 0.30)", label: "Excess zone (RFa rises — parasympathetic excess)" },
+              ]
+        }
       />
     </MiniCard>
   );
@@ -492,18 +607,38 @@ function MiniCard({
   subtitle,
   chartKey,
   testId,
+  est = false,
   children,
 }: {
   title: string;
   subtitle?: string;
   chartKey: string;
   testId: string;
+  /** Marks the card as a HumanOS estimate: badge + tooltip, no norm semantics. */
+  est?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl bg-background/40 border border-border/20 p-4" data-testid={testId}>
+    <div
+      className={`rounded-xl bg-background/40 border p-4 ${est ? "border-violet-400/25" : "border-border/20"}`}
+      data-testid={testId}
+      data-spectral-estimated={est ? "true" : "false"}
+      title={est ? ESTIMATE_TITLE : undefined}
+    >
       <div className="mb-2">
-        <div className="text-[12px] font-semibold text-foreground/90">{title}</div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="text-[12px] font-semibold text-foreground/90">{title}</div>
+          {est ? (
+            <span className="rounded border border-violet-400/40 px-1 py-px text-[9px] font-semibold uppercase tracking-wider text-violet-200">
+              est.
+            </span>
+          ) : null}
+        </div>
+        {est ? (
+          <div className="text-[9px] uppercase tracking-wider text-violet-200/70 mt-0.5">
+            {ESTIMATE_BADGE}
+          </div>
+        ) : null}
         {subtitle && <div className="text-[10px] text-muted-foreground/80 tabular-nums mt-0.5">{subtitle}</div>}
       </div>
       {children}

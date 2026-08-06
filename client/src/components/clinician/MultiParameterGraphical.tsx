@@ -7,6 +7,8 @@ import { RatiosPanel } from "./mpg/RatiosPanel";
 import { NumericalSummary } from "./mpg/NumericalSummary";
 import { ColomboExplainer } from "./ColomboExplainer";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { SpectralEstimateBanner } from "./mpg/SpectralEstimateBanner";
+import { spectralMode } from "@/lib/spectralProvenance";
 
 interface MultiParameterGraphicalProps {
   report: ANSReport;
@@ -32,10 +34,16 @@ interface MultiParameterGraphicalProps {
  */
 export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps) {
   const mpg = report.multiParameter;
-  // Vendor spectral aggregates (LFa/RFa/SB and their derived changes) are only
-  // reproducible when spectralAvailable is explicitly true. Anything that plots
-  // those values must be gated OFF for raw-ECG exports.
-  const spectralAvailable = report.spectralAvailable === true;
+  // THREE-WAY spectral mode (see client/src/lib/spectralProvenance.ts):
+  //   vendor      → plot with Colombo norm bands and normal/abnormal colouring
+  //   estimated   → plot the HumanOS waveform estimates, prominently labelled,
+  //                 with NO norm bands and NO normal/abnormal colouring
+  //   unavailable → honest unavailable card, no numbers
+  // The old two-state gate hid genuine measurements behind a "not reproducible"
+  // card even when the payload carried them, which is a self-contradiction.
+  const mode = spectralMode(report);
+  const spectralAvailable = mode === "vendor";
+  const spectralEstimated = mode === "estimated";
 
   return (
     <section
@@ -44,6 +52,8 @@ export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps
       data-testid="multi-parameter-graphical"
     >
       <Header report={report} />
+
+      {spectralEstimated ? <SpectralEstimateBanner report={report} /> : null}
 
       {!mpg ? (
         <div
@@ -55,7 +65,12 @@ export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps
       ) : (
         <>
           {mpg.ecgAvailable ? (
-            <TrendPanel mpg={mpg} spectralAvailable={spectralAvailable} />
+            <TrendPanel
+              mpg={mpg}
+              spectralAvailable={spectralAvailable}
+              spectralEstimated={spectralEstimated}
+              report={report}
+            />
           ) : (
             <EcgUnavailableNotice />
           )}
@@ -64,6 +79,8 @@ export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps
             mpg={mpg}
             patientAge={report.patientData.age}
             spectralAvailable={spectralAvailable}
+            spectralEstimated={spectralEstimated}
+            report={report}
           />
 
           {mpg.ecgAvailable && (

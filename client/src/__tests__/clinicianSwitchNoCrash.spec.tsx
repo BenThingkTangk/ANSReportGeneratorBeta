@@ -189,9 +189,20 @@ describe("Patient -> Clinician switch does not blank the app (THIRD FINAL-QA)", 
     // not merely contained.
     expect(screen.queryByTestId("error-boundary-fallback")).toBeNull();
 
-    // Null spectral values render as "Not assessed", never a coerced number.
+    // Spectral cells are either a labelled HumanOS estimate (when the waveform
+    // supported one) or "Not assessed" — never a coerced number, never NaN.
     const baseline = screen.getByTestId("resting-baseline-panel");
-    expect(baseline.textContent).toMatch(/Not assessed/);
+    const estimated =
+      report.phaseEvents?.[0]?.provenance?.LFa?.method === "computed" &&
+      report.phaseEvents?.[0]?.provenance?.LFa?.validation === "estimated";
+    if (estimated) {
+      expect(screen.getByTestId("resting-baseline-estimated-note")).toBeTruthy();
+      expect(baseline.textContent).toMatch(/est\./);
+      // An estimate must never be presented as normal/abnormal.
+      expect(baseline.textContent).not.toMatch(/\b(Normal|Abnormal|Borderline)\b/);
+    } else {
+      expect(baseline.textContent).toMatch(/Not assessed/);
+    }
     expect(baseline.textContent).not.toMatch(/NaN/);
 
     cleanup();

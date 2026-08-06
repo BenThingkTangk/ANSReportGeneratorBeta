@@ -93,9 +93,31 @@ export interface PhaseMetrics {
    */
   hrvOverallVariabilityMs: number | null;
   hrvBeatToBeatMs: number | null;
-  /** False when the beat series showed an artifact/implausibility signature. */
+  /**
+   * False when the beat series failed a MEASURED signal-quality check
+   * (non-physiologic intervals, ectopic/mis-detected intervals vs a local
+   * median, clipped rail fiducials, or alternation near the mathematical
+   * RMSSD/SDNN ceiling of 2). Beat-to-beat variability simply exceeding overall
+   * variability is NOT a defect: the ratio is sqrt(2*(1 - lag-1 autocorrelation)),
+   * so it exceeds 1 whenever that autocorrelation is below 0.5.
+   */
   hrvReliable?: boolean;
   hrvUnreliableReasons?: string[];
+  /** Measured signal-quality evidence behind `hrvReliable`. */
+  hrvQuality?: {
+    intervals: number;
+    meanRrMs: number | null;
+    sdnnMs: number | null;
+    rmssdMs: number | null;
+    rmssdSdnnRatio: number | null;
+    lag1Autocorr: number | null;
+    ectopicFraction: number;
+    nonPhysiologicFraction: number;
+    alternationFraction: number;
+    clippedFiducialFraction: number;
+  };
+  /** Explains a >1 RMSSD/SDNN ratio that carries no quality defect. */
+  hrvRatioPhysiologicNote?: string | null;
   /**
    * The variability numbers AS MEASURED, kept even when `hrvReliable` is false
    * so a raw trend can still be charted with an explicit low-confidence label.

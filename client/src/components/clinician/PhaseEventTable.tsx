@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import type { PhaseMetrics } from "@shared/schema";
 import { COLOMBO_NORMS } from "@shared/colomboNorms";
 import { CANONICAL_PHASES } from "@shared/phaseTable";
+import { ESTIMATE_BADGE, ESTIMATE_TITLE, isEstimatedPhase } from "@/lib/spectralProvenance";
 
 interface PhaseEventTableProps {
   phaseEvents: PhaseMetrics[];
@@ -41,22 +42,12 @@ function spectralUnavailable(m: PhaseMetrics | undefined): boolean {
 }
 
 /**
- * True when this phase's spectral values were COMPUTED by HumanOS from the raw
- * waveform rather than supplied by the vendor. Such a value is displayable — it
- * is a real measurement of the R-R series — but it is NOT the vendor's aggregate
- * and has not been validated against PhysioPS output, so it must never be
- * colour-coded against the Colombo norm bands (that would be an unvalidated
- * normal/abnormal judgement). It is rendered plainly and marked "est.".
+ * Estimate detection + wording live in one place so the phase table, the
+ * numerical summary, the resting-baseline cards and the MPG charts cannot drift
+ * apart. See client/src/lib/spectralProvenance.ts.
  */
-function spectralEstimated(m: PhaseMetrics | undefined): boolean {
-  return (
-    m?.provenance?.LFa?.method === "computed" &&
-    m?.provenance?.LFa?.validation === "estimated"
-  );
-}
-
-const EST_TITLE =
-  "Estimated by HumanOS from the ECG-derived R-R series (Morlet wavelet band power, bpm²). NOT a vendor-reported value, not validated against PhysioPS output, and not colour-coded against the Colombo norms.";
+const spectralEstimated = isEstimatedPhase;
+const EST_TITLE = ESTIMATE_TITLE;
 
 export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
   // Build a lookup map phase → metrics
@@ -97,10 +88,10 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
                 </td>
                 {spectralUnavailable(m) ? (
                   <>
-                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
-                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
-                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
-                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Not established: no vendor value was supplied and this phase had too few usable beats for a HumanOS estimate.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Not established: no vendor value was supplied and this phase had too few usable beats for a HumanOS estimate.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Not established: no vendor value was supplied and this phase had too few usable beats for a HumanOS estimate.">—</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Not established: no vendor value was supplied and this phase had too few usable beats for a HumanOS estimate.">—</td>
                   </>
                 ) : spectralEstimated(m) ? (
                   <>
@@ -157,10 +148,11 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
             data-testid="phase-event-table-estimated-note"
           >
             <span className="font-medium text-foreground/60">est. = </span>
-            estimated by HumanOS from the ECG-derived R-R series (Morlet wavelet
-            band power, bpm²). Not a vendor-reported value, not validated against
-            PhysioPS output, and deliberately not colour-coded against the
-            Colombo norm bands.
+            {ESTIMATE_BADGE}. Estimated by HumanOS from the ECG-derived R-R series
+            (Morlet wavelet band power, bpm²). Not a vendor-reported value, not
+            validated against PhysioPS output, deliberately not colour-coded
+            against the Colombo norm bands, and never used for scoring, pattern
+            detection or anything the patient sees.
           </p>
         ) : null}
         <p className="text-[10px] mt-1">

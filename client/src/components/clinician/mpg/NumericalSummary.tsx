@@ -4,6 +4,7 @@ import { ColomboExplainer } from "../ColomboExplainer";
 import { COLOMBO_NORMS } from "@shared/colomboNorms";
 import { CANONICAL_PHASES } from "@shared/phaseTable";
 import { tierCaveat } from "@shared/metricProvenance";
+import { ESTIMATE_BADGE, ESTIMATE_TITLE, isEstimatedPhase } from "@/lib/spectralProvenance";
 
 /**
  * Numerical Summary table — mirrors the bottom table on page 2 of the
@@ -62,8 +63,25 @@ function SpectralCell({
 }) {
   if (spectralUnavailable(m)) {
     return (
-      <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60 italic" title="Insufficient signal in this phase to compute this proprietary estimate.">
+      <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60 italic" title="Insufficient signal in this phase to compute this value.">
         unavailable
+      </td>
+    );
+  }
+  // A HumanOS estimate is shown as measured, marked `est.`, and NEVER tinted
+  // against the Colombo norm band (that would be an unvalidated normal/abnormal
+  // judgement on a value the vendor never reported).
+  if (isEstimatedPhase(m)) {
+    return (
+      <td
+        className="py-2.5 pr-4 tabular-nums text-muted-foreground"
+        title={ESTIMATE_TITLE}
+        data-testid={`mpg-summary-${m?.phase ?? "phase"}-estimated`}
+      >
+        {fmt(value, digits)}
+        {value != null ? (
+          <span className="ml-1 text-[9px] uppercase tracking-wider opacity-70">est.</span>
+        ) : null}
       </td>
     );
   }
@@ -169,9 +187,11 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
         data-testid="num-provenance-caveat"
       >
         <span className="font-medium">FRF, LFa, RFa, LFa/RFa [P]:</span>{" "}
-        computed estimates, not vendor-validated. {tierCaveat("P")} Phases with
-        insufficient signal are shown as <em>unavailable</em> rather than a
-        substituted value.
+        {report.phaseEvents?.some(isEstimatedPhase)
+          ? `${ESTIMATE_BADGE} — cells marked "est." are computed by HumanOS from the ECG-derived R-R series (Morlet wavelet band power, bpm²), are not vendor-reported, and are deliberately not tinted against the Colombo norm bands. `
+          : "computed estimates, not vendor-validated. "}
+        {tierCaveat("P")} Phases with insufficient signal are shown as{" "}
+        <em>unavailable</em> rather than a substituted value.
       </div>
 
       <ColomboExplainer chartKey="numericalSummary" />

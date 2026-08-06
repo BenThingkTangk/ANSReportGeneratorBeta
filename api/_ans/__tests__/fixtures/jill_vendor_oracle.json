@@ -1,0 +1,37 @@
+{
+  "_doc": "Ground-truth oracle for the Jill vendor PhysioPS document, page 2 (the scanned per-phase numeric grid supplied by the operator and transcribed verbatim). This is the ONLY numeric per-phase LFa/RFa/SB grid available anywhere in this repo's fixtures, so it is the reference used to QUANTIFY the error of the HumanOS waveform estimates. It is a COMPARISON TARGET ONLY: nothing in the engine may be fitted, tuned, calibrated, scaled or special-cased toward these numbers, and no code path may read this file at runtime. do_not_load_at_runtime.",
+  "_provenance": "Transcribed by hand from the supplied scanned PhysioPS page 2 for the de-identified Jill study (fixture jill_deid.ans). Values are exactly as printed; no rounding, derivation or interpolation was applied.",
+  "protocolPhases": {
+    "_doc": "Vendor per-phase grid. duration mm:ss as printed. meanHR bpm, rangeHR bpm, FRF Hz, LFa/RFa bpm^2, ratio = LFa/RFa (sympathovagal balance) as printed by the vendor.",
+    "Baseline-A": { "duration": "05:00", "meanHR": 56, "rangeHR": 13, "FRF": 0.15, "LFa": 0.91, "RFa": 5.13, "ratio": 0.18 },
+    "DeepBreathing-B": { "duration": "01:00", "meanHR": 55, "rangeHR": 16, "FRF": 0.2, "LFa": 7.58, "RFa": 2.88, "ratio": 2.63 },
+    "Baseline-C": { "duration": "01:00", "meanHR": 57, "rangeHR": 14, "FRF": 0.17, "LFa": 2.06, "RFa": 3.71, "ratio": 0.55 },
+    "Valsalva-D": { "duration": "01:35", "meanHR": 58, "rangeHR": 19, "FRF": 0.16, "LFa": 21.11, "RFa": 2.93, "ratio": 7.2 },
+    "Baseline-E": { "duration": "02:30", "meanHR": 58, "rangeHR": 27, "FRF": 0.15, "LFa": 1.02, "RFa": 3.89, "ratio": 0.26 },
+    "Stand-F": { "duration": "05:30", "meanHR": 64, "rangeHR": 25, "FRF": 0.16, "LFa": 2.62, "RFa": 6.55, "ratio": 0.4 }
+  },
+  "timeDomainRatios": {
+    "_doc": "Ewing time-domain ratios as printed on the same vendor page.",
+    "eiRatio": 1.21,
+    "valsalvaRatio": 1.43,
+    "thirtyFifteenRatio": 1.4
+  },
+  "engineContract": {
+    "_doc": "What THIS engine must and must not do with the Jill inputs.",
+    "fromAnsAlone": {
+      "spectralAvailable": false,
+      "spectralSource": "humanos_estimated",
+      "note": "The raw .ans yields Ewing ratios, identity and the waveform. Waveform-derived LFa/RFa/SB are published as labelled HumanOS estimates with computed/estimated provenance; spectralAvailable stays false so nothing clinical consumes them."
+    },
+    "mustNever": [
+      "fit, scale, tune or calibrate any engine constant toward these vendor numbers",
+      "claim parity with, or validation against, these vendor numbers",
+      "read this oracle at runtime or key any behaviour on this patient, this filename or this study date",
+      "publish waveform-derived LFa/RFa/SB as vendor-reported, PhysioPS-validated, or clinically interpretable values"
+    ],
+    "mustAlways": [
+      "report the signed error and relative error of every estimate against the paired vendor value",
+      "state that the comparison is a measurement of disagreement, not a calibration"
+    ]
+  }
+}

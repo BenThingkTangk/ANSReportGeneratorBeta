@@ -6,6 +6,8 @@
 | `pare_deid.ans` | Real vendor `.ans` (Pare, Alex — 2024-07-11) | name → `Faux/John`, DOB → Jan-1 of birth year; everything else byte-identical | Golden master: E/I 1.22, Valsalva 1.49, 30:15 1.33, ectopy 1, real waveform |
 | `deidentified_waveform.ans` | Pre-existing de-identified waveform | — | Spectral/BP safety-gating on raw ECG-only files |
 | `synthetic_vendor_ocr.json` | Synthetic | n/a | Vendor-OCR parse unit tests |
+| `pare_vendor_oracle.json` | Hand transcription of the signed Pare vendor summary PDF + Colombo letter | identity fields carry the de-identified aliases | Assertion contract; qualitative per-phase findings and the letter's SB 2.59 (no numeric per-phase grid) |
+| `jill_vendor_oracle.json` | Hand transcription of the supplied scanned PhysioPS **page 2** for the Jill study | study-level values only; no identifiers | **The only numeric per-phase LFa/RFa/ratio grid in the repo.** Used solely to QUANTIFY estimate error (`jillVendorSpectralComparison.spec.ts`) |
 
 ## How the de-identified `.ans` fixtures were built
 
@@ -41,7 +43,18 @@ signal (bpm²), not by scaling the answer.
   calibration are undisclosed, so a HumanOS estimate is *not* the vendor's LFa /
   RFa / SB and must never be labelled `vendor_reported` or presented as
   PhysioPS-validated. Broadband validation shows the estimator reads roughly
-  10-19% high on white-noise band power (Gaussian band-edge leakage).
+  10-19% high on white-noise band power (Gaussian band-edge leakage). Against the
+  one available numeric vendor grid (`jill_vendor_oracle.json`, PhysioPS page 2)
+  the median |relative error| is ≈253% for LFa, ≈62% for RFa and ≈900% for the
+  LFa/RFa ratio, and the resting ratio is on the WRONG SIDE of 1.0 (vendor 0.18
+  respiratory-dominant vs estimate 3.94 sympathetic-dominant). On the Pare study
+  the sign of the disagreement is reversed (vendor letter SB 2.59 vs estimate
+  0.44), so no single gain, offset or scale can reconcile the two — which is
+  exactly why none is applied.
+
+  NOTE: this supersedes the earlier documentation claim that no numeric vendor
+  LFa/RFa grid existed anywhere in the fixtures. One does, for the Jill study
+  only, and it is a comparison target that must never be fitted to.
 - **Clinical interpretation.** `mayInterpretClinically()` is false for
   `estimated` values, so estimates cannot drive a composite wellness score, a
   dysfunction pattern, or a narrative finding. `spectralAvailable` stays `false`

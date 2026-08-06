@@ -58,6 +58,12 @@ import {
   RESAMPLE_FS,
   type SpectralBands,
 } from "./_ans/spectral.js";
+import {
+  assessRrQuality,
+  highRatioIsPhysiologic,
+  NEAR_LIMIT_RATIO,
+  type RrQualityMetrics,
+} from "./_ans/signalQuality.js";
 
 /**
  * Vendor-reported metrics parsed verbatim from the paired signed PDF
@@ -251,10 +257,12 @@ interface PhaseMetrics {
   hrvOverallVariabilityMs: number | null;
   hrvBeatToBeatMs: number | null;
   /**
-   * False when the beat series for this phase shows an artifact signature
-   * (sentinel/saturated samples, or beat-to-beat variability exceeding overall
-   * variability, which is a classic R-peak mis-detection fingerprint). When
-   * false the variability values above are `null` and MUST NOT feed any score.
+   * False when the beat series for this phase fails a MEASURED signal-quality
+   * check: non-physiologic intervals, ectopic/mis-detected intervals against a
+   * local median, clipped (rail-saturated) fiducial points, or alternation near
+   * the mathematical RMSSD/SDNN ceiling of 2. Beat-to-beat variability merely
+   * exceeding overall variability is NOT a defect — see api/_ans/signalQuality.ts.
+   * When false the variability values above are `null` and MUST NOT feed any score.
    */
   hrvReliable: boolean;
   /**
@@ -269,6 +277,14 @@ interface PhaseMetrics {
   hrvBeatToBeatRawMs: number | null;
   /** Why `hrvReliable` is false. Empty when the series is usable. */
   hrvUnreliableReasons: string[];
+  /** Measured signal-quality evidence behind `hrvReliable`. */
+  hrvQuality?: RrQualityMetrics;
+  /**
+   * Set when RMSSD/SDNN exceeds 1 with no quality defect — the case the removed
+   * "physiologically impossible" gate used to reject. Explains that the ratio is
+   * governed by lag-1 autocorrelation and is bounded by 2.
+   */
+  hrvRatioPhysiologicNote?: string | null;
   /**
    * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF). The raw
    * .ans is never used to synthesize LFa/RFa/SB: those are `unavailable` unless
@@ -759,16 +775,16 @@ function detectRPeaks(ecg: number[], samplingRate: number): {
 // STAGE 2 — Morlet-style Continuous Wavelet Transform on RR intervals
 // ============================================================================
 
-// NOTE: The Morlet-CWT band-power routine (`morletBandPower`) with its
-// empirical `SCALE=0.0018` calibration, its `interpolateRR` helper, and the
-// `colomboBands` band-definition helper have been REMOVED. They estimated the
-// proprietary LFa/RFa/SB spectral aggregates from the raw waveform and scaled
-// them by a constant curve-fit to one patient, then surfaced the result as a
-// clinical value. Spectral aggregates now come exclusively from the vendor's
-// signed PDF (OCR / x-vendor-metrics) with `vendor_reported` provenance, or are
-// reported as "Not assessed". FRF (respiratory frequency) is still derived
-// directly from the RR/peak envelope — it is a genuine time-domain measure and
-// is unaffected.
+// NOTE: The waveform spectral engine lives in `api/_ans/spectral.ts` and is
+// imported above. Its predecessor's empirical `SCALE = 0.0018` multiplier —
+// curve-fit to a single patient's report — is NOT restored and never will be;
+// the engine normalises analytically instead. Waveform-derived LFa/RFa/SB carry
+// `computed` + `validation: "estimated"` provenance: they are charted and
+// labelled as HumanOS estimates, while `spectralAvailable` stays false so no
+// clinical conclusion, dysfunction pattern, therapy line or composite score
+// consumes them. Vendor-reported values still come exclusively from the signed
+// PDF (OCR / x-vendor-metrics) with `vendor_reported` provenance and always
+// outrank an estimate. FRF is derived from the RR/peak envelope as before.
 
 // ============================================================================
 // STAGE 4 — Phase Segmentation (6 phases: A B C D E F)
@@ -857,31 +873,24 @@ function analyzePhase(
   for (let i = 1; i < rrIntervalsMs.length; i++) ssd += (rrIntervalsMs[i] - rrIntervalsMs[i - 1]) ** 2;
   const rmssd = Math.sqrt(ssd / (rrIntervalsMs.length - 1));
 
-  // ---- Physiological plausibility gate on the variability metrics -----------
-  // Successive-difference variability cannot exceed overall variability in a
-  // genuine sinus series: RMSSD > SDNN across a whole phase is a classic
-  // R-peak mis-detection / artifact fingerprint. The audit found exactly this
-  // in all six phases (SDNN 88–141 ms with RMSSD 134–176 ms) and the resulting
-  // inflated "variability reserve" was worth 18.7 of a 91-point score. When the
-  // series is implausible we publish NO variability number for the phase and
-  // the composite becomes not-scorable — we do not silently score an artifact.
-  const hrvUnreliableReasons: string[] = [];
-  if (rmssd > sdnn) {
-    hrvUnreliableReasons.push(
-      `Beat-to-beat variability (${rmssd.toFixed(1)} ms) exceeds overall variability ` +
-        `(${sdnn.toFixed(1)} ms), which is not physiologically possible for a clean sinus ` +
-        "series and indicates R-peak mis-detection or residual artifact.",
-    );
-  }
-  if (rejectedArtifactBeats > 0 || rejectedArtifactIntervals > 0) {
-    hrvUnreliableReasons.push(
-      `${rejectedArtifactBeats} sentinel/rail artifact beat(s) and ${rejectedArtifactIntervals} ` +
-        "artifact-spanning interval(s) were excluded from this phase.",
-    );
-  }
-  // Artifact exclusion alone does not invalidate the remaining clean series;
-  // only the implausibility signature does.
-  const hrvReliable = rmssd <= sdnn;
+  // ---- SIGNAL-QUALITY GATE on the variability metrics -----------------------
+  // REPLACES the removed "RMSSD > SDNN is physiologically impossible" rule.
+  // That rule was wrong: RMSSD/SDNN = sqrt(2*(1 - r1)), so beat-to-beat
+  // variability exceeds overall variability for ANY series whose lag-1
+  // autocorrelation is below 0.5 — routine in respiratory-dominant rhythms,
+  // during paced deep breathing, in young/athletic subjects, and in short
+  // detrended segments. The real ceiling is a ratio of 2 (perfect alternation).
+  // `assessRrQuality` (api/_ans/signalQuality.ts) now decides reliability from
+  // measurable defects instead: non-physiologic intervals, ectopic/mis-detected
+  // intervals against a local median, clipped (rail-saturated) fiducial points,
+  // and near-limit alternation corroborated by a measured alternation rate.
+  const quality = assessRrQuality(rrIntervalsMs, {
+    clippedFiducialBeats: rejectedArtifactBeats,
+    artifactSpanningIntervals: rejectedArtifactIntervals,
+    detectedBeats: indices.length + rejectedArtifactBeats,
+  });
+  const hrvUnreliableReasons = [...quality.reasons];
+  const hrvReliable = quality.reliable;
 
   // Respiratory frequency for THIS phase (derived from the RR/peak envelope —
   // this is a genuine time-domain measure, not a proprietary spectral aggregate).
@@ -907,7 +916,7 @@ function analyzePhase(
     respFreqHz: frf,
     rejectedArtifactBeats,
     rejectedArtifactIntervals,
-    variabilityImplausible: !hrvReliable,
+    signalQualityFailed: !hrvReliable,
     // Generic protocol property, not a patient-specific input: sub-0.15 Hz
     // respiration is EXPECTED during the paced deep-breathing manoeuvre.
     pacedBreathing: phaseName === "DeepBreathing-B",
@@ -943,6 +952,18 @@ function analyzePhase(
     hrvBeatToBeatRawMs: Math.round(rmssd * 10) / 10,
     hrvReliable,
     hrvUnreliableReasons,
+    // Measured signal-quality evidence behind `hrvReliable`, published so a
+    // clinician can see WHY a phase was accepted or withheld. `rmssdSdnnRatio`
+    // above 1 is normal (it means lag-1 autocorrelation below 0.5) and is NOT
+    // by itself a defect.
+    hrvQuality: quality.metrics,
+    hrvRatioPhysiologicNote: highRatioIsPhysiologic(quality.metrics)
+      ? `Beat-to-beat variability exceeds overall variability (ratio ` +
+        `${quality.metrics.rmssdSdnnRatio!.toFixed(2)}, implied lag-1 autocorrelation ` +
+        `${quality.metrics.lag1Autocorr!.toFixed(2)}). This is an ordinary consequence of a ` +
+        `respiration-dominated rhythm, not an artifact; the ratio only approaches its ` +
+        `mathematical ceiling of 2 above ${NEAR_LIMIT_RATIO}.`
+      : null,
     provenance: {
       LFa: est.lfa == null
         ? unavailableProvenance("LFa", spectralImpossibleNote)
@@ -2532,6 +2553,12 @@ export function generateColomboReport(
   //   - values that were genuinely impossible to compute are already `null`
   //     with `unavailable` provenance from `analyzePhase`.
   // Only phases whose estimator declined to produce a number are null here.
+  // Shared clause so no surface can claim the spectral values are simply
+  // "not reproducible" while the payload publishes computed estimates.
+  const EST_CLAUSE =
+    " — the values shown are HumanOS estimates computed from this recording's" +
+    " R-R series, which are not vendor-reported and not validated against" +
+    " PhysioPS output, so they are charted but not interpreted clinically here";
   const spectralEstimated = phaseEvents.some(
     (ph) =>
       ph.provenance?.LFa.method === "computed" ||
@@ -2786,7 +2813,11 @@ export function generateColomboReport(
       );
     }
   } else {
-    baselineFindings.push("Sympathetic/parasympathetic spectral measures (LFa/RFa/SB) not assessed — not reproducible from this recording. Clinician review of the vendor report is required for spectral interpretation.");
+    baselineFindings.push(
+      spectralEstimated
+        ? "Sympathetic/parasympathetic spectral measures (LFa/RFa/SB) not assessed clinically" + EST_CLAUSE + ". Clinician review of the signed vendor report is required for vendor-reported spectral interpretation."
+        : "Sympathetic/parasympathetic spectral measures (LFa/RFa/SB) not assessed — not established for this recording. Clinician review of the vendor report is required for spectral interpretation.",
+    );
   }
   phaseFindings.push({ phase: "INITIAL BASELINE", indication: "Indication of balance in the patient's Autonomic Nervous System (ANS) and protection of the heart", findings: baselineFindings });
 
@@ -2815,7 +2846,11 @@ export function generateColomboReport(
       dbFindings.push("Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed for these phases — the vendor report supplied baseline values only.");
     }
   } else {
-    dbFindings.push("Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed — not reproducible from this recording.");
+    dbFindings.push(
+      spectralEstimated
+        ? "Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed clinically" + EST_CLAUSE + "."
+        : "Spectral responses to Deep Breathing and Valsalva (LFa/RFa) not assessed — not established for this recording.",
+    );
   }
   // The E/I ratio is the cardiovagal Ewing measure of the Deep-Breathing phase —
   // ECG-derived and always computed, so it is a SUPPORTED observation reported
@@ -2852,7 +2887,11 @@ export function generateColomboReport(
     if (vasovagalRisk) standFindings.push("Relatively higher parasympathetic activation (RFa) compared to sympathetic activation (LFa) throughout the test suggesting risk of possible vasovagal pre-syncope");
     if (parasympatheticExcess) standFindings.push("High parasympathetic activation (RFa) indicating excess parasympathetic activity ** [Check for symptoms such as unstable BP and dizziness]");
   } else {
-    standFindings.push("Spectral response to standing (LFa/RFa) not assessed — not reproducible from this recording.");
+    standFindings.push(
+      spectralEstimated
+        ? "Spectral response to standing (LFa/RFa) not assessed clinically" + EST_CLAUSE + "."
+        : "Spectral response to standing (LFa/RFa) not assessed — not established for this recording.",
+    );
   }
   // HR response to standing. The HR delta itself IS ECG-derived, but grading it
   // as "Normal" vs "Insufficient" is an orthostatic judgment that requires
@@ -3118,7 +3157,9 @@ export function generateColomboReport(
         sympathetic: null,
         balance: null,
         available: false,
-        interpretation: "Sympathetic vs parasympathetic balance not assessed — the spectral measures (LFa/RFa/SB) are not reproducible from this recording. Clinician review of the vendor report is required.",
+        interpretation: spectralEstimated
+          ? "Sympathetic vs parasympathetic balance not assessed clinically" + EST_CLAUSE + ". Clinician review of the signed vendor report is required for a vendor-reported balance."
+          : "Sympathetic vs parasympathetic balance not assessed — the spectral measures (LFa/RFa/SB) were not established for this recording. Clinician review of the vendor report is required.",
       };
 
   const clinicalFlags: string[] = [];

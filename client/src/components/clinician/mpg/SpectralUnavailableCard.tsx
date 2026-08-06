@@ -1,5 +1,11 @@
 /**
- * Shared "vendor spectral not established" state.
+ * Shared "spectral not established" state.
+ *
+ * SCOPE (narrowed): this card is now shown ONLY when there is neither a
+ * vendor-reported value NOR a HumanOS waveform estimate — i.e. no numbers exist
+ * at all. When estimates DO exist the charts are drawn from them and labelled by
+ * `SpectralEstimateBanner`; rendering a "not reproducible" card over a payload
+ * that carries 80+ trend points was a self-contradiction and has been removed.
  *
  * Rendered in place of any chart that would otherwise depend on the vendor's
  * proprietary spectral aggregates (LFa / RFa / SB and the % changes derived
@@ -38,11 +44,10 @@ export function SpectralUnavailableCard({
         <div className="space-y-1.5 min-w-0">
           <div className="text-[12px] font-semibold text-amber-200">{title}</div>
           <p className="text-[11px] text-amber-200/80 leading-relaxed max-w-2xl">
-            The vendor's spectral aggregates (LFa / RFa / sympathovagal balance)
-            have not been established for this upload. They are produced by an
-            undisclosed wavelet algorithm; our open recomputation only
-            approximates it, so no estimated or substitute spectral values are
-            plotted here — that would risk a misleading reading.
+            No spectral values exist for this view: the vendor's aggregates
+            (LFa / RFa / sympathovagal balance) were not supplied, and the
+            recording did not carry enough usable beats for HumanOS to compute
+            an estimate either. Nothing is substituted or fabricated here.
           </p>
           <p className="text-[11px] text-amber-200/60 leading-relaxed">
             Not assessed. Attach the paired vendor report (the exact printed

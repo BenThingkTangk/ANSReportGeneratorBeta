@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import { COLOMBO_NORMS, classifySpectral, type SpectralClass } from "@shared/colomboNorms";
+import { ESTIMATE_BADGE, ESTIMATE_TITLE, isEstimatedPhase } from "@/lib/spectralProvenance";
 
 interface RestingBaselinePanelProps {
   report: ANSReport;
@@ -58,16 +59,38 @@ function provenanceBadge(method: string | undefined): { label: string; color: st
  * is the single most diagnostic resting parameter. FRF is highlighted with
  * its numeric value whenever it falls outside the Colombo 0.09–0.15 Hz band.
  */
+function EstimateNote() {
+  return (
+    <p
+      className="mt-3 text-[10px] leading-relaxed text-violet-200/75"
+      data-testid="resting-baseline-estimated-note"
+    >
+      {ESTIMATE_BADGE}: LFa, RFa and sympathovagal balance above are computed by
+      HumanOS from the ECG-derived R-R series (Morlet wavelet band power, bpm²),
+      not read from a PhysioPS report. No Colombo norm classification is applied
+      to an estimate, and these values do not feed the score, the patterns, the
+      therapy list or anything the patient sees.
+    </p>
+  );
+}
+
 export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
   const A = report.phaseEvents?.[0];
   if (!A) return null;
+
+  // Waveform-derived (estimated) values ARE shown — they are real measurements
+  // of the R-R series — but they are never classified against the Colombo norms
+  // and never coloured normal/abnormal. Only vendor-reported values may be.
+  const estimated = isEstimatedPhase(A);
 
   // Spectral aggregates (LFa/RFa/SB/FRF) are null when not reproducible from a
   // raw ECG-only recording. Never coerce null to a number or call toFixed on it
   // — render "Not assessed" and never fabricate a 0 balance.
   const spectralOk = report.spectralAvailable !== false;
+  // Show a value when the vendor supplied it OR when HumanOS estimated it.
+  const showValue = spectralOk || estimated;
   const sb =
-    spectralOk && typeof A.LFa === "number" && typeof A.RFa === "number" && A.RFa > 0
+    showValue && typeof A.LFa === "number" && typeof A.RFa === "number" && A.RFa > 0
       ? A.LFa / A.RFa
       : null;
 
@@ -80,10 +103,10 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
     explainer?: string;
     method?: string;
   }[] = [
-    { label: "LFa (Sympathetic)", value: spectralOk ? A.LFa : null, unit: "bpm²", norm: NORMS.LFa, explainer: "Low-frequency wavelet power at rest", method: prov?.LFa?.method },
-    { label: "RFa (Parasympathetic)", value: spectralOk ? A.RFa : null, unit: "bpm²", norm: NORMS.RFa, explainer: "Respiratory-frequency wavelet power at rest", method: prov?.RFa?.method },
+    { label: "LFa (Sympathetic)", value: showValue ? A.LFa : null, unit: "bpm²", norm: NORMS.LFa, explainer: "Low-frequency wavelet power at rest", method: prov?.LFa?.method },
+    { label: "RFa (Parasympathetic)", value: showValue ? A.RFa : null, unit: "bpm²", norm: NORMS.RFa, explainer: "Respiratory-frequency wavelet power at rest", method: prov?.RFa?.method },
     { label: "Sympathovagal Balance (LFa/RFa)", value: sb, unit: "", norm: NORMS.SB, explainer: "Resting LFa/RFa balance ratio", method: prov?.SB?.method },
-    { label: "FRF (Fundamental Respiratory Freq.)", value: spectralOk ? A.FRF : null, unit: "Hz", norm: NORMS.FRF, explainer: "Patient's natural respiratory frequency at rest", method: prov?.FRF?.method },
+    { label: "FRF (Fundamental Respiratory Freq.)", value: showValue ? A.FRF : null, unit: "Hz", norm: NORMS.FRF, explainer: "Patient's natural respiratory frequency at rest", method: prov?.FRF?.method },
   ];
 
   return (
@@ -106,7 +129,9 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {cards.map((c) => {
           const hasValue = typeof c.value === "number" && Number.isFinite(c.value);
-          const cls: Cls | null = hasValue ? classify(c.value as number, c.norm) : null;
+          // NO classification for an estimate: an unvalidated number must not be
+          // rendered as normal or abnormal against the vendor's norm bands.
+          const cls: Cls | null = hasValue && !estimated ? classify(c.value as number, c.norm) : null;
           const color = cls ? classColor(cls) : "hsl(var(--muted-foreground))";
           const isOut = cls !== null && cls !== "normal";
           return (
@@ -122,13 +147,21 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
                 {c.label}
               </div>
               <div className="mt-1 flex items-baseline gap-1.5">
-                <span className="text-xl font-semibold tabular-nums ps-text-mono" style={{ color }}>
+                <span
+                  className="text-xl font-semibold tabular-nums ps-text-mono"
+                  style={estimated ? undefined : { color }}
+                  title={estimated ? ESTIMATE_TITLE : undefined}
+                >
                   {hasValue ? (c.value as number).toFixed(2) : "—"}
                 </span>
                 {hasValue && c.unit && <span className="text-[10px] text-muted-foreground/70 ps-text-mono">{c.unit}</span>}
               </div>
               <div className="mt-1 text-[10px]" style={{ color }}>
-                {cls ? `${classLabel(cls)} · norm ${c.norm.lo}–${c.norm.hi}` : "Not assessed"}
+                {cls
+                  ? `${classLabel(cls)} · norm ${c.norm.lo}–${c.norm.hi}`
+                  : hasValue && estimated
+                    ? "est. · HumanOS estimate, norm not applied"
+                    : "Not assessed"}
               </div>
               {(() => {
                 const badge = provenanceBadge(c.method);
@@ -153,6 +186,8 @@ export function RestingBaselinePanel({ report }: RestingBaselinePanelProps) {
           );
         })}
       </div>
+
+      {estimated ? <EstimateNote /> : null}
     </motion.div>
   );
 }

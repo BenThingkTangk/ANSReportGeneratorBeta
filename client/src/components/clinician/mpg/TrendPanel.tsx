@@ -13,9 +13,16 @@ import {
   Tooltip,
   Legend,
 } from "recharts";
-import type { MultiParameterGraphical, TimeSeries } from "@shared/schema";
+import type { ANSReport, MultiParameterGraphical, TimeSeries } from "@shared/schema";
 import { ColomboExplainer } from "../ColomboExplainer";
 import { SpectralUnavailableCard } from "./SpectralUnavailableCard";
+import { SpectralEstimateBanner } from "./SpectralEstimateBanner";
+import {
+  ESTIMATE_BADGE,
+  ESTIMATE_LFA_COLOR,
+  ESTIMATE_RFA_COLOR,
+  ESTIMATE_TITLE,
+} from "@/lib/spectralProvenance";
 
 /**
  * Three stacked trend charts that mirror the "full-test ribbon" of the
@@ -84,18 +91,33 @@ function fmtClock(sec: number, testStartClock: string): string {
 interface TrendPanelProps {
   mpg: MultiParameterGraphical;
   testStartClock?: string;
-  /**
-   * When false, the rolling LFa/RFa (spectral) trend is not reproducible from
-   * this recording, so that chart is replaced with a "not reproducible" card.
-   * HR and breathing trends are ECG-derived and remain shown.
-   */
+  /** True only for vendor-reported spectral values (norm semantics allowed). */
   spectralAvailable: boolean;
+  /**
+   * True when the rolling LFa/RFa trend is a HumanOS waveform estimate. The
+   * trend IS plotted — it is a real measurement of the R-R series — but in
+   * neutral colours, with an "est." row label and a prominent
+   * "not PhysioPS-validated" disclosure. Only when neither vendor values nor
+   * estimates exist do we fall back to the unavailable card.
+   */
+  spectralEstimated?: boolean;
+  /** Needed for the estimate disclosure (method confidence + warnings). */
+  report?: ANSReport;
 }
 
-export function TrendPanel({ mpg, testStartClock = "13:08:00", spectralAvailable }: TrendPanelProps) {
+export function TrendPanel({
+  mpg,
+  testStartClock = "13:08:00",
+  spectralAvailable,
+  spectralEstimated = false,
+  report,
+}: TrendPanelProps) {
   const hrData = toChartData(mpg.heartRateTrend);
   const breathData = toChartData(mpg.breathingTrend);
-  const lfaRfaData = spectralAvailable ? mergeSeries(mpg.lfaTrend, mpg.rfaTrend) : [];
+  const plotSpectral =
+    (spectralAvailable || spectralEstimated) &&
+    (mpg.lfaTrend?.v?.length ?? 0) + (mpg.rfaTrend?.v?.length ?? 0) > 0;
+  const lfaRfaData = plotSpectral ? mergeSeries(mpg.lfaTrend, mpg.rfaTrend) : [];
 
   // Ticks every ~60 seconds, rounded
   const ticks: number[] = [];
@@ -111,8 +133,8 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00", spectralAvailable
   // LFa/RFa fixed Y-axis at 60 (Colombo standard) so cross-test comparisons
   // stay calibrated. We extend if the patient's spectral power genuinely
   // exceeds 60 so we don't clip outliers off-screen.
-  const lfaMax = spectralAvailable ? Math.max(...mpg.lfaTrend.v) : 0;
-  const rfaMax = spectralAvailable ? Math.max(...mpg.rfaTrend.v) : 0;
+  const lfaMax = plotSpectral && mpg.lfaTrend.v.length ? Math.max(...mpg.lfaTrend.v) : 0;
+  const rfaMax = plotSpectral && mpg.rfaTrend.v.length ? Math.max(...mpg.rfaTrend.v) : 0;
   const lfaRfaDomainHi = Math.max(60, Math.ceil(Math.max(lfaMax, rfaMax) * 1.05));
 
   return (
@@ -218,18 +240,40 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00", spectralAvailable
       <ColomboExplainer chartKey="breathingTrend" />
 
       {/* LFa vs RFa */}
-      {!spectralAvailable ? (
+      {!plotSpectral ? (
         <div className="mt-6">
           <RowLabel left="LFa (Sympathetic) vs RFa (Parasympathetic)" right="bpm²" />
           <SpectralUnavailableCard
-            title="Rolling LFa/RFa spectral trend — not reproducible"
+            title="Rolling LFa/RFa spectral trend — not established (no usable waveform and no vendor value)"
             testId="mpg-lfa-rfa-unavailable"
             compact
           />
         </div>
       ) : (
-      <div className="mt-6" data-testid="mpg-lfa-rfa-chart">
-        <RowLabel left="LFa (Sympathetic) vs RFa (Parasympathetic)" right="bpm²" />
+      <div
+        className="mt-6"
+        data-testid="mpg-lfa-rfa-chart"
+        data-spectral-estimated={spectralEstimated ? "true" : "false"}
+        title={spectralEstimated ? ESTIMATE_TITLE : undefined}
+      >
+        <RowLabel
+          left={
+            spectralEstimated
+              ? "LFa (Sympathetic) vs RFa (Parasympathetic) — est."
+              : "LFa (Sympathetic) vs RFa (Parasympathetic)"
+          }
+          right="bpm²"
+        />
+        {spectralEstimated ? (
+          <p
+            className="mb-2 text-[10px] leading-relaxed text-violet-200/80"
+            data-testid="mpg-lfa-rfa-estimated-note"
+          >
+            {ESTIMATE_BADGE} · computed from the R-R series (Morlet wavelet band
+            power). No Colombo norm shading is applied and these values do not
+            drive any score, pattern or patient-facing statement.
+          </p>
+        ) : null}
         <ResponsiveContainer width="100%" height={170}>
           <LineChart data={lfaRfaData} margin={{ top: 4, right: 16, left: 4, bottom: 4 }}>
             <CartesianGrid stroke="hsl(var(--border) / 0.15)" strokeDasharray="2 4" />
@@ -261,18 +305,42 @@ export function TrendPanel({ mpg, testStartClock = "13:08:00", spectralAvailable
               formatter={(val) => (
                 <span style={{ fontSize: 12, fontWeight: 500, color: "hsl(var(--foreground) / 0.85)" }}>
                   {val === "lfa" ? "LFa — Sympathetic" : "RFa — Parasympathetic"}
+                  {spectralEstimated ? " (est.)" : ""}
                 </span>
               )}
             />
             {renderPhaseShading(mpg)}
             {/* Clinical color convention: red = sympathetic, blue = parasympathetic */}
-            <Line type="monotone" dataKey="lfa" stroke="hsl(0 72% 51%)" strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls />
-            <Line type="monotone" dataKey="rfa" stroke="hsl(217 91% 55%)" strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls />
+            <Line
+              type="monotone"
+              dataKey="lfa"
+              stroke={spectralEstimated ? ESTIMATE_LFA_COLOR : "hsl(0 72% 51%)"}
+              strokeWidth={1.6}
+              strokeDasharray={spectralEstimated ? "5 3" : undefined}
+              dot={false}
+              isAnimationActive={false}
+              connectNulls
+            />
+            <Line
+              type="monotone"
+              dataKey="rfa"
+              stroke={spectralEstimated ? ESTIMATE_RFA_COLOR : "hsl(217 91% 55%)"}
+              strokeWidth={1.6}
+              strokeDasharray={spectralEstimated ? "5 3" : undefined}
+              dot={false}
+              isAnimationActive={false}
+              connectNulls
+            />
           </LineChart>
         </ResponsiveContainer>
       </div>
       )}
-      {spectralAvailable && <ColomboExplainer chartKey="lfaRfaTrend" />}
+      {plotSpectral && spectralEstimated && report ? (
+        <div className="mt-3">
+          <SpectralEstimateBanner report={report} testId="mpg-trend-estimate-banner" compact />
+        </div>
+      ) : null}
+      {plotSpectral && <ColomboExplainer chartKey="lfaRfaTrend" />}
     </motion.div>
   );
 }

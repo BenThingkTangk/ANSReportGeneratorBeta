@@ -302,14 +302,34 @@ describe("PROOF 4 — provenance and uncertainty are surfaced on every estimate"
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("study-level disclosure names the method, its confidence and its warnings", () => {
+  it("study-level disclosure names the method and its confidence", () => {
     const report = generateColomboReport(parseANSFile(genericStudy(), "arbitrary-study.ans"));
     expect(report.spectralSource).toBe("humanos_estimated");
     expect(report.spectralEstimation.method).toBe("morlet_cwt_bpm2");
     expect(report.spectralEstimation.confidence as number).toBeGreaterThan(0);
     expect(report.spectralEstimation.confidence as number).toBeLessThanOrEqual(0.6);
+    // The disclosure is unconditional: an estimate is ALWAYS labelled as an
+    // estimate and as not vendor-validated, whatever the signal quality.
     expect(report.spectralEstimation.disclosure).toMatch(/estimate/i);
-    expect(report.spectralEstimation.warnings.length).toBeGreaterThan(0);
+    expect(report.spectralEstimation.disclosure).toMatch(/not.*(validated|vendor)/i);
+    expect(Array.isArray(report.spectralEstimation.warnings)).toBe(true);
+  });
+
+  it("a CLEAN synthetic recording produces no quality warnings (removed RMSSD>SDNN gate)", () => {
+    // REGRESSION: this synthetic series is respiratory-dominant, so its
+    // beat-to-beat variability exceeds its overall variability (lag-1
+    // autocorrelation < 0.5). The removed gate called that "physiologically
+    // impossible" and attached a warning. A clean recording must now come back
+    // with an empty warning list; warnings are reserved for measured defects
+    // (see the artifact test below).
+    const report = generateColomboReport(parseANSFile(genericStudy(), "arbitrary-study.ans"));
+    expect(report.spectralEstimation.warnings).toEqual([]);
+    for (const p of report.phaseEvents) {
+      if (p.hrvQuality?.rmssdSdnnRatio != null && p.hrvQuality.rmssdSdnnRatio > 1) {
+        expect(p.hrvReliable).toBe(true);
+        expect(p.hrvUnreliableReasons ?? []).toEqual([]);
+      }
+    }
   });
 
   it("quality artifacts lower confidence and add warnings instead of nulling the outputs", () => {
@@ -327,7 +347,7 @@ describe("PROOF 4 — provenance and uncertainty are surfaced on every estimate"
       respFreqHz: 0.25,
       rejectedArtifactBeats: 7,
       rejectedArtifactIntervals: 9,
-      variabilityImplausible: true,
+      signalQualityFailed: true,
     });
     // Values survive (the measurable trend is preserved)...
     expect(dirty.lfa).not.toBeNull();

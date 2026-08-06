@@ -489,8 +489,14 @@ export interface PhaseSpectralInput {
   /** Artifact beats/intervals already excluded upstream (drives confidence). */
   rejectedArtifactBeats?: number;
   rejectedArtifactIntervals?: number;
-  /** True when the segment's variability metrics failed the plausibility gate. */
-  variabilityImplausible?: boolean;
+  /**
+   * True when the segment's R-R series failed the measured signal-quality
+   * assessment in `api/_ans/signalQuality.ts` (ectopic/mis-detected intervals,
+   * non-physiologic intervals, clipped fiducials, near-limit alternation).
+   * NOTE: beat-to-beat variability exceeding overall variability is NOT such a
+   * failure — that ratio is governed by lag-1 autocorrelation.
+   */
+  signalQualityFailed?: boolean;
   /**
    * True for a PACED breathing manoeuvre (the protocol's deep-breathing phase),
    * where a respiratory frequency below 0.15 Hz is expected rather than
@@ -580,7 +586,7 @@ export function estimatePhaseSpectral(input: PhaseSpectralInput): PhaseSpectralE
     respFreqHz,
     rejectedArtifactBeats = 0,
     rejectedArtifactIntervals = 0,
-    variabilityImplausible = false,
+    signalQualityFailed = false,
     pacedBreathing = false,
     fs = RESAMPLE_FS,
     Q = 5,
@@ -667,10 +673,10 @@ export function estimatePhaseSpectral(input: PhaseSpectralInput): PhaseSpectralE
       `${rejectedArtifactBeats} artifact beat(s) and ${rejectedArtifactIntervals} artifact-spanning interval(s) were excluded before spectral estimation; the remaining series is non-contiguous, which biases band power.`,
     );
   }
-  if (variabilityImplausible) {
+  if (signalQualityFailed) {
     confidence -= 0.2;
     warnings.push(
-      "Beat-to-beat variability exceeded overall variability in this segment (R-peak mis-detection signature), so the band powers are reported as low-confidence estimates only.",
+      "This segment failed the measured beat-detection quality assessment (ectopic or mis-detected intervals, non-physiologic intervals, saturated fiducial samples, or near-limit alternation), so the band powers are reported as low-confidence estimates only.",
     );
   }
   if (bands.lfHi - bands.lfLo < 0.03) {

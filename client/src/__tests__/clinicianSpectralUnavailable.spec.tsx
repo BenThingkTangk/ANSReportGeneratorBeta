@@ -20,7 +20,12 @@
  * (spectralAvailable === false), renders the REAL ClinicianPortalLive tree, and
  * asserts:
  *   1. every forbidden fabricated string/value is ABSENT
- *   2. every "spectral output not reproducible" unavailable state is PRESENT
+ *   2. spectral chart states are CONSISTENT with the payload: when HumanOS
+ *      publishes waveform estimates the charts render them, prominently labelled
+ *      as unvalidated estimates and with all norm/normal-abnormal colouring
+ *      suppressed; only when NO estimate exists is an "not established" card
+ *      shown. (The earlier revision of this test asserted the unavailable cards
+ *      unconditionally, which contradicted a payload carrying 86 trend points.)
  *   3. the phase-event table shows "—" for spectral cells (consistent with the
  *      Numerical Summary), never a fabricated FRF/LFa/RFa/SB number
  *   4. the Colombo indications empty-state uses the exact honest copy
@@ -184,18 +189,57 @@ describe("Clinician charts never fabricate spectral values (FOURTH FINAL-QA)", (
     cleanup();
   });
 
-  it("shows explicit unavailable states for every spectral chart", async () => {
+  function hasEstimates(): boolean {
+    return (report.phaseEvents || []).some(
+      (p: any) =>
+        p.provenance?.LFa?.method === "computed" &&
+        p.provenance?.LFa?.validation === "estimated" &&
+        (p.LFa != null || p.RFa != null || p.SB != null),
+    );
+  }
+
+  it("spectral chart states match the payload (estimates render, labelled; no norms)", async () => {
     const { cleanup, screen } = await import("@testing-library/react");
-    await renderClinician();
+    const { container } = await renderClinician();
 
-    // Scatter/response-maps section replaced with a not-reproducible card.
-    expect(screen.getByTestId("mpg-scatter-unavailable")).toBeTruthy();
-    // Rolling LFa/RFa trend replaced with a not-reproducible card...
-    expect(screen.getByTestId("mpg-lfa-rfa-unavailable")).toBeTruthy();
-    // ...and the real LFa/RFa chart must NOT be mounted.
-    expect(screen.queryByTestId("mpg-lfa-rfa-chart")).toBeNull();
+    if (hasEstimates()) {
+      // 1. Prominent disclosure at the top of the MPG section.
+      const banner = screen.getByTestId("mpg-estimate-banner");
+      expect(banner.getAttribute("data-spectral-estimated")).toBe("true");
+      expect(banner.textContent).toMatch(/HumanOS estimate/i);
+      expect(banner.textContent).toMatch(/not PhysioPS-validated/i);
 
-    // HR + breathing trends (legitimately ECG-derived) remain present.
+      // 2. The trend chart IS mounted from the estimates, flagged as estimated,
+      //    and carries an explicit note — no contradictory unavailable card.
+      const chart = screen.getByTestId("mpg-lfa-rfa-chart");
+      expect(chart.getAttribute("data-spectral-estimated")).toBe("true");
+      expect(screen.queryByTestId("mpg-lfa-rfa-unavailable")).toBeNull();
+      expect(screen.getByTestId("mpg-lfa-rfa-estimated-note").textContent).toMatch(
+        /not PhysioPS-validated|not vendor-reported/i,
+      );
+
+      // 3. Scatter/response maps render in estimate mode, not as an empty card.
+      expect(screen.getByTestId("mpg-scatter-estimated")).toBeTruthy();
+      expect(screen.queryByTestId("mpg-scatter-unavailable")).toBeNull();
+
+      // 4. No norm bands / normal-abnormal verdicts anywhere in estimate mode.
+      const text = container.textContent || "";
+      expect(container.querySelectorAll('[data-stub="reference-area"]').length).toBe(0);
+      expect(text).not.toMatch(/Colombo norm band applied/i);
+      expect(text).not.toMatch(/(LFa|RFa|SB)[^.]{0,40}\b(within normal|abnormal|above norm|below norm)\b/i);
+
+      // 5. Estimates must not drive any interpretation or score.
+      expect(report.spectralAvailable).toBe(false);
+      expect(report.autonomicBalance?.available).toBe(false);
+      expect(report.autonomicBalance?.balance).toBeNull();
+    } else {
+      // No estimate exists → honest empty state, nothing substituted.
+      expect(screen.getByTestId("mpg-scatter-unavailable")).toBeTruthy();
+      expect(screen.getByTestId("mpg-lfa-rfa-unavailable")).toBeTruthy();
+      expect(screen.queryByTestId("mpg-lfa-rfa-chart")).toBeNull();
+    }
+
+    // HR + breathing trends (legitimately ECG-derived) remain present either way.
     const portal = screen.getByTestId("clinician-portal");
     expect(portal.textContent).toMatch(/Heart Rate|HR/);
 
