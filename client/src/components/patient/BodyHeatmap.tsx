@@ -5,6 +5,7 @@ import type { BodySystemImpact } from "@shared/schema";
 
 interface BodyHeatmapProps {
   bodySystemImpact: BodySystemImpact[];
+  scorable?: boolean;
 }
 
 type SystemKey = BodySystemImpact["system"];
@@ -30,9 +31,10 @@ function impactGlow(impact: number): string {
  * "Not assessed"; supported domains with no adverse signal read "No signal
  * detected"; supported domains with an adverse signal read "Observed".
  */
-function qualitativeStatus(d: BodySystemImpact): string {
+function qualitativeStatus(d: BodySystemImpact, scorable: boolean): string {
   if (d.assessed === false) return "Not assessed";
   if (d.impact <= -10) return "Observed";
+  if (!scorable) return "Observation only";
   return "No signal detected";
 }
 
@@ -171,7 +173,7 @@ const RENDER_ORDER: SystemKey[] = [
   "nervous",
 ];
 
-export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
+export function BodyHeatmap({ bodySystemImpact, scorable = true }: BodyHeatmapProps) {
   const [selected, setSelected] = useState<SystemKey | null>(null);
   const [active, setActive] = useState<SystemKey | null>(null); // hover or keyboard focus
   const prefersReducedMotion = useReducedMotion();
@@ -246,7 +248,7 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   role="button"
                   tabIndex={0}
                   aria-pressed={isSelected}
-                  aria-label={`${imp.system}: ${qualitativeStatus(imp)}. ${isSelected ? "Selected. Activate to hide details." : "Activate for details."}`}
+                  aria-label={`${imp.system}: ${qualitativeStatus(imp, scorable)}. ${isSelected ? "Selected. Activate to hide details." : "Activate for details."}`}
                   onClick={() => toggle(system)}
                   onKeyDown={(e) => onRegionKey(e, system)}
                   onFocus={() => setActive(system)}
@@ -257,7 +259,7 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                   style={{ filter: `drop-shadow(0 0 6px ${impactGlow(imp.impact)})` }}
                   data-testid={`body-region-${system}`}
                 >
-                  <title>{`${imp.system} — ${qualitativeStatus(imp)}`}</title>
+                  <title>{`${imp.system} — ${qualitativeStatus(imp, scorable)}`}</title>
                   {def.organs(color)}
                   {/* Transparent hit area + focus/selection ring */}
                   <g
@@ -313,7 +315,7 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                           : impactColor(selectedImp.impact),
                     }}
                   >
-                    {qualitativeStatus(selectedImp)}
+                    {qualitativeStatus(selectedImp, scorable)}
                   </span>
                 </div>
               </motion.div>
@@ -359,7 +361,7 @@ export function BodyHeatmap({ bodySystemImpact }: BodyHeatmapProps) {
                       }}
                       data-testid={`body-status-${sys.system}`}
                     >
-                      {qualitativeStatus(sys)}
+                      {qualitativeStatus(sys, scorable)}
                     </span>
                   </div>
                 </button>

@@ -233,7 +233,13 @@ export function PatientPortal({ report }: PatientPortalProps) {
         viewport={{ once: true, margin: "-80px" }}
         transition={{ duration: 0.5 }}
       >
-        <BodyHeatmap bodySystemImpact={report.bodySystemImpact} />
+        <BodyHeatmap
+          bodySystemImpact={report.bodySystemImpact}
+          scorable={
+            report.wellnessScore != null &&
+            report.wellnessBreakdown?.scorability?.scorable !== false
+          }
+        />
       </motion.div>
 
       {/* Care plan stack */}

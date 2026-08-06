@@ -287,7 +287,7 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
         viewport={{ once: true, margin: "-80px" }}
         transition={{ duration: 0.5 }}
       >
-        <BodyHeatmap bodySystemImpact={report.bodySystemImpact} />
+        <BodyHeatmap bodySystemImpact={report.bodySystemImpact} scorable={!notScorable} />
       </motion.div>
 
       {/* Care plan stack */}

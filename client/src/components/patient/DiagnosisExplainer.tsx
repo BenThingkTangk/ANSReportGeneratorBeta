@@ -192,6 +192,9 @@ const SEVERITY_STYLES: Record<string, { color: string; bg: string; ring: string;
 
 export function DiagnosisExplainer({ report }: DiagnosisExplainerProps) {
   const indications: Indication[] = (report.indications ?? []);
+  const notScorable =
+    report.wellnessScore == null ||
+    report.wellnessBreakdown?.scorability?.scorable === false;
 
   if (indications.length === 0) {
     return (
@@ -202,18 +205,20 @@ export function DiagnosisExplainer({ report }: DiagnosisExplainerProps) {
         className="ps-glass rounded-2xl p-6 text-center"
         data-testid="diagnosis-no-findings"
       >
-        <div className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center" style={{ background: "hsl(140 60% 50% / 0.15)" }}>
-          <ShieldCheck className="w-6 h-6" style={{ color: "hsl(140 60% 65%)" }} />
+        <div className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center" style={{ background: notScorable ? "hsl(35 90% 55% / 0.12)" : "hsl(140 60% 50% / 0.15)" }}>
+          {notScorable
+            ? <Activity className="w-6 h-6" style={{ color: "hsl(35 90% 62%)" }} />
+            : <ShieldCheck className="w-6 h-6" style={{ color: "hsl(140 60% 65%)" }} />}
         </div>
         <h3 className="text-base font-semibold mb-1">
-          Measured signals are within normal ranges
+          {notScorable
+            ? "No additional deterministic pattern was established"
+            : "Measured signals are within normal ranges"}
         </h3>
         <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-          Your ECG/time-domain metrics and cardiovagal (Ewing) reflex ratios were
-          measured and fell within normal limits. The sympathovagal branch-balance
-          (vendor spectral aggregates) is not contained in the raw .ans export and
-          is shown separately as “Not assessed”; supplying the paired vendor PDF
-          completes that view.
+          {notScorable
+            ? "Some traceable measurements may be shown as observations, but the study did not meet the requirements for an overall autonomic interpretation. Missing or unusable domains remain “Not assessed,” never normal."
+            : "Your ECG/time-domain metrics and cardiovagal (Ewing) reflex ratios were measured and fell within normal limits. The sympathovagal branch-balance (vendor spectral aggregates) is not contained in the raw .ans export and is shown separately as “Not assessed”; supplying the paired vendor PDF completes that view."}
         </p>
       </motion.div>
     );
