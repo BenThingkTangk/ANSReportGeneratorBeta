@@ -120,7 +120,7 @@ export interface AnsFileMetadata {
   fileSha256?: string;
   /** ISO YYYY-MM-DD of the study itself. */
   studyDate: ProvField<string>;
-  /** HH:mm clock time the recording started, when available. */
+  /** Local 12-hour clock time with seconds (hh:mm:ss AM/PM), when available. */
   studyStartTime: ProvField<string>;
   procedureType: ProvField<string>;
   samplingRateHz: ProvField<number>;
@@ -172,8 +172,12 @@ export interface AnsEcgQuality {
     | "lead_off_or_flatline"
     | "excess_motion_or_saturation"
     | "low_snr"
-    | "sentinel_spikes"
   >;
+  /**
+   * Non-blocking acquisition artifacts. These require disclosure and
+   * downstream exclusion but do not, alone, make the study unusable.
+   */
+  artifactFlags: Array<"sentinel_spikes">;
   warnings: string[];
 }
 
@@ -308,6 +312,12 @@ export interface AnsStudy {
   patient: AnsDemographics;
   fileMetadata: AnsFileMetadata;
   anthropometrics: AnsAnthropometrics;
+  /**
+   * Ectopic count from the .ans annotation. PhysioPS omits the annotation for
+   * zero, represented as a provenance-bearing computed value only when the ECG
+   * record is present and complete.
+   */
+  ectopicBeats: ProvField<number>;
   ecg: AnsEcgSignal;
 
   baseline: PhaseBlock;
@@ -366,4 +376,4 @@ export function provField<T>(
 }
 
 /** Constant — bumped whenever the parser changes deterministically. */
-export const PARSER_VERSION = "ans-parser/1.0.0";
+export const PARSER_VERSION = "ans-parser/1.1.0";

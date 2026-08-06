@@ -101,6 +101,7 @@ function baseStudy(over: Partial<AnsStudy> = {}): AnsStudy {
       weightLbs: prov<number>(null),
       bmi: prov<number>(null),
     },
+    ectopicBeats: prov<number>(null),
     ecg: {
       preview: [],
       durationSec: 300,
@@ -110,6 +111,7 @@ function baseStudy(over: Partial<AnsStudy> = {}): AnsStudy {
         sentinelFraction: 0,
         leadOff: false,
         unusableReasons: [],
+        artifactFlags: [],
         usable: true,
         warnings: [],
       },
@@ -316,6 +318,7 @@ describe("computeDiagnosticSummary — deterministic scoring", () => {
           sentinelFraction: 0,
           leadOff: true,
           unusableReasons: ["lead_off_or_flatline"],
+          artifactFlags: [],
           usable: false,
           warnings: ["lead-off detected", "high motion fraction"],
         },

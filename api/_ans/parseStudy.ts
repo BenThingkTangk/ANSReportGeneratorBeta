@@ -244,47 +244,84 @@ export function studyDateFromFilename(fileName: string): string | null {
 }
 
 /**
- * Pick the best LabVIEW timestamp hit as the study date. Strategy:
- *   - If the filename gives a hint, prefer the hit whose date is closest
- *     (within ±2 days) to that hint.
- *   - Otherwise prefer the most recent hit (newest date wins).
+ * Pick the exact PhysioPS test-start timestamp.
+ *
+ * Current exports contain a precise BE-double start/end pair plus a nearby,
+ * lower-fidelity integer timestamp. Prefer the double encoding, then the
+ * earliest candidate near the filename date (the start precedes the end).
  */
-function pickStudyDate(
+function pickStudyTimestamp(
   hits: LabviewTimestampHit[],
   filenameIso: string | null,
-): { iso: string; offset: number; confidence: number; matched: string } | null {
+): {
+  date: Date;
+  offset: number;
+  confidence: number;
+  matched: string;
+  source: "binary_double" | "binary_labview_i64";
+} | null {
   if (hits.length === 0) return null;
+  const precise = hits.filter((hit) => hit.encoding === "double_seconds_1904");
+  const candidates = precise.length > 0 ? precise : hits;
   if (filenameIso) {
     const target = new Date(filenameIso).getTime();
-    let best = hits[0];
-    let bestDelta = Math.abs(best.date.getTime() - target);
-    for (const h of hits) {
-      const delta = Math.abs(h.date.getTime() - target);
-      if (delta < bestDelta) {
-        best = h;
-        bestDelta = delta;
-      }
-    }
-    if (bestDelta < 1000 * 60 * 60 * 48) {
+    const near = candidates
+      .filter((hit) => Math.abs(hit.date.getTime() - target) < 1000 * 60 * 60 * 48)
+      .sort((a, b) => a.date.getTime() - b.date.getTime());
+    if (near.length > 0) {
+      const best = near[0];
       return {
-        iso: isoFromDate(best.date),
+        date: best.date,
         offset: best.offset,
-        confidence: 1,
-        matched: "labview_i64_matched_filename",
+        confidence: best.encoding === "double_seconds_1904" ? 1 : 0.8,
+        matched:
+          best.encoding === "double_seconds_1904"
+            ? "labview_double_start_matched_filename"
+            : "labview_i64_matched_filename",
+        source:
+          best.encoding === "double_seconds_1904"
+            ? "binary_double"
+            : "binary_labview_i64",
       };
     }
   }
-  // Fall back to most recent hit
-  const newest = hits.reduce((a, b) => (b.date > a.date ? b : a));
+  const earliest = [...candidates].sort((a, b) => a.date.getTime() - b.date.getTime())[0];
   return {
-    iso: isoFromDate(newest.date),
-    offset: newest.offset,
-    confidence: 0.7,
-    matched: "labview_i64_newest",
+    date: earliest.date,
+    offset: earliest.offset,
+    confidence: earliest.encoding === "double_seconds_1904" ? 0.9 : 0.7,
+    matched:
+      earliest.encoding === "double_seconds_1904"
+        ? "labview_double_earliest"
+        : "labview_i64_earliest",
+    source:
+      earliest.encoding === "double_seconds_1904"
+        ? "binary_double"
+        : "binary_labview_i64",
   };
 }
 
-function isoFromDate(d: Date): string {
+function localDateTime(
+  instant: Date,
+  timezoneOffsetMinutes: number,
+): { isoDate: string; clock12h: string } {
+  const d = new Date(instant.getTime() + timezoneOffsetMinutes * 60_000);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  const hours24 = d.getUTCHours();
+  const hours12 = hours24 % 12 || 12;
+  const minutes = String(d.getUTCMinutes()).padStart(2, "0");
+  const seconds = String(d.getUTCSeconds()).padStart(2, "0");
+  return {
+    isoDate: `${y}-${m}-${day}`,
+    clock12h: `${String(hours12).padStart(2, "0")}:${minutes}:${seconds} ${
+      hours24 >= 12 ? "PM" : "AM"
+    }`,
+  };
+}
+
+function utcDateOnly(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
@@ -588,21 +625,28 @@ function buildFileMetadata(
   asciiHeadStart: number,
   fileName: string,
   fileSizeBytes: number,
+  timezoneOffsetMinutes: number,
   warnings: ExtractionWarning[],
 ): { meta: AnsFileMetadata; studyDateIso: string | null } {
   // Study date selection
   const filenameIso = studyDateFromFilename(fileName);
-  const lvHit = pickStudyDate(bin.labviewHits, filenameIso);
+  const lvHit = pickStudyTimestamp(bin.labviewHits, filenameIso);
+  const localTimestamp = lvHit?.source === "binary_double"
+    ? localDateTime(lvHit.date, timezoneOffsetMinutes)
+    : null;
 
   let studyDate: ProvField<string>;
   if (lvHit) {
     studyDate = {
-      value: lvHit.iso,
+      value: localTimestamp?.isoDate ?? utcDateOnly(lvHit.date),
       provenance: {
-        source: "binary_labview_i64",
+        source: lvHit.source,
         offset: lvHit.offset,
         matchedLabel: lvHit.matched,
         confidence: lvHit.confidence,
+        warnings: localTimestamp
+          ? [`local date uses configured UTC offset ${timezoneOffsetMinutes} minutes`]
+          : undefined,
       },
     };
   } else if (filenameIso) {
@@ -647,12 +691,22 @@ function buildFileMetadata(
     }
   }
 
-  // Study start time (ASCII only)
+  // Study start time. Exact binary BE-double timestamp takes precedence.
   const metaSec = findSection(sections, "study_metadata");
   const startRes = metaSec
     ? extractFromSection(metaSec, FIELD_SYNONYMS.STUDY_START_TIME)
     : extractFromText(asciiHead, asciiHeadStart, FIELD_SYNONYMS.STUDY_START_TIME);
-  const studyStartTime = toProvString(startRes, metaSec?.id);
+  const studyStartTime =
+    lvHit && localTimestamp
+      ? provField(localTimestamp.clock12h, lvHit.source, {
+          offset: lvHit.offset,
+          matchedLabel: lvHit.matched,
+          confidence: lvHit.confidence,
+          warnings: [
+            `local time uses configured UTC offset ${timezoneOffsetMinutes} minutes`,
+          ],
+        })
+      : toProvString(startRes, metaSec?.id);
 
   // Procedure type. In many .ans headers "Procedure" is a bare binary marker
   // with NO real value — the bytes after it are padding/noise (e.g. a stray
@@ -1013,6 +1067,35 @@ function buildConclusions(sections: AnsRawSection[]): ProvField<AnsConclusion[]>
 // ECG signal preview + crude quality gate
 // ===========================================================================
 
+function buildEctopicBeats(
+  asciiHead: string,
+  asciiHeadStart: number,
+  completeEcgRecord: boolean,
+): ProvField<number> {
+  const match = /(\d+)\s*possible\s+(?:premature\s+beat(?:\s*\(s\)|s)?|ectop(?:ic)?\s+beats?)/i.exec(
+    asciiHead,
+  );
+  if (!match) {
+    if (completeEcgRecord) {
+      return provField(0, "computed", {
+        matchedLabel: "vendor_zero_ectopy_omits_annotation",
+        confidence: 1,
+        warnings: [
+          "PhysioPS omits the premature/ectopic annotation when the count is zero; " +
+            "this convention is validated across the 11-case paired .ans/PDF corpus.",
+        ],
+      });
+    }
+    return missingField<number>("no premature/ectopic beat annotation present");
+  }
+  return provField(Number(match[1]), "ascii_global_regex", {
+    offset: asciiHeadStart + (match.index ?? 0),
+    sourceText: match[0],
+    matchedLabel: "possible_premature_or_ectopic_beats",
+    confidence: 1,
+  });
+}
+
 function buildEcgSignal(
   buf: Buffer,
   bin: BinaryHeaderParse,
@@ -1025,6 +1108,7 @@ function buildEcgSignal(
     leadOff: false,
     usable: false,
     unusableReasons: [],
+    artifactFlags: [],
     warnings: [],
   };
   if (!bin.sampling) {
@@ -1071,16 +1155,16 @@ function buildEcgSignal(
   if (leadOff) reasons.push("lead_off_or_flatline");
   if (motionFraction >= 0.25) reasons.push("excess_motion_or_saturation");
   if ((snrDb ?? -Infinity) <= 6) reasons.push("low_snr");
-  if (sentinelFraction > 0) reasons.push("sentinel_spikes");
+  const artifactFlags: AnsEcgQuality["artifactFlags"] =
+    sentinelFraction > 0 ? ["sentinel_spikes"] : [];
 
   quality.snrDb = snrDb;
   quality.motionFraction = Math.round(motionFraction * 1000) / 1000;
   quality.sentinelFraction = Math.round(sentinelFraction * 10000) / 10000;
   quality.leadOff = leadOff;
   quality.unusableReasons = reasons;
-  // `sentinel_spikes` alone does not condemn the recording (they are excluded
-  // downstream), but the other three criteria do.
-  quality.usable = !reasons.some((r) => r !== "sentinel_spikes");
+  quality.artifactFlags = artifactFlags;
+  quality.usable = reasons.length === 0;
 
   const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
   if (leadOff) {
@@ -1108,7 +1192,7 @@ function buildEcgSignal(
         "6 dB minimum for clinical scoring.",
     );
   }
-  if (reasons.includes("sentinel_spikes")) {
+  if (artifactFlags.includes("sentinel_spikes")) {
     quality.warnings.push(
       `${pct(sentinelFraction)} of sampled points sit at or beyond the ±${SENTINEL_ABS} int16 rail. ` +
         "These are acquisition artifacts and are excluded from beat detection and every " +
@@ -1163,9 +1247,19 @@ export interface ParseStudyOptions {
   buffer: Buffer;
   /** Original filename, used for fallback date parsing. */
   fileName: string;
+  /**
+   * Clinic-local offset from UTC used to render the PhysioPS test clock.
+   * The validated PhysioPS corpus uses fixed UTC-05:00. Callers serving a
+   * differently configured acquisition workstation must override this value.
+   */
+  timezoneOffsetMinutes?: number;
 }
 
-export function parseStudy({ buffer, fileName }: ParseStudyOptions): AnsStudy {
+export function parseStudy({
+  buffer,
+  fileName,
+  timezoneOffsetMinutes = -300,
+}: ParseStudyOptions): AnsStudy {
   const warnings: ExtractionWarning[] = [];
 
   // 1) Binary header + sampling probe
@@ -1190,6 +1284,7 @@ export function parseStudy({ buffer, fileName }: ParseStudyOptions): AnsStudy {
     asciiHeadStart,
     fileName,
     buffer.length,
+    timezoneOffsetMinutes,
     warnings,
   );
 
@@ -1205,6 +1300,11 @@ export function parseStudy({ buffer, fileName }: ParseStudyOptions): AnsStudy {
 
   // 5) Anthropometrics
   const anthropometrics = buildAnthropometrics(sections, asciiHead, asciiHeadStart, warnings);
+  const ectopicBeats = buildEctopicBeats(
+    asciiHead,
+    asciiHeadStart,
+    Boolean(bin.sampling && !bin.sampling.truncated),
+  );
 
   // 6) ECG preview + quality gate
   const ecg = buildEcgSignal(buffer, bin, warnings);
@@ -1275,6 +1375,7 @@ export function parseStudy({ buffer, fileName }: ParseStudyOptions): AnsStudy {
     patient,
     fileMetadata: meta,
     anthropometrics,
+    ectopicBeats,
     ecg,
     baseline,
     deepBreathing,

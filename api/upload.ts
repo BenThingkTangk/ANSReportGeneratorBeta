@@ -737,7 +737,7 @@ function detectRPeaks(ecg: number[], samplingRate: number): {
   // useful heart rate. The rail deflections are still kept out of the
   // variability metrics — a clipped peak has no trustworthy fiducial point, the
   // plausibility gate in `analyzePhase` rejects the resulting series, and the
-  // parser marks the whole recording unusable (`sentinel_spikes`).
+  // parser flags rail artifacts separately from recording-level unusability.
   const isArtifactIndex = (idx: number): boolean => isSentinelSample(ecg[idx]);
   const cleanPeaks: number[] = [];
   const rejectedPeaks: number[] = [];

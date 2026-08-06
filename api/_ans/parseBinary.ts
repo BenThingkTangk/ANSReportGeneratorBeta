@@ -186,6 +186,8 @@ export interface LabviewTimestampHit {
   offset: number;
   /** Decoded JS Date (UTC). */
   date: Date;
+  /** Physical encoding found in the file. */
+  encoding: "double_seconds_1904" | "int64_seconds_1904";
 }
 
 /**
@@ -201,13 +203,32 @@ export function scanLabviewTimestamps(
   const hits: LabviewTimestampHit[] = [];
   const end = Math.min(endOffset, buf.length - 8);
   for (let off = startOffset; off <= end; off++) {
+    // Current PhysioPS exports store exact test start/end timestamps as
+    // big-endian doubles with fractional LabVIEW seconds. A nearby integer
+    // timestamp is truncated and can differ by multiple seconds.
+    const doubleSeconds = buf.readDoubleBE(off);
+    if (
+      Number.isFinite(doubleSeconds) &&
+      doubleSeconds >= LABVIEW_MIN_SEC &&
+      doubleSeconds <= LABVIEW_MAX_SEC
+    ) {
+      const unixSec = doubleSeconds - LABVIEW_EPOCH_OFFSET_SEC;
+      const d = new Date(unixSec * 1000);
+      if (!isNaN(d.getTime())) {
+        hits.push({ offset: off, date: d, encoding: "double_seconds_1904" });
+      }
+    }
+
+    // Older firmware and synthetic fixtures may expose only integer seconds.
     const hi = buf.readUInt32BE(off);
     if (hi !== 0) continue; // LabVIEW seconds-since-1904 in 1990-2050 is < 2^32
     const lo = buf.readUInt32BE(off + 4);
     if (lo >= LABVIEW_MIN_SEC && lo <= LABVIEW_MAX_SEC) {
       const unixSec = lo - LABVIEW_EPOCH_OFFSET_SEC;
       const d = new Date(unixSec * 1000);
-      if (!isNaN(d.getTime())) hits.push({ offset: off, date: d });
+      if (!isNaN(d.getTime())) {
+        hits.push({ offset: off, date: d, encoding: "int64_seconds_1904" });
+      }
     }
   }
   return hits;

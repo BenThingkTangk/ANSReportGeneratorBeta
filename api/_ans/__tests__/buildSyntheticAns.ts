@@ -28,6 +28,8 @@ export interface SyntheticAnsOptions {
   asciiPaddingBytes?: number;
   /** Whether to embed a study-date LabVIEW timestamp inside the asciiBlock region. */
   studyDateIso?: string | null;
+  /** Exact PhysioPS BE-double test-start timestamp, including fractional seconds. */
+  studyTimestampUtcIso?: string | null;
   /** sec/sample, default 0.004 (250 Hz). 0 -> omit sampling block entirely. */
   samplingInterval?: number;
   /** Number of synthesized ECG samples. */
@@ -59,6 +61,13 @@ function isoToLabviewBuf(iso: string): Buffer {
   return buf;
 }
 
+function isoToLabviewDoubleBuf(iso: string): Buffer {
+  const seconds = new Date(iso).getTime() / 1000 + LABVIEW_EPOCH_OFFSET_SEC;
+  const buf = Buffer.alloc(8);
+  buf.writeDoubleBE(seconds, 0);
+  return buf;
+}
+
 export function buildSyntheticAns(opts: SyntheticAnsOptions = {}): Buffer {
   const {
     lastName = "Doe",
@@ -68,6 +77,7 @@ export function buildSyntheticAns(opts: SyntheticAnsOptions = {}): Buffer {
     physician = "Smith",
     asciiBlock = "E/I Ratio = 1.45\r\nValsalva Ratio = 1.55\r\n30:15 Ratio = 1.20\r\n5 ft 6 in\r\n",
     studyDateIso = "2024-08-15",
+    studyTimestampUtcIso = null,
     samplingInterval = 0.004,
     truncateTo,
     ecgSamples,
@@ -92,6 +102,14 @@ export function buildSyntheticAns(opts: SyntheticAnsOptions = {}): Buffer {
   chunks.push(Buffer.from("\0\0\0\0", "binary"));
   if (studyDateIso) {
     chunks.push(isoToLabviewBuf(studyDateIso));
+  }
+  if (studyTimestampUtcIso) {
+    chunks.push(isoToLabviewDoubleBuf(studyTimestampUtcIso));
+    chunks.push(
+      isoToLabviewDoubleBuf(
+        new Date(new Date(studyTimestampUtcIso).getTime() + 938_000).toISOString(),
+      ),
+    );
   }
   chunks.push(Buffer.from("\0\0\0\0", "binary"));
   chunks.push(Buffer.from(asciiBlock, "ascii"));

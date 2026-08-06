@@ -230,7 +230,7 @@ describe("Alex Pare — interpretation is gated on signal usability", () => {
     const { study } = alex();
     expect(study.ecg.quality.sentinelFraction).not.toBeNull();
     expect(study.ecg.quality.sentinelFraction!).toBeGreaterThan(0);
-    expect(study.ecg.quality.unusableReasons).toContain("sentinel_spikes");
+    expect(study.ecg.quality.artifactFlags).toContain("sentinel_spikes");
   });
 
   it("artifact-contaminated variability never reaches a score", () => {

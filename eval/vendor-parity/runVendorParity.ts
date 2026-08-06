@@ -261,7 +261,9 @@ function compareCase(
     metric: "test_time_local",
     expected: demo.test_time_local.value,
     actual: fieldValue(study.fileMetadata.studyStartTime),
-    note: "Vendor time is direct from the LabVIEW timestamp; canonical parser currently checks ASCII only.",
+    note:
+      "Vendor time is decoded from the exact BE-double LabVIEW start timestamp " +
+      "and rendered with the configured acquisition-workstation UTC offset.",
   });
   compare(rows, { ...base, category: "sampling", metric: "sampling_rate_hz", expected: binary.ekg.rate_hz, actual: fieldValue(study.fileMetadata.samplingRateHz) });
   compare(rows, { ...base, category: "sampling", metric: "sampling_interval_sec", expected: binary.ekg.dt_sec, actual: fieldValue(study.fileMetadata.samplingInterval) }, 0.0000001);
@@ -287,14 +289,15 @@ function compareCase(
   compare(rows, { ...base, category: "ratios", metric: "valsalva_ratio", expected: ratios.valsalva.value, actual: fieldValue(study.ratios.valsalvaRatio) }, 0.001);
   compare(rows, { ...base, category: "ratios", metric: "thirty_fifteen_ratio", expected: ratios.r3015.value, actual: fieldValue(study.ratios.thirtyFifteenRatio) }, 0.001);
   compare(rows, { ...base, category: "ectopy", metric: "raw_ascii_ectopic_count", expected: demo.num_ectopic_beats.value, actual: extractEctopicCount(study) });
-  rows.push({
+  compare(rows, {
     ...base,
     category: "ectopy",
     metric: "canonical_study_ectopic_count",
-    status: "not_implemented",
     expected: demo.num_ectopic_beats.value,
-    actual: null,
-    note: "The legacy adapter extracts this, but AnsStudy has no canonical ectopic field.",
+    actual: fieldValue(study.ectopicBeats),
+    note:
+      "Canonical provenance-bearing ectopic count; a complete ECG record with no " +
+      "annotation uses the validated PhysioPS zero-omission convention.",
   });
 
   comparePhase(rows, caseId, deidentifiedFile, "A", "baseline", getPhase(oracleCase, "A"), study.baseline);
@@ -309,7 +312,12 @@ function compareCase(
     metric: "usable_has_no_unusable_reasons",
     expected: true,
     actual: !(study.ecg.quality.usable && reasons.length > 0),
-    note: reasons.length ? `Reasons present: ${reasons.join(", ")}` : "No contradictory reasons.",
+    note:
+      reasons.length
+        ? `Blocking reasons present: ${reasons.join(", ")}`
+        : study.ecg.quality.artifactFlags.length
+          ? `Non-blocking artifact flags: ${study.ecg.quality.artifactFlags.join(", ")}`
+          : "No contradictory reasons.",
   });
   compare(rows, {
     ...base,
@@ -370,7 +378,7 @@ function markdownReport(oracle: Oracle, rows: Comparison[], sourcesFound: number
   }));
   const gaps = rows.filter((row) => row.status !== "pass");
   return [
-    "# HumanOS ANS Phase 1 Vendor-Parity Baseline",
+    "# HumanOS ANS Vendor-Parity Report",
     "",
     "This measures the canonical HumanOS `.ans` parser against the deidentified 11-case PhysioPS vendor oracle. It is software validation, not a diagnosis.",
     "",

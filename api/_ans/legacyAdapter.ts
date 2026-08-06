@@ -177,8 +177,8 @@ function legacyHeight(study: AnsStudy): string {
 /**
  * Ectopic / premature-beat count. Physio PS reports write this as a free-text
  * note (e.g. "1 possible premature beat" / "3 possible ectopic beats"). It is
- * NOT a dedicated scalar field, so we scan the full ASCII head generically
- * rather than hardcoding a per-patient value. Returns 0 when no note is found.
+ * Compatibility fallback for pre-1.1 AnsStudy objects. New parser output
+ * carries this as a canonical, provenance-bearing scalar.
  */
 function extractEctopicBeats(study: AnsStudy): number {
   const text = study.rawAsciiHead ?? "";
@@ -210,7 +210,7 @@ export function ansStudyToLegacy(study: AnsStudy, buffer: Buffer): LegacyParsedA
     eiRatio: study.ratios.eiRatio.value,
     valsalvaRatio: study.ratios.valsalvaRatio.value,
     thirtyFifteenRatio: study.ratios.thirtyFifteenRatio.value,
-    ectopicBeats: extractEctopicBeats(study),
+    ectopicBeats: study.ectopicBeats?.value ?? extractEctopicBeats(study),
     testNotes: study.rawAsciiHead.slice(0, 4096),
     procedureType: val(study.fileMetadata.procedureType.value, ""),
     samplingInterval: val(study.fileMetadata.samplingInterval.value, 0),

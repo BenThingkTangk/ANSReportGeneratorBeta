@@ -73,10 +73,11 @@ function studyWithMissingSp(): AnsStudy {
       weightLbs: prov<number>(124),
       bmi: prov<number>(20.01),
     },
+    ectopicBeats: prov<number>(null),
     ecg: {
       preview: [],
       durationSec: 300,
-      quality: { snrDb: 25, motionFraction: 0.02, sentinelFraction: 0, leadOff: false, usable: true, unusableReasons: [], warnings: [] },
+      quality: { snrDb: 25, motionFraction: 0.02, sentinelFraction: 0, leadOff: false, usable: true, unusableReasons: [], artifactFlags: [], warnings: [] },
     },
     baseline: phase(56),
     deepBreathing: phase(55),

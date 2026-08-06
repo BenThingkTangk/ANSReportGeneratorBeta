@@ -148,6 +148,77 @@ describe("parseStudy — synthetic happy path", () => {
     expect(study.ratios.eiRatio.value).toBeCloseTo(1.45, 2);
     expect(study.anthropometrics.heightInches.value).toBe(5 * 12 + 6); // 5 ft 6 in
   });
+
+  it("decodes the exact BE-double timestamp and preserves the clinic-local date", () => {
+    const buf = buildSyntheticAns({
+      studyDateIso: null,
+      studyTimestampUtcIso: "2025-02-26T02:36:37.660Z",
+    });
+    const study = parseStudy({
+      buffer: buf,
+      fileName: "case08-Tue-Feb-25-2025.ans",
+    });
+    expect(study.fileMetadata.studyDate.value).toBe("2025-02-25");
+    expect(study.fileMetadata.studyStartTime.value).toBe("09:36:37 PM");
+    expect(study.fileMetadata.studyStartTime.provenance.source).toBe("binary_double");
+    expect(study.fileMetadata.studyStartTime.provenance.matchedLabel).toBe(
+      "labview_double_start_matched_filename",
+    );
+  });
+
+  it("allows the acquisition workstation offset to be configured", () => {
+    const buf = buildSyntheticAns({
+      studyDateIso: null,
+      studyTimestampUtcIso: "2025-02-26T02:36:37.660Z",
+    });
+    const study = parseStudy({
+      buffer: buf,
+      fileName: "case08-Tue-Feb-25-2025.ans",
+      timezoneOffsetMinutes: -240,
+    });
+    expect(study.fileMetadata.studyDate.value).toBe("2025-02-25");
+    expect(study.fileMetadata.studyStartTime.value).toBe("10:36:37 PM");
+  });
+
+  it("stores ectopic annotation count canonically with provenance", () => {
+    const buf = buildSyntheticAns({
+      asciiBlock: "3 possible premature beat(s)\r\nE/I Ratio = 1.45\r\n",
+    });
+    const study = parseStudy({ buffer: buf, fileName: "ectopy.ans" });
+    expect(study.ectopicBeats.value).toBe(3);
+    expect(study.ectopicBeats.provenance.source).toBe("ascii_global_regex");
+  });
+
+  it("decodes an omitted ectopic annotation as the validated vendor zero convention", () => {
+    const buf = buildSyntheticAns({ asciiBlock: "E/I Ratio = 1.45\r\n" });
+    const study = parseStudy({ buffer: buf, fileName: "no-ectopy-note.ans" });
+    expect(study.ectopicBeats.value).toBe(0);
+    expect(study.ectopicBeats.provenance.source).toBe("computed");
+    expect(study.ectopicBeats.provenance.matchedLabel).toBe(
+      "vendor_zero_ectopy_omits_annotation",
+    );
+  });
+
+  it("keeps ectopy unknown when the ECG record is absent", () => {
+    const buf = buildSyntheticAns({
+      asciiBlock: "E/I Ratio = 1.45\r\n",
+      samplingInterval: 0,
+    });
+    const study = parseStudy({ buffer: buf, fileName: "missing-ecg.ans" });
+    expect(study.ectopicBeats.value).toBeNull();
+    expect(study.ectopicBeats.provenance.source).toBe("missing");
+  });
+
+  it("separates non-blocking sentinel artifacts from unusable reasons", () => {
+    const samples = Array.from({ length: 500 }, (_, i) =>
+      i === 100 ? 31_800 : Math.round(500 * Math.sin((i / 50) * Math.PI * 2)),
+    );
+    const buf = buildSyntheticAns({ ecgSamples: samples });
+    const study = parseStudy({ buffer: buf, fileName: "sentinel-only.ans" });
+    expect(study.ecg.quality.usable).toBe(true);
+    expect(study.ecg.quality.unusableReasons).toEqual([]);
+    expect(study.ecg.quality.artifactFlags).toContain("sentinel_spikes");
+  });
 });
 
 describe("parseStudy — missing-vs-normal invariants", () => {
