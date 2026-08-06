@@ -162,7 +162,9 @@ export function ewingRatioReadings(
     key: EwingRatioReading["key"];
     label: string;
     plain: string;
-    obj: { value: number; normal: string; classification: { label: string; severity: string } } | undefined;
+    obj:
+      | { value: number | null; normal: string; classification: { label: string; severity: string } | null }
+      | undefined;
   }> = [
     {
       key: "eiRatio",
@@ -398,7 +400,7 @@ export function buildPatientSynopsis(report: Partial<ANSReport>, vendor?: Vendor
 
   // 4. Standing response numbers (only if present).
   if (baseline && stand && num(baseline.meanHR) !== null && num(stand.meanHR) !== null) {
-    const rise = Math.round(stand.meanHR - baseline.meanHR);
+    const rise = Math.round((stand.meanHR as number) - (baseline.meanHR as number));
     if (rise >= 5) {
       sentences.push(
         `When you stood up, your heart rate rose by about ${rise} beats per minute — your body's way of keeping blood flowing to your brain.`,
@@ -455,7 +457,7 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>, vendor?: Vend
   if (stand) {
     const bits: string[] = [];
     if (baseline && pos(baseline.meanHR) !== null && pos(stand.meanHR) !== null) {
-      const d = Math.round(stand.meanHR - baseline.meanHR);
+      const d = Math.round((stand.meanHR as number) - (baseline.meanHR as number));
       bits.push(`ΔHR ${d >= 0 ? "+" : ""}${d} bpm on standing`);
     }
     if (

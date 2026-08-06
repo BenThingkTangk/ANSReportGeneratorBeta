@@ -64,9 +64,10 @@ describe("real de-identified fixtures — golden master", () => {
     // be MISSING, never the stray "n" the non-greedy pattern used to capture.
     expect(data.procedureType).not.toBe("n");
     expect([""].includes(data.procedureType) || data.procedureType == null).toBe(true);
-    // Weight/BMI are NOT in the .ans → stay missing (0), never fabricated.
-    expect(data.weight).toBe(0);
-    expect(data.bmi).toBe(0);
+    // Weight/BMI are NOT in the .ans → stay NULL, never 0 and never fabricated.
+    // 0 lb / BMI 0 is a sentinel a clinician reads as a real value.
+    expect(data.weight).toBeNull();
+    expect(data.bmi).toBeNull();
   });
 
   it("Jill fixture reproduces the vendor's embedded verifiable values exactly", () => {
@@ -111,19 +112,34 @@ describe("real de-identified fixtures — golden master", () => {
     }
   });
 
-  it("wellness score stays stable and does NOT collapse when spectral is unavailable", () => {
-    // Score is a weighted average over AVAILABLE components (HR + Ewing + HRV);
-    // the spectral-only sympathovagal sub-score is dropped, not zeroed.
-    const pare = reportFor(fixture("pare_deid.ans"), "pare_deid.ans").report;
-    const jill = reportFor(fixture("jill_deid.ans"), "jill_deid.ans").report;
-    expect(pare.wellnessBreakdown.final).toBeCloseTo(91.2, 1);
-    expect(jill.wellnessBreakdown.final).toBeCloseTo(84.8, 1);
-    // Sympathovagal sub-score is explicitly unavailable (spectral-only).
-    expect(pare.wellnessBreakdown.sympathovagalBalance.available).toBe(false);
-    expect(jill.wellnessBreakdown.sympathovagalBalance.available).toBe(false);
-    // Always-measured sub-scores remain available.
-    expect(pare.wellnessBreakdown.reflexIntegrity.available).not.toBe(false);
-    expect(pare.wellnessBreakdown.hrvReserve.available).not.toBe(false);
+  it("wellness score is SUPPRESSED (not renormalized upward) when a domain is unavailable", () => {
+    // CONTRACT CHANGE — this test previously asserted 91.2 / 84.8. Those numbers
+    // were produced by renormalizing the composite over the AVAILABLE domains,
+    // so the absence of the sympathovagal domain (the one the vendor clinician
+    // flagged as abnormal on the Pare recording) RAISED the score. Missing data
+    // must never inflate a score, and a composite that cannot cover its domains
+    // must not be published at all.
+    for (const fn of ["pare_deid.ans", "jill_deid.ans"]) {
+      const report = reportFor(fixture(fn), fn).report;
+      const bd = report.wellnessBreakdown;
+      expect(bd.scorability.scorable).toBe(false);
+      expect(bd.final).toBeNull();
+      expect(bd.rawTotal).toBeNull();
+      expect(report.wellnessScore).toBeNull();
+      expect(report.wellnessTier).toBeNull();
+      // Sympathovagal sub-score is explicitly unavailable (spectral-only) and
+      // carries ZERO effective weight that is NOT handed to anyone else.
+      expect(bd.sympathovagalBalance.available).toBe(false);
+      expect(bd.sympathovagalBalance.weight).toBe(0);
+      expect(bd.sympathovagalBalance.score).toBeNull();
+      // The available weights sum to LESS than 1 — no redistribution happened.
+      const sum =
+        bd.baselineAutonomic.weight + bd.sympathovagalBalance.weight +
+        bd.reflexIntegrity.weight + bd.orthostaticResponse.weight + bd.hrvReserve.weight;
+      expect(sum).toBeLessThan(0.999);
+      // Reflex integrity (Ewing ratios) is still genuinely measured.
+      expect(bd.reflexIntegrity.available).toBe(true);
+    }
   });
 });
 
@@ -193,9 +209,10 @@ describe("anti-oracle — no per-patient hardcode, no fabricated proprietary dat
   it("no fabricated demographic defaults (weight=150 / height=1.73) leak in", () => {
     for (const fn of ["pare_deid.ans", "jill_deid.ans"]) {
       const { data } = reportFor(fixture(fn), fn);
-      // The .ans files carry no weight → must stay 0 (missing), never defaulted.
-      expect(data.weight).toBe(0);
-      expect(data.bmi).toBe(0);
+      // The .ans files carry no weight -> must stay NULL (missing), never 0 and
+      // never a fabricated default.
+      expect(data.weight).toBeNull();
+      expect(data.bmi).toBeNull();
     }
   });
 });

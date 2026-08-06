@@ -232,7 +232,13 @@ describe("ansStudyToLegacy adapter", () => {
     expect(legacy.age).toBe(0);
     expect(legacy.physician).toBe("");
     expect(legacy.ecgData).toEqual([]);
-    expect(legacy.eiRatio).toBe(0);
+    // UNKNOWN IS null, NEVER 0: a 0.00 Ewing ratio would be classified as
+    // profoundly abnormal. The unsafe zero sentinel has been removed.
+    expect(legacy.eiRatio).toBeNull();
+    expect(legacy.valsalvaRatio).toBeNull();
+    expect(legacy.thirtyFifteenRatio).toBeNull();
+    expect(legacy.weight).toBeNull();
+    expect(legacy.bmi).toBeNull();
   });
 
   it.skipIf(!hasPare)(

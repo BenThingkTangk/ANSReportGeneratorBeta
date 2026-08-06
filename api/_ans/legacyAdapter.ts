@@ -8,9 +8,10 @@
  *   - Per the PR1 brief we MUST NOT change scoring yet — so we translate.
  *
  * Hard rules preserved:
- *   - MISSING stays MISSING. We emit empty strings / 0 / [] for legacy fields
- *     only where the legacy schema can't represent null, and we tag the
- *     warning array on the returning shape so callers can detect it.
+ *   - MISSING stays MISSING. Numeric fields that have no safe zero (weight, BMI,
+ *     the Ewing ratios) are emitted as `null`, NEVER as 0: a weight of 0 lb is
+ *     not a measurement and a ratio of 0.00 would be scored as profoundly
+ *     abnormal. Only genuinely additive counters (ectopic beats) use 0.
  *   - No demographic inference. If AnsStudy says `dob` is null, dobString is
  *     "" and age is 0 (legacy already treats 0 as "unknown" in display code).
  */
@@ -18,6 +19,14 @@
 import type { AnsStudy } from "../../shared/ansStudy.js";
 
 /** Mirror of ParsedANSData defined inline in api/upload.ts. */
+export interface LegacyEcgQuality {
+  snrDb: number | null;
+  motionFraction: number | null;
+  leadOff: boolean;
+  usable: boolean;
+  warnings: string[];
+}
+
 export interface LegacyParsedANSData {
   lastName: string;
   firstName: string;
@@ -25,13 +34,15 @@ export interface LegacyParsedANSData {
   physician: string;
   height: string;
   age: number;
-  weight: number;
-  bmi: number;
+  /** UNKNOWN IS null, never 0. */
+  weight: number | null;
+  bmi: number | null;
   dobString: string;
   testDate: string;
-  eiRatio: number;
-  valsalvaRatio: number;
-  thirtyFifteenRatio: number;
+  /** UNKNOWN IS null, never 0 (0.00 would classify as severely abnormal). */
+  eiRatio: number | null;
+  valsalvaRatio: number | null;
+  thirtyFifteenRatio: number | null;
   ectopicBeats: number;
   testNotes: string;
   procedureType: string;
@@ -42,6 +53,62 @@ export interface LegacyParsedANSData {
   otherMedicationsSymptoms?: string;
   baselineSystolicBP?: number;
   baselineDiastolicBP?: number;
+  ecgQuality?: LegacyEcgQuality;
+  /**
+   * Seconds past midnight of the earliest real time-of-day stamp found in the
+   * file, or `null` when the file carries none. See `deriveStudyClockStartSec`.
+   */
+  studyClockStartSec?: number | null;
+}
+
+/**
+ * Recording-start wall clock, derived ONLY from a real parsed time-of-day.
+ *
+ * WHY THIS IS STRICT: the previous implementation ran a loose
+ * `/(\d{1,2}):(\d{2})/` over the ASCII head, which matched the literal "30:15"
+ * inside the **30:15 Ratio** label and produced impossible wall clocks such as
+ * "30:20:36" on every coupling window. A clock is emitted only when:
+ *
+ *   1. the match is an unambiguous time-of-day (has an AM/PM suffix, or a
+ *      seconds component together with an explicit time label), and
+ *   2. the resulting hour/minute/second are individually in range, and
+ *   3. the total is < 24 h.
+ *
+ * We take the EARLIEST qualifying stamp as the recording-start reference. When
+ * nothing qualifies we return `null` and every consumer falls back to RELATIVE
+ * time — never to a fabricated default clock.
+ */
+export function deriveStudyClockStartSec(asciiHead: string | null | undefined): number | null {
+  const text = asciiHead ?? "";
+  const candidates: number[] = [];
+
+  const push = (h: number, m: number, s: number): void => {
+    if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(s)) return;
+    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return;
+    const total = h * 3600 + m * 60 + s;
+    if (total >= 24 * 3600) return;
+    candidates.push(total);
+  };
+
+  // 1) Unambiguous 12-hour clock with meridiem, e.g. "10:17:37 AM".
+  const ampm = /\b(\d{1,2}):([0-5]\d)(?::([0-5]\d))?\s*([AaPp])\.?[Mm]\.?\b/g;
+  for (const m of text.matchAll(ampm)) {
+    let h = parseInt(m[1], 10);
+    if (h < 1 || h > 12) continue; // "30:15 PM" is not a time
+    const isPm = m[4].toLowerCase() === "p";
+    if (h === 12) h = 0;
+    if (isPm) h += 12;
+    push(h, parseInt(m[2], 10), parseInt(m[3] ?? "0", 10));
+  }
+
+  // 2) Explicitly labelled 24-hour clock, e.g. "Test Time: 13:08:00".
+  const labelled = /\b(?:test|study|start|recording|acquisition)\s*(?:time|started|start)?\s*[:=]\s*([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b/gi;
+  for (const m of text.matchAll(labelled)) {
+    push(parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3] ?? "0", 10));
+  }
+
+  if (candidates.length === 0) return null;
+  return Math.min(...candidates);
 }
 
 /** Convert ISO YYYY-MM-DD to legacy M/D/YYYY format. */
@@ -133,13 +200,16 @@ export function ansStudyToLegacy(study: AnsStudy, buffer: Buffer): LegacyParsedA
     physician: val(study.patient.physician.value, ""),
     height: legacyHeight(study),
     age: val(study.patient.ageAtStudy.value, 0),
-    weight: val(study.anthropometrics.weightLbs.value, 0),
-    bmi: val(study.anthropometrics.bmi.value, 0),
+    // Unknown weight/BMI stay null. `0` here is what produced the audit's
+    // "patientData.weight = 0" defect (0 lb is not "unknown").
+    weight: study.anthropometrics.weightLbs.value,
+    bmi: study.anthropometrics.bmi.value,
     dobString: isoToUsDate(study.patient.dob.value),
     testDate: isoToUsDate(study.fileMetadata.studyDate.value),
-    eiRatio: val(study.ratios.eiRatio.value, 0),
-    valsalvaRatio: val(study.ratios.valsalvaRatio.value, 0),
-    thirtyFifteenRatio: val(study.ratios.thirtyFifteenRatio.value, 0),
+    // Unknown ratios stay null: 0.00 would be scored as profoundly abnormal.
+    eiRatio: study.ratios.eiRatio.value,
+    valsalvaRatio: study.ratios.valsalvaRatio.value,
+    thirtyFifteenRatio: study.ratios.thirtyFifteenRatio.value,
     ectopicBeats: extractEctopicBeats(study),
     testNotes: study.rawAsciiHead.slice(0, 4096),
     procedureType: val(study.fileMetadata.procedureType.value, ""),
@@ -150,5 +220,13 @@ export function ansStudyToLegacy(study: AnsStudy, buffer: Buffer): LegacyParsedA
     otherMedicationsSymptoms: flattenSymptoms(study) || undefined,
     baselineSystolicBP: baselineBp.sbp.value ?? undefined,
     baselineDiastolicBP: baselineBp.dbp.value ?? undefined,
+    ecgQuality: {
+      snrDb: study.ecg.quality.snrDb,
+      motionFraction: study.ecg.quality.motionFraction,
+      leadOff: study.ecg.quality.leadOff,
+      usable: study.ecg.quality.usable,
+      warnings: [...study.ecg.quality.warnings],
+    },
+    studyClockStartSec: deriveStudyClockStartSec(study.rawAsciiHead),
   };
 }

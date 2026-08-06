@@ -220,9 +220,20 @@ export function VendorFamiliarReport({ extraction, source, ocrConfidence, fileNa
             {source === "ocr" && typeof ocrConfidence === "number" && (
               <span className="px-2 py-0.5 rounded-full border border-border/40">scan quality {ocrConfidence}%</span>
             )}
-            <span className="px-2 py-0.5 rounded-full border border-border/40">
-              {extraction.fieldCount} fields · {(extraction.meanConfidence * 100).toFixed(0)}% mean conf
+            {/* PLAIN COUNT. "18 fields · 0% mean conf" reads like a poor match;
+                the truth in that case is "0 of 18 numeric fields read". */}
+            <span className="px-2 py-0.5 rounded-full border border-border/40" data-testid="vendor-field-count">
+              {extraction.fieldCount} of {extraction.attemptedFieldCount ?? extraction.fieldCount} numeric fields read
             </span>
+            {extraction.fieldCount === 0 && (
+              <span
+                className="px-2 py-0.5 rounded-full border"
+                style={{ borderColor: "hsl(38 92% 50% / 0.4)", color: "hsl(38 92% 70%)" }}
+                data-testid="vendor-unreadable-chip"
+              >
+                numeric content unreadable
+              </span>
+            )}
           </div>
         </div>
         <p className="text-[11px] text-muted-foreground/80 mt-2 leading-relaxed">

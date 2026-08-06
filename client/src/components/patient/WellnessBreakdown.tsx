@@ -63,7 +63,9 @@ function SubScoreCard({ label, sub, tone }: { label: string; sub: SubScore; tone
           <div className="text-left min-w-0">
             <div className="text-sm font-medium text-foreground truncate">{label}</div>
             <div className="text-xs text-muted-foreground">
-              {sub.score.toFixed(1)}/100 · weight {(sub.weight * 100).toFixed(0)}% · contributes {sub.contribution.toFixed(1)} pts
+              {sub.score == null
+                ? "Not assessed on this recording — this domain contributed nothing to the composite and its weight was not given to any other domain."
+                : `${sub.score.toFixed(1)}/100 · weight ${(sub.weight * 100).toFixed(0)}% · contributes ${sub.contribution.toFixed(1)} pts`}
             </div>
           </div>
         </div>
@@ -71,7 +73,7 @@ function SubScoreCard({ label, sub, tone }: { label: string; sub: SubScore; tone
           <div className="w-20 h-1.5 rounded-full bg-border/40 overflow-hidden">
             <div
               className="h-full rounded-full transition-all"
-              style={{ width: `${Math.min(100, Math.max(0, sub.score))}%`, background: toneColor }}
+              style={{ width: `${Math.min(100, Math.max(0, sub.score ?? 0))}%`, background: toneColor }}
             />
           </div>
           <svg
@@ -190,11 +192,11 @@ export function WellnessBreakdown({ report }: WellnessBreakdownProps) {
                   FIVE-FACTOR COMPOSITE (click a row for details)
                 </h4>
                 <div className="space-y-2">
-                  <SubScoreCard label="Baseline autonomic tone" sub={bd.baselineAutonomic} tone={bd.baselineAutonomic.score >= 70 ? "pos" : "neg"} />
-                  <SubScoreCard label="Sympathovagal balance" sub={bd.sympathovagalBalance} tone={bd.sympathovagalBalance.score >= 70 ? "pos" : "neg"} />
-                  <SubScoreCard label="Reflex integrity (Ewing battery)" sub={bd.reflexIntegrity} tone={bd.reflexIntegrity.score >= 70 ? "pos" : "neg"} />
-                  <SubScoreCard label="Orthostatic response" sub={bd.orthostaticResponse} tone={bd.orthostaticResponse.score >= 70 ? "pos" : "neg"} />
-                  <SubScoreCard label="HRV reserve" sub={bd.hrvReserve} tone={bd.hrvReserve.score >= 70 ? "pos" : "neg"} />
+                  <SubScoreCard label="Baseline autonomic tone" sub={bd.baselineAutonomic} tone={(bd.baselineAutonomic.score ?? 0) >= 70 ? "pos" : "neg"} />
+                  <SubScoreCard label="Sympathovagal balance" sub={bd.sympathovagalBalance} tone={(bd.sympathovagalBalance.score ?? 0) >= 70 ? "pos" : "neg"} />
+                  <SubScoreCard label="Reflex integrity (Ewing battery)" sub={bd.reflexIntegrity} tone={(bd.reflexIntegrity.score ?? 0) >= 70 ? "pos" : "neg"} />
+                  <SubScoreCard label="Orthostatic response" sub={bd.orthostaticResponse} tone={(bd.orthostaticResponse.score ?? 0) >= 70 ? "pos" : "neg"} />
+                  <SubScoreCard label="Heart-rhythm variability reserve" sub={bd.hrvReserve} tone={(bd.hrvReserve.score ?? 0) >= 70 ? "pos" : "neg"} />
                 </div>
               </div>
 
@@ -210,18 +212,23 @@ export function WellnessBreakdown({ report }: WellnessBreakdownProps) {
               )}
 
               <div className="pt-3 border-t border-border/20 text-xs text-muted-foreground space-y-1 font-mono">
-                <div className="flex justify-between"><span>Sub-score composite:</span><span className="tabular-nums">{bd.rawTotal.toFixed(1)}/100</span></div>
-                <div className="flex justify-between"><span>Age adjustment (×{bd.ageMultiplier.toFixed(2)}):</span><span className="tabular-nums">{bd.ageAdjusted.toFixed(1)}</span></div>
+                <div className="flex justify-between"><span>Sub-score composite:</span><span className="tabular-nums">{bd.rawTotal == null ? "Not scorable" : `${bd.rawTotal.toFixed(1)}/100`}</span></div>
+                <div className="flex justify-between"><span>Age adjustment (×{bd.ageMultiplier.toFixed(2)}):</span><span className="tabular-nums">{bd.ageAdjusted == null ? "Not scorable" : bd.ageAdjusted.toFixed(1)}</span></div>
                 {bd.patternPenalty && (
                   <div className="flex justify-between"><span>Pattern penalties:</span><span className="tabular-nums">−{bd.patternPenalty.total.toFixed(1)}</span></div>
                 )}
                 <div className="flex justify-between pt-1 border-t border-border/20 text-foreground font-semibold">
-                  <span>Final wellness score:</span><span className="tabular-nums">{bd.final.toFixed(1)}</span>
+                  <span>Final wellness score:</span><span className="tabular-nums">{bd.final == null ? "Not scorable" : bd.final.toFixed(1)}</span>
                 </div>
               </div>
 
               <p className="text-[11px] text-muted-foreground/80 italic leading-relaxed pt-2">
-                Scoring follows the Colombo P&amp;S methodology: age-normalized LFa/RFa/SB bands (Agelink 2001, Gelber 1997), Ewing autonomic battery, orthostatic response, and HRV reserve. Dysfunction patterns are penalized with diminishing returns to avoid double-counting overlapping findings.
+                Scoring uses the age-specific reference table documented in the app (see Methodology
+                &amp; References) together with the Colombo P&amp;S normal bands, the cardiovagal reflex
+                battery, the orthostatic response and heart-rhythm-variability reserve. Domains that
+                could not be assessed contribute nothing and their weight is NOT redistributed, so
+                missing data can never raise this score. Patterns that were affirmatively detected are
+                penalized with diminishing returns to avoid double-counting overlapping findings.
               </p>
             </div>
           </motion.div>

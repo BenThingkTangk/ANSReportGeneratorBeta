@@ -98,8 +98,8 @@ function RatioTile({
   testId,
 }: {
   title: string;
-  value: number;
-  cls: Classification;
+  value: number | null;
+  cls: Classification | null;
   normalText: string;
   age: number;
   yDomain: [number, number];
@@ -109,6 +109,18 @@ function RatioTile({
   // Source of truth: the report's own classification. Ewing ratios are
   // lower-bound-only — normal means value >= threshold (cls.lo). Higher is
   // healthier and must never be flagged as "above normal".
+  // A ratio that was NOT present in the file has no classification. We render
+  // "Not present in file" rather than plotting a 0 or implying a normal result.
+  if (value == null || cls == null) {
+    return (
+      <div className="rounded-xl bg-background/40 border border-border/20 p-4" data-testid={testId}>
+        <div className="text-[12px] font-semibold text-foreground/90">{title}</div>
+        <div className="text-[10px] text-muted-foreground/80 mt-1" data-testid={`${testId}-status`}>
+          Not present in file — not assessed. Reference: {normalText}.
+        </div>
+      </div>
+    );
+  }
   const threshold = cls.lo;
   const isNormal = cls.severity === "Normal";
   const color = isNormal ? "hsl(140 60% 55%)" : "hsl(0 72% 62%)";

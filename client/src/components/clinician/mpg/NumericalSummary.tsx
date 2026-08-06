@@ -27,14 +27,14 @@ const NORMS = {
   SB: { lo: COLOMBO_NORMS.SB.lo, hi: COLOMBO_NORMS.SB.hi },
 };
 
-function cellColor(val: number | undefined, norm: { lo: number; hi: number }): string {
+function cellColor(val: number | null | undefined, norm: { lo: number; hi: number }): string {
   if (val === undefined || val === null || !Number.isFinite(val)) return "inherit";
   if (val < norm.lo) return "hsl(17 100% 60%)";
   if (val > norm.hi) return "hsl(0 72% 62%)";
   return "hsl(140 60% 55%)";
 }
 
-function fmt(v: number | undefined, digits = 2): string {
+function fmt(v: number | null | undefined, digits = 2): string {
   if (v === undefined || v === null || !Number.isFinite(v)) return "—";
   return v.toFixed(digits);
 }
@@ -56,7 +56,7 @@ function SpectralCell({
   digits = 2,
 }: {
   m: PhaseMetrics | undefined;
-  value: number | undefined;
+  value: number | null | undefined;
   norm: { lo: number; hi: number };
   digits?: number;
 }) {
@@ -131,7 +131,7 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
                   <td className="py-2.5 pr-4 font-medium whitespace-nowrap">{pl.short}</td>
                   <td className="py-2.5 pr-4 tabular-nums text-muted-foreground">{m?.duration ?? "—"}</td>
                   <td className="py-2.5 pr-4 tabular-nums">
-                    {m ? `${Math.round(m.meanHR)} ± ${Math.round(m.rangeHR)}` : "—"}
+                    {m?.meanHR != null ? `${Math.round(m.meanHR)}${m.rangeHR != null ? ` ± ${Math.round(m.rangeHR)}` : ""}` : "—"}
                   </td>
                   <SpectralCell m={m} value={m?.FRF} norm={NORMS.FRF} digits={3} />
                   <SpectralCell m={m} value={m?.LFa} norm={NORMS.LFa} />
@@ -179,12 +179,12 @@ export function NumericalSummary({ report }: NumericalSummaryProps) {
   );
 }
 
-function MiniRatio({ label, value, normal }: { label: string; value: number; normal: string }) {
+function MiniRatio({ label, value, normal }: { label: string; value: number | null; normal: string }) {
   return (
     <div className="rounded-xl bg-background/40 border border-border/20 px-3 py-2">
       <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className="flex items-baseline justify-between gap-2 mt-0.5">
-        <span className="text-lg font-semibold tabular-nums">{value.toFixed(2)}</span>
+        <span className="text-lg font-semibold tabular-nums">{value == null ? "Not read" : value.toFixed(2)}</span>
         <span className="text-[10px] text-muted-foreground tabular-nums">{normal}</span>
       </div>
     </div>

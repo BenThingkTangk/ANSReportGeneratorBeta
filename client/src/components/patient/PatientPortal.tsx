@@ -36,8 +36,11 @@ export function PatientPortal({ report }: PatientPortalProps) {
     phases.find((e) => e.phase === "Baseline-A") ??
     phases.find((e) => e.phase === "Baseline-C") ??
     phases[0];
-  const rmssd = baselinePhase?.HRV_RMSSD ?? 0;
-  const sdnn = baselinePhase?.HRV_SDNN ?? 0;
+  // Neutral key names (renamed from HRV_RMSSD / HRV_SDNN — see PhaseMetrics).
+  // null when the beat series was not usable: the gauges then render
+  // "Not assessed" instead of a 0 ms reading.
+  const rmssd = baselinePhase?.hrvBeatToBeatMs ?? null;
+  const sdnn = baselinePhase?.hrvOverallVariabilityMs ?? null;
   // Spectral availability gate: when the proprietary LFa/RFa/SB are not
   // reproducible, the balance split is "Not assessed". Never coerce to 0/100 or
   // label a balance zone.
@@ -182,7 +185,7 @@ export function PatientPortal({ report }: PatientPortalProps) {
               hrvRmssdMs={rmssd}
               hrvSdnnMs={sdnn}
               lfHfRatio={lfHf}
-              balanceLabel={balanceChipLabel}
+              balanceLabel={balanceChipLabel ?? undefined}
               available={spectralAvailable}
               // PATIENT portal: P&S readouts only (output protocol).
               audience="patient"

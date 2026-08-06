@@ -53,12 +53,12 @@ export function EwingRatiosTable({ ratios, cardiovagalScore }: EwingRatiosTableP
         </thead>
         <tbody>
           {rows.map((row, i) => {
-            const color = severityColor[row.classification.severity] ?? "inherit";
+            const color = row.classification ? (severityColor[row.classification.severity] ?? "inherit") : "inherit";
             return (
               <tr key={row.label} className={`border-b border-border/20 ${i % 2 === 0 ? "bg-card/20" : ""}`}>
                 <td className="py-2.5 pr-4 font-medium">{row.label}</td>
                 <td className="py-2.5 pr-4 tabular-nums font-semibold" style={{ color }}>
-                  {row.value.toFixed(2)}
+                  {row.value == null ? "Not present in file" : row.value.toFixed(2)}
                 </td>
                 <td className="py-2.5 pr-4 text-muted-foreground tabular-nums">{row.normal}</td>
                 <td className="py-2.5 pr-4">
@@ -70,7 +70,7 @@ export function EwingRatiosTable({ ratios, cardiovagalScore }: EwingRatiosTableP
                       border: `1px solid ${color.replace(")", " / 0.35)").replace("hsl(", "hsl(")}`,
                     }}
                   >
-                    {row.classification.label} — {row.classification.severity}
+                    {row.classification ? `${row.classification.label} — ${row.classification.severity}` : "Not assessed"}
                   </span>
                 </td>
               </tr>

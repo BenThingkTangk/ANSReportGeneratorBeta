@@ -209,9 +209,21 @@ export function buildEcgDerivedPhase(
     };
   }
 
+  // CANONICAL BASELINE = the FIRST baseline window (A) only.
+  //
+  // The parse payload used to pool A + C + E for the baseline block while the
+  // report engine used Baseline-A alone. The same response therefore published a
+  // resting HR of 64 (pooled) and 63 (A-only), and consequently a stand delta of
+  // both 8 and 9 bpm. One definition now serves both: the resting reference is
+  // the initial baseline window, exactly as the report engine and the vendor
+  // protocol treat it. The later baseline windows (C/E) are recovery periods
+  // between challenges and are reported as their own phases, not averaged into
+  // "resting".
+  const windows = block === "baseline" ? [mine[0]] : mine;
+
   // Collect R-R intervals across every window that maps to this block.
   const allRr: number[] = [];
-  for (const seg of mine) {
+  for (const seg of windows) {
     const i0 = Math.max(0, Math.floor(seg.startSec * fs));
     const i1 = Math.min(ecg.length, Math.floor(seg.endSec * fs));
     if (i1 - i0 < fs * 2) continue;
@@ -220,8 +232,8 @@ export function buildEcgDerivedPhase(
     for (const rr of rrIntervalsMs) allRr.push(rr);
   }
 
-  const startSecVal = Math.min(...mine.map((s) => s.startSec));
-  const endSecVal = Math.max(...mine.map((s) => s.endSec));
+  const startSecVal = Math.min(...windows.map((s) => s.startSec));
+  const endSecVal = Math.max(...windows.map((s) => s.endSec));
   const startSec: ProvField<number> = {
     value: Math.round(startSecVal * 10) / 10,
     unit: "s",

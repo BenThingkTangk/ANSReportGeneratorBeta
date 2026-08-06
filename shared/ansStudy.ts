@@ -143,14 +143,37 @@ export interface AnsAnthropometrics {
 }
 
 export interface AnsEcgQuality {
-  /** Crude signal-to-noise estimate (dB). */
+  /**
+   * Crude signal-to-noise estimate (dB). NOTE: a HIGH value here does not imply
+   * a usable recording — large sentinel/saturation spikes inflate the sample
+   * standard deviation and therefore this figure. Read `unusableReasons`.
+   */
   snrDb: number | null;
   /** Fraction of samples that are saturated/flatlined. 0..1. */
   motionFraction: number | null;
+  /**
+   * Fraction of preview samples at or beyond the int16 sentinel/rail magnitude
+   * (|v| >= 30000). These are acquisition artifacts, not physiology, and must
+   * never feed a heart-rate-variability metric.
+   */
+  sentinelFraction: number | null;
   /** True when the recording appears unusable for ANS analysis. */
   leadOff: boolean;
   /** Overall gate — false means downstream metrics must be flagged. */
   usable: boolean;
+  /**
+   * The SPECIFIC reasons `usable` is false, in stable machine-readable form.
+   * Previously a single generic "signal-to-noise too low" string was emitted
+   * even when SNR was 46 dB and the real problem was motion/saturation — a
+   * self-contradictory record that made the gate impossible to act on.
+   */
+  unusableReasons: Array<
+    | "no_ecg_block"
+    | "lead_off_or_flatline"
+    | "excess_motion_or_saturation"
+    | "low_snr"
+    | "sentinel_spikes"
+  >;
   warnings: string[];
 }
 

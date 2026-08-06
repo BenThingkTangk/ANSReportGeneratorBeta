@@ -107,7 +107,9 @@ function baseStudy(over: Partial<AnsStudy> = {}): AnsStudy {
       quality: {
         snrDb: 25,
         motionFraction: 0.02,
+        sentinelFraction: 0,
         leadOff: false,
+        unusableReasons: [],
         usable: true,
         warnings: [],
       },
@@ -311,7 +313,9 @@ describe("computeDiagnosticSummary — deterministic scoring", () => {
         quality: {
           snrDb: 4,
           motionFraction: 0.55,
+          sentinelFraction: 0,
           leadOff: true,
+          unusableReasons: ["lead_off_or_flatline"],
           usable: false,
           warnings: ["lead-off detected", "high motion fraction"],
         },

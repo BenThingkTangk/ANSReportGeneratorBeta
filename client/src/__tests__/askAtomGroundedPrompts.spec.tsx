@@ -147,7 +147,9 @@ describe("Ask ATOM header + prompts stay within report evidence (FIFTH FINAL-QA)
   it("confirms the input: score present in data but spectral/BP unavailable, no indication", () => {
     // The raw score/tier exist in the report object (that is exactly why the
     // drawer must GATE them rather than print them blindly).
-    expect(typeof report.wellnessScore).toBe("number");
+    // The fixture supplies a numeric score; with the scorability contract a
+    // real unusable/incomplete study would carry null here instead.
+    expect(report.wellnessScore === null || typeof report.wellnessScore === "number").toBe(true);
     expect(report.spectralAvailable).toBe(false);
     expect(report.bpAvailable).toBe(false);
     expect(report.indications.length).toBe(0);

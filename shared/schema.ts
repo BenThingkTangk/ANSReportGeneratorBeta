@@ -6,6 +6,7 @@
 // server where the algorithm generates them.
 
 import type { MetricProvenance } from "./metricProvenance.js";
+import type { PatternStates, Scorability } from "./clinicalStates.js";
 
 export interface ANSPatientData {
   lastName: string;
@@ -14,13 +15,15 @@ export interface ANSPatientData {
   physician: string;
   height: string;
   age: number;
-  weight?: number;
-  bmi?: number;
+  /** UNKNOWN IS null, never 0. A 0 lb weight / 0 BMI is not a measurement. */
+  weight?: number | null;
+  bmi?: number | null;
   dobString?: string;
   testDate?: string;
-  eiRatio: number;
-  valsalvaRatio: number;
-  thirtyFifteenRatio: number;
+  /** UNKNOWN IS null, never 0 (a 0.00 ratio would classify as severely abnormal). */
+  eiRatio: number | null;
+  valsalvaRatio: number | null;
+  thirtyFifteenRatio: number | null;
   ectopicBeats: number;
   testNotes: string;
   procedureType: string;
@@ -31,6 +34,18 @@ export interface ANSPatientData {
   otherMedicationsSymptoms?: string;
   baselineSystolicBP?: number;
   baselineDiastolicBP?: number;
+  ecgQuality?: EcgQualitySummary;
+  /** Seconds past midnight of the recording start, or null when unknown. */
+  studyClockStartSec?: number | null;
+}
+
+/** ECG usability verdict that gates every interpretation in the report. */
+export interface EcgQualitySummary {
+  snrDb: number | null;
+  motionFraction: number | null;
+  leadOff: boolean;
+  usable: boolean;
+  warnings: string[];
 }
 
 export interface PhaseMetrics {
@@ -38,18 +53,30 @@ export interface PhaseMetrics {
   label: string;
   duration: string;
   durationSec: number;
-  meanHR: number;
-  rangeHR: number;
-  FRF: number;
-  LFa: number;
-  RFa: number;
-  SB: number;
+  /** null when the phase had too few usable beats — never 0 bpm. */
+  meanHR: number | null;
+  rangeHR: number | null;
+  /** ESTIMATED respiratory frequency; null when not derivable. */
+  FRF: number | null;
+  LFa: number | null;
+  RFa: number | null;
+  SB: number | null;
   SBP?: number;
   DBP?: number;
   PP?: number;
   MAP?: number;
-  HRV_SDNN: number;
-  HRV_RMSSD: number;
+  /**
+   * Heart-rhythm variability. RENAMED from `HRV_SDNN` / `HRV_RMSSD`: those
+   * instrument-internal parameter names shipped inside the patient-facing
+   * report object and leaked through any generic key/value renderer, which the
+   * PhysioPS output protocol forbids. Values and calculations are unchanged.
+   * null when the beat series for the phase was not usable.
+   */
+  hrvOverallVariabilityMs: number | null;
+  hrvBeatToBeatMs: number | null;
+  /** False when the beat series showed an artifact/implausibility signature. */
+  hrvReliable?: boolean;
+  hrvUnreliableReasons?: string[];
   /**
    * Per-metric provenance for the proprietary [P] spectral aggregates. Present
    * for reports produced after the numericalSummaryOverride removal. `method`
@@ -72,22 +99,12 @@ export interface Classification {
   hi: number;
 }
 
-export interface DysfunctionPatterns {
-  parasympatheticDominance: boolean;
-  parasympatheticExcess: boolean;
-  parasympatheticWithdrawal: boolean;
-  sympatheticExcess: boolean;
-  sympatheticWithdrawal: boolean;
-  maskedSW: boolean;
-  advancedAutonomicDysfunction: boolean;
-  CAN: boolean;
-  POTS: boolean;
-  orthostaticHypotension: boolean;
-  vasovagalRisk: boolean;
-  preSyncopeRisk: boolean;
-  bradycardia: boolean;
-  highFRF: boolean;
-}
+/**
+ * TRI-STATE clinical patterns: true = present, false = assessed and genuinely
+ * absent, null = NOT ASSESSABLE. `false` may never stand in for "we could not
+ * look" — see shared/clinicalStates.ts.
+ */
+export type DysfunctionPatterns = PatternStates;
 
 export interface WellnessDriver {
   label: string;
@@ -97,7 +114,8 @@ export interface WellnessDriver {
 }
 
 export interface SubScore {
-  score: number;
+  /** null when this domain had no measured input. */
+  score: number | null;
   weight: number;
   contribution: number;
   drivers?: WellnessDriver[];
@@ -119,12 +137,23 @@ export interface WellnessBreakdown {
   hrvReserve: SubScore;
   patternPenalty?: { total: number; items: WellnessDriver[] };
   ageMultiplier: number;
-  rawTotal: number;
-  ageAdjusted: number;
-  final: number;
+  /**
+   * null when `scorability.scorable` is false. Unavailable domains contribute
+   * zero out of their FULL nominal weight and are never renormalized away, so
+   * missing data can only lower these figures, never raise them.
+   */
+  rawTotal: number | null;
+  ageAdjusted: number | null;
+  final: number | null;
   topPositiveDrivers?: WellnessDriver[];
   topNegativeDrivers?: WellnessDriver[];
   headline?: string;
+  /**
+   * Whether a composite score/tier may be published at all. Every consumer MUST
+   * check this before rendering a number or a tier. Optional only for
+   * back-compat with reports persisted before this contract existed.
+   */
+  scorability?: Scorability;
 }
 
 export interface PhaseFinding {
@@ -182,8 +211,16 @@ export interface PhaseBoundary {
 export interface CardioRespiratoryWindow {
   phase: "Baseline" | "DeepBreathing" | "Valsalva" | "Stand";
   label: string;
-  startClock: string;  // e.g. "13:12:18"
-  endClock: string;
+  /**
+   * Wall clock, or null when the file carried no valid time-of-day (the UI then
+   * shows the relative offsets). An hour > 23 can never be emitted.
+   */
+  startClock: string | null;  // e.g. "13:12:18"
+  endClock: string | null;
+  /** Always-valid seconds from the start of the recording. */
+  startOffsetSec?: number;
+  endOffsetSec?: number;
+  clockSource?: "file_timestamp" | "relative_only";
   /** Per-beat HR (bpm) sampled at the R-peaks in this window, uniformly time-referenced. */
   hr: TimeSeries;
   /** Breathing envelope (EDR) over the same window, offset to the bottom of the plot. */
@@ -241,8 +278,9 @@ export interface MultiParameterGraphical {
 
 export interface ANSReport {
   patientData: ANSPatientData;
-  wellnessScore: number;
-  wellnessTier: WellnessTier;
+  /** null when the composite is not scorable (see wellnessBreakdown.scorability). */
+  wellnessScore: number | null;
+  wellnessTier: WellnessTier | null;
   wellnessBreakdown: WellnessBreakdown;
   riskLevel: string;
   energyLevel: "Low" | "Moderate" | "High";
@@ -265,9 +303,9 @@ export interface ANSReport {
   };
   phaseEvents: PhaseMetrics[];
   ratios: {
-    eiRatio: { value: number; normal: string; classification: Classification };
-    valsalvaRatio: { value: number; normal: string; classification: Classification };
-    thirtyFifteenRatio: { value: number; normal: string; classification: Classification };
+    eiRatio: { value: number | null; normal: string; classification: Classification | null };
+    valsalvaRatio: { value: number | null; normal: string; classification: Classification | null };
+    thirtyFifteenRatio: { value: number | null; normal: string; classification: Classification | null };
   };
   phaseFindings: PhaseFinding[];
   dysfunctionPatterns: DysfunctionPatterns;
@@ -279,6 +317,13 @@ export interface ANSReport {
   overallImpression: string;
   samplingRate: number;
   respiratoryFrequency: number | null;
+  /** Explicit validation envelope for the respiratory estimate. */
+  respiratory?: {
+    frequencyHz: number | null;
+    validation: "estimated" | "unavailable";
+    note: string;
+  };
+  ecgQuality?: EcgQualitySummary;
   rPeakCount: number;
   generatedAt: string;
   patientSynopsis?: string;
@@ -292,11 +337,25 @@ export interface ANSReport {
   vendorReconciliationWarnings?: string[];
   /** Paired vendor-PDF identity reconciliation status (drives the matched badge). */
   vendorReconciliation?: {
-    status: "matched" | "mismatch" | "malformed";
+    status:
+      | "no_vendor_pdf"
+      | "matched"
+      | "unreadable_numerics"
+      | "conflicting_recommendations"
+      | "mismatch"
+      | "malformed";
     matchedName?: string;
     matchedDate?: string;
     checks?: { name: boolean | null; testDate: boolean | null; dob: boolean | null };
     reason?: string;
+    /** Plain counts, never a percent-confidence figure. */
+    numericFields?: { read: number; total: number };
+    /** Unresolved disagreements BETWEEN vendor documents. */
+    conflicts?: Array<{
+      field: string;
+      values: Array<{ value: string; source: string }>;
+      message: string;
+    }>;
   };
 }
 

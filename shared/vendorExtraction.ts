@@ -229,10 +229,20 @@ export interface VendorReportExtraction {
     findings: VendorNarrativeFinding[];
     printedNumbers: Array<{ key: "SB" | "LFa" | "RFa"; value: number; sourceText: string }>;
   };
-  /** Mean confidence (0..1) across the fields actually read. */
+  /**
+   * Mean confidence (0..1) across the fields actually read. INTERNAL DIAGNOSTIC
+   * ONLY — do not render it as the headline for a read failure. "18 fields, 0%
+   * mean confidence" reads like a low-quality match; the truth in that case is
+   * "0 of 18 numeric fields read". Use `fieldCount` / `attemptedFieldCount`.
+   */
   meanConfidence: number;
-  /** Count of fields successfully extracted. */
+  /** Count of fields successfully extracted (READ). */
   fieldCount: number;
+  /**
+   * Count of fields the extractor ATTEMPTED. `fieldCount` of
+   * `attemptedFieldCount` is the plain, honest summary for any UI.
+   */
+  attemptedFieldCount?: number;
   /** Notes for admin transparency. */
   notes: string[];
   /**

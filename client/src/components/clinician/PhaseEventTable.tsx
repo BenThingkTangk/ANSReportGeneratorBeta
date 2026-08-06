@@ -24,7 +24,7 @@ function cellColor(val: number, norm: { lo: number; hi: number }): string {
   return "inherit";
 }
 
-function fmt(v: number | undefined, digits = 2): string {
+function fmt(v: number | null | undefined, digits = 2): string {
   if (v === undefined || v === null) return "—";
   return v.toFixed(digits);
 }
@@ -74,7 +74,7 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
                 <td className="py-2.5 pr-4 font-medium whitespace-nowrap">{pl.short}</td>
                 <td className="py-2.5 pr-4 tabular-nums text-muted-foreground">{m?.duration ?? "—"}</td>
                 <td className="py-2.5 pr-4 tabular-nums">
-                  {m ? `${Math.round(m.meanHR)} ± ${Math.round(m.rangeHR)}` : "—"}
+                  {m?.meanHR != null ? `${Math.round(m.meanHR)}${m.rangeHR != null ? ` ± ${Math.round(m.rangeHR)}` : ""}` : "—"}
                 </td>
                 {spectralUnavailable(m) ? (
                   <>
@@ -85,16 +85,16 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
                   </>
                 ) : (
                   <>
-                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.FRF, NORMS.FRF) : "inherit" }}>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m?.FRF != null ? cellColor(m.FRF, NORMS.FRF) : "inherit" }}>
                       {fmt(m?.FRF)}
                     </td>
-                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.LFa, NORMS.LFa) : "inherit" }}>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m?.LFa != null ? cellColor(m.LFa, NORMS.LFa) : "inherit" }}>
                       {fmt(m?.LFa)}
                     </td>
-                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.RFa, NORMS.RFa) : "inherit" }}>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m?.RFa != null ? cellColor(m.RFa, NORMS.RFa) : "inherit" }}>
                       {fmt(m?.RFa)}
                     </td>
-                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m ? cellColor(m.SB, NORMS.SB) : "inherit" }}>
+                    <td className="py-2.5 pr-4 tabular-nums" style={{ color: m?.SB != null ? cellColor(m.SB, NORMS.SB) : "inherit" }}>
                       {fmt(m?.SB)}
                     </td>
                   </>

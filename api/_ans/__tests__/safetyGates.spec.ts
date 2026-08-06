@@ -63,7 +63,7 @@ function study(over: Partial<AnsStudy> = {}): AnsStudy {
       dataPointCount: prov<number>(0), ecgTruncated: false, device: prov<string>(null),
     },
     anthropometrics: { heightInches: prov<number>(null), weightLbs: prov<number>(null), bmi: prov<number>(null) },
-    ecg: { preview: [], durationSec: 300, quality: { snrDb: 25, motionFraction: 0.02, leadOff: false, usable: true, warnings: [] } },
+    ecg: { preview: [], durationSec: 300, quality: { snrDb: 25, motionFraction: 0.02, sentinelFraction: 0, leadOff: false, usable: true, unusableReasons: [], warnings: [] } },
     baseline: phase({ hr: 70, sbp: 120, dbp: 78 }),
     deepBreathing: phase({ hr: 72 }),
     valsalva: phase({ hr: 75 }),

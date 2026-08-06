@@ -977,6 +977,7 @@ export function parseVendorOcrPages(pages: OcrPage[]): VendorReportExtraction {
   ];
   const present = allFields.filter((f) => f.value != null && f.provenance != null);
   const fieldCount = present.length;
+  const attemptedFieldCount = allFields.length;
   const meanConfidence =
     present.length > 0
       ? present.reduce((s, f) => s + (f.provenance!.confidence ?? 0), 0) / present.length
@@ -1019,7 +1020,7 @@ export function parseVendorOcrPages(pages: OcrPage[]): VendorReportExtraction {
     notes.push(`Vendor-reported orthostatic observation available (baseline vs stand BP; context only, not .ans scoring).`);
   }
 
-  return { looksLikeVendorReport, identity, baseline, ratios, phases, orthostatic, meanConfidence, fieldCount, notes };
+  return { looksLikeVendorReport, identity, baseline, ratios, phases, orthostatic, meanConfidence, fieldCount, attemptedFieldCount, notes };
 }
 
 /**

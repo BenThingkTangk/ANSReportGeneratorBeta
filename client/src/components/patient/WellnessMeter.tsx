@@ -17,8 +17,13 @@ const tierConfig: Record<WellnessTier, { color: string; bg: string; glow: string
 
 export function WellnessMeter({ report }: WellnessMeterProps) {
   const [displayScore, setDisplayScore] = useState(0);
-  const tier = tierConfig[report.wellnessTier] ?? tierConfig.Balanced;
-  const score = report.wellnessScore;
+  const scorability = report.wellnessBreakdown?.scorability;
+  // NOT SCORABLE: render the explicit state, never a number or a tier. This is
+  // the surface that used to show "91 / Optimal" for a recording whose ECG had
+  // failed the usability gate and whose sympathovagal domain was unassessable.
+  const notScorable = report.wellnessScore == null || scorability?.scorable === false;
+  const tier = report.wellnessTier ? tierConfig[report.wellnessTier] : undefined;
+  const score = report.wellnessScore ?? 0;
 
   useEffect(() => {
     const duration = 1800;
@@ -33,6 +38,37 @@ export function WellnessMeter({ report }: WellnessMeterProps) {
     const raf = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(raf);
   }, [score]);
+
+  if (notScorable) {
+    return (
+      <div
+        className="rounded-2xl border border-border/30 p-6"
+        data-testid="wellness-not-scorable"
+      >
+        <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          Wellness score
+        </div>
+        <div className="mt-2 text-2xl font-semibold" data-testid="wellness-not-scorable-title">
+          Not scorable
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+          {scorability?.notice ??
+            "A composite wellness score is withheld because essential inputs are missing or unusable."}
+        </p>
+        {scorability?.blockers?.length ? (
+          <ul className="mt-3 space-y-1.5 text-xs text-muted-foreground list-disc pl-4">
+            {scorability.blockers.map((b) => (
+              <li key={b.code}>{b.message}</li>
+            ))}
+          </ul>
+        ) : null}
+        <p className="mt-3 text-xs text-muted-foreground/80">
+          Your measured values are still shown below as observations. They are not an assessment of
+          your overall autonomic function, and no tier or grade is assigned.
+        </p>
+      </div>
+    );
+  }
 
   // SVG gauge params
   const cx = 150, cy = 150, r = 110;
@@ -85,7 +121,7 @@ export function WellnessMeter({ report }: WellnessMeterProps) {
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
       className="rounded-2xl border border-border/30 p-6 text-center"
-      style={{ background: tier.bg, boxShadow: `0 0 40px ${tier.glow}` }}
+      style={{ background: tier?.bg, boxShadow: tier ? `0 0 40px ${tier.glow}` : undefined }}
       data-testid="wellness-meter"
     >
       <div className="flex flex-col items-center gap-3">
@@ -102,7 +138,7 @@ export function WellnessMeter({ report }: WellnessMeterProps) {
           {arcSegments}
           {/* Needle */}
           <line x1={cx} y1={cy} x2={nx} y2={ny} stroke="hsl(0 0% 85%)" strokeWidth="2.5" strokeLinecap="round" />
-          <circle cx={cx} cy={cy} r="7" fill="hsl(210 15% 12%)" stroke={tier.color} strokeWidth="2.5" />
+          <circle cx={cx} cy={cy} r="7" fill="hsl(210 15% 12%)" stroke={tier?.color} strokeWidth="2.5" />
           {/* Center text */}
           <text x={cx} y={cy - 18} textAnchor="middle" fill="hsl(210 10% 55%)" fontFamily="sans-serif" fontSize="10" letterSpacing="2">
             WELLNESS SCORE
@@ -121,9 +157,9 @@ export function WellnessMeter({ report }: WellnessMeterProps) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.6 }}
           className="px-4 py-1.5 rounded-full text-sm font-semibold border"
-          style={{ color: tier.color, borderColor: tier.color, background: tier.bg }}
+          style={{ color: tier?.color, borderColor: tier?.color, background: tier?.bg }}
         >
-          {tier.label}
+          {tier?.label}
         </motion.div>
 
         <motion.p
@@ -132,7 +168,7 @@ export function WellnessMeter({ report }: WellnessMeterProps) {
           transition={{ delay: 0.8 }}
           className="text-sm text-muted-foreground max-w-xs leading-relaxed"
         >
-          {tier.subtitle}
+          {tier?.subtitle}
         </motion.p>
       </div>
     </motion.div>

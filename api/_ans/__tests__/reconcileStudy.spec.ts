@@ -76,7 +76,7 @@ function studyWithMissingSp(): AnsStudy {
     ecg: {
       preview: [],
       durationSec: 300,
-      quality: { snrDb: 25, motionFraction: 0.02, leadOff: false, usable: true, warnings: [] },
+      quality: { snrDb: 25, motionFraction: 0.02, sentinelFraction: 0, leadOff: false, usable: true, unusableReasons: [], warnings: [] },
     },
     baseline: phase(56),
     deepBreathing: phase(55),

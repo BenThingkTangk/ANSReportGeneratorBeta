@@ -37,9 +37,10 @@ interface PhaseLike {
 interface ReportLike {
   phaseEvents?: PhaseLike[];
   ratios?: {
-    eiRatio?: { value?: number };
-    valsalvaRatio?: { value?: number };
-    thirtyFifteenRatio?: { value?: number };
+    // number | null: an absent ratio is null, never 0.
+    eiRatio?: { value?: number | null };
+    valsalvaRatio?: { value?: number | null };
+    thirtyFifteenRatio?: { value?: number | null };
   };
 }
 

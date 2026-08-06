@@ -731,7 +731,7 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
                   data-testid="atom-score-chip"
                 >
                   <AtomLogo size={11} color="hsl(185 85% 60%)" />
-                  <span className="font-semibold">{Math.round(report.wellnessScore)}</span>
+                  <span className="font-semibold">{report.wellnessScore == null ? "Not scorable" : Math.round(report.wellnessScore)}</span>
                   <span className="opacity-70">{report.wellnessTier}</span>
                 </div>
               ) : (

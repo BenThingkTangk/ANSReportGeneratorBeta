@@ -1,6 +1,15 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { parseStudy } from "./_ans/parseStudy.js";
-import { ansStudyToLegacy } from "./_ans/legacyAdapter.js";
+import {
+  ansStudyToLegacy,
+  deriveStudyClockStartSec,
+  type LegacyEcgQuality,
+} from "./_ans/legacyAdapter.js";
+import { isSentinelSample } from "../shared/ecgScaling.js";
+import {
+  detectVendorConflicts,
+  type VendorDocumentText,
+} from "../shared/vendorConflicts.js";
 import { computeDiagnosticSummary } from "./_ans/scoring/index.js";
 import { reconcileStudyWithReport } from "./_ans/reconcileStudy.js";
 import { reconcilePhenotypesWithVendor } from "./_ans/reconcilePhenotypesWithVendor.js";
@@ -12,7 +21,22 @@ import {
   COLOMBO_NORMS,
   classifyLowSbDriver,
   ageContinuousNorm,
+  ratioReferenceLabel,
+  ewingThresholdForAge,
 } from "../shared/colomboNorms.js";
+import {
+  PATTERN_KEYS,
+  type PatternKey,
+  type PatternStates,
+  type TriState,
+  type Scorability,
+  type ScorabilityBlocker,
+  presentPatterns,
+  unassessablePatterns,
+  mayClaimNoAbnormalPatterns,
+  resolvePattern,
+  scorabilityFrom,
+} from "../shared/clinicalStates.js";
 import {
   computedProvenance,
   unavailableProvenance,
@@ -43,12 +67,47 @@ export interface VendorReportedMetrics {
  * "matched" is the positive status the clinician UI shows as a "Vendor report
  * matched" badge; the others explain why vendor values were withheld.
  */
+export type VendorReconciliationState =
+  /** No vendor PDF was attached at all. */
+  | "no_vendor_pdf"
+  /** Attached, identity reconciled, numeric content read. */
+  | "matched"
+  /**
+   * Attached and identity-reconciled, but NO numeric field could be read (e.g.
+   * an image-only report whose OCR produced no usable numbers). This is NOT the
+   * same as "no vendor PDF" and must never be shown as a low-confidence match.
+   */
+  | "unreadable_numerics"
+  /** Attached and readable, but two vendor documents disagree. */
+  | "conflicting_recommendations"
+  /** Attached but identity does not match the .ans. */
+  | "mismatch"
+  /** Attached but structurally unparseable. */
+  | "malformed";
+
+/** A disagreement BETWEEN vendor documents, surfaced instead of silently resolved. */
+export interface VendorConflict {
+  field: string;
+  /** Each distinct vendor value with the document it came from. */
+  values: Array<{ value: string; source: string }>;
+  /** Human-readable statement of the conflict. Never picks a winner. */
+  message: string;
+}
+
 export interface VendorReconciliationStatus {
-  status: "matched" | "mismatch" | "malformed";
+  status: VendorReconciliationState;
   matchedName?: string;
   matchedDate?: string;
   checks?: { name: boolean | null; testDate: boolean | null; dob: boolean | null };
   reason?: string;
+  /**
+   * Plain counts, never a percentage-of-confidence figure. "0 of 18 numeric
+   * fields read" is actionable; "18 fields, 0% mean confidence" reads like a
+   * low-quality match rather than a total read failure.
+   */
+  numericFields?: { read: number; total: number };
+  /** Unresolved disagreements between vendor documents (e.g. 3- vs 6-month retest). */
+  conflicts?: VendorConflict[];
 }
 
 export const config = {
@@ -72,13 +131,23 @@ interface ParsedANSData {
   physician: string;
   height: string;
   age: number;
-  weight: number;
-  bmi: number;
+  /**
+   * UNKNOWN IS `null`, NEVER 0. A weight of 0 lb / a BMI of 0 is not a
+   * measurement, it is a sentinel that downstream code and clinicians read as a
+   * real value. The `.ans` export carries no weight, so this is normally null.
+   */
+  weight: number | null;
+  bmi: number | null;
   dobString: string;
   testDate: string;
-  eiRatio: number;
-  valsalvaRatio: number;
-  thirtyFifteenRatio: number;
+  /**
+   * Ewing time-domain ratios. `null` when the file did not carry them — a 0.00
+   * ratio would be scored as profoundly abnormal, so the 0 sentinel is unsafe
+   * and has been removed.
+   */
+  eiRatio: number | null;
+  valsalvaRatio: number | null;
+  thirtyFifteenRatio: number | null;
   ectopicBeats: number;
   testNotes: string;
   procedureType: string;
@@ -89,6 +158,18 @@ interface ParsedANSData {
   otherMedicationsSymptoms?: string;
   baselineSystolicBP?: number;
   baselineDiastolicBP?: number;
+  /**
+   * ECG signal-usability verdict from the deterministic parser. Interpretation
+   * is GATED on this: an unusable recording may not produce a wellness score,
+   * a tier, or a "no abnormal patterns" claim.
+   */
+  ecgQuality?: LegacyEcgQuality;
+  /**
+   * Seconds-past-midnight of the recording start, derived from a real parsed
+   * timestamp. `null` when the file carried no valid time — in that case the UI
+   * shows RELATIVE time only. Never a fabricated default.
+   */
+  studyClockStartSec?: number | null;
 }
 
 interface PhaseMetrics {
@@ -96,9 +177,18 @@ interface PhaseMetrics {
   label: string;
   duration: string;
   durationSec: number;
-  meanHR: number;
-  rangeHR: number;
-  FRF: number;
+  /**
+   * `null` when the phase had too few usable beats to compute a rate. 0 bpm is
+   * not a heart rate; the sentinel has been removed.
+   */
+  meanHR: number | null;
+  rangeHR: number | null;
+  /**
+   * Fundamental respiratory frequency, ESTIMATED from the R-peak envelope.
+   * `null` when not derivable. Always accompanied by `provenance.FRF`, whose
+   * validation status is `estimated` — never published as a measured fact.
+   */
+  FRF: number | null;
   // null when the proprietary spectral aggregate is not clinically available
   // (raw ECG-only files): the UI must render "Not assessed", never 0.
   LFa: number | null;
@@ -108,8 +198,28 @@ interface PhaseMetrics {
   DBP?: number;
   PP?: number;
   MAP?: number;
-  HRV_SDNN: number;
-  HRV_RMSSD: number;
+  /**
+   * Heart-rhythm variability, plain-language keys.
+   *
+   * RENAMED from `HRV_SDNN` / `HRV_RMSSD`. These objects ship inside the
+   * patient-facing `report`, so the instrument-internal parameter names were
+   * exposed to any generic key/value renderer, debug view or JSON export — a
+   * PhysioPS output-protocol violation. The VALUES and every calculation are
+   * unchanged; only the key names are neutral.
+   *
+   * `null` when the beats in this phase were not usable (see `hrvReliable`).
+   */
+  hrvOverallVariabilityMs: number | null;
+  hrvBeatToBeatMs: number | null;
+  /**
+   * False when the beat series for this phase shows an artifact signature
+   * (sentinel/saturated samples, or beat-to-beat variability exceeding overall
+   * variability, which is a classic R-peak mis-detection fingerprint). When
+   * false the variability values above are `null` and MUST NOT feed any score.
+   */
+  hrvReliable: boolean;
+  /** Why `hrvReliable` is false. Empty when the series is usable. */
+  hrvUnreliableReasons: string[];
   /**
    * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF). The raw
    * .ans is never used to synthesize LFa/RFa/SB: those are `unavailable` unless
@@ -133,22 +243,15 @@ interface Classification {
   hi: number;
 }
 
-interface DysfunctionPatterns {
-  parasympatheticDominance: boolean;
-  parasympatheticExcess: boolean;
-  parasympatheticWithdrawal: boolean;
-  sympatheticExcess: boolean;
-  sympatheticWithdrawal: boolean;
-  maskedSW: boolean;
-  advancedAutonomicDysfunction: boolean;
-  CAN: boolean;
-  POTS: boolean;
-  orthostaticHypotension: boolean;
-  vasovagalRisk: boolean;
-  preSyncopeRisk: boolean;
-  bradycardia: boolean;
-  highFRF: boolean;
-}
+/**
+ * TRI-STATE clinical patterns: true = present, false = assessed and genuinely
+ * absent, null = NOT ASSESSABLE. See `shared/clinicalStates.ts` for why `false`
+ * may never stand in for "we could not look" — that defect told downstream
+ * consumers an abnormality was absent on a recording where the vendor clinician
+ * documented Sympathetic Excess, pre-syncope risk and Advanced Autonomic
+ * Dysfunction.
+ */
+type DysfunctionPatterns = PatternStates;
 
 interface WellnessDriver {
   label: string;       // human-readable, e.g. "Baseline SB 0.18 — parasympathetic-dominant"
@@ -158,7 +261,7 @@ interface WellnessDriver {
 }
 
 interface SubScore {
-  score: number;        // 0–100, the sub-score itself
+  score: number | null; // 0–100, or null when the domain was not assessable
   weight: number;       // effective (renormalized-over-available) weight in the composite
   contribution: number; // score × effective weight (points contributed to rawTotal out of 100)
   drivers: WellnessDriver[]; // ordered top-down by absolute |points|
@@ -177,12 +280,26 @@ interface WellnessBreakdown {
   hrvReserve: SubScore;
   patternPenalty: { total: number; items: WellnessDriver[] }; // negative points applied after composite
   ageMultiplier: number;
-  rawTotal: number;
-  ageAdjusted: number;
-  final: number;
+  /**
+   * Composite over the FULL nominal weight set. Unavailable domains contribute
+   * ZERO and their weight is NOT redistributed, so missing data can only ever
+   * lower this number — never raise it. (The previous behaviour renormalized
+   * over the available domains, so the absence of the one domain the vendor
+   * flagged as abnormal silently inflated the composite to 91 / "Optimal".)
+   *
+   * `null` whenever `scorability.scorable` is false: no number is published.
+   */
+  rawTotal: number | null;
+  ageAdjusted: number | null;
+  final: number | null;
   topPositiveDrivers: WellnessDriver[]; // top 3 boosters across all categories
   topNegativeDrivers: WellnessDriver[]; // top 3 draggers across all categories
   headline: string;                     // one-sentence summary under the number
+  /**
+   * Whether a composite may be published at all, and why not. Authoritative:
+   * every consumer must check this before rendering a score or tier.
+   */
+  scorability: Scorability;
 }
 
 interface PhaseFinding {
@@ -214,8 +331,20 @@ interface PhaseBoundary { name: "A"|"B"|"C"|"D"|"E"|"F"; label: string; startSec
 interface CardioRespiratoryWindow {
   phase: "Baseline" | "DeepBreathing" | "Valsalva" | "Stand";
   label: string;
-  startClock: string;
-  endClock: string;
+  /**
+   * Wall-clock start/end, ONLY when a valid time-of-day was parsed from the
+   * file. `null` otherwise — the UI then shows `startOffsetSec`/`endOffsetSec`
+   * as relative time. An hour > 23 can no longer be emitted: the old code
+   * matched the literal "30:15" of the *30:15 ratio* label in the ASCII head
+   * and produced wall clocks like "30:20:36".
+   */
+  startClock: string | null;
+  endClock: string | null;
+  /** Always-valid seconds from the start of the recording. */
+  startOffsetSec: number;
+  endOffsetSec: number;
+  /** Where the clock labels came from. */
+  clockSource: "file_timestamp" | "relative_only";
   hr: TimeSeries;
   breathing: TimeSeries;
   annotations: string[];
@@ -246,8 +375,13 @@ interface MultiParameterGraphical {
 
 interface ANSReport {
   patientData: ParsedANSData;
-  wellnessScore: number;
-  wellnessTier: "Optimal" | "Resilient" | "Balanced" | "Stressed" | "Depleted" | "Critical";
+  /**
+   * `null` when `wellnessBreakdown.scorability.scorable` is false. A composite
+   * score is NOT published when the ECG is unusable or an essential domain is
+   * missing — no number, no tier, no "Optimal".
+   */
+  wellnessScore: number | null;
+  wellnessTier: "Optimal" | "Resilient" | "Balanced" | "Stressed" | "Depleted" | "Critical" | null;
   wellnessBreakdown: WellnessBreakdown;
   riskLevel: string;
   energyLevel: "Low" | "Moderate" | "High";
@@ -270,10 +404,16 @@ interface ANSReport {
     interpretation: string;
   };
   phaseEvents: PhaseMetrics[];
+  /**
+   * Ewing ratios. `value`/`classification` are null when the ratio was not
+   * present in the file — never 0 (which would classify as severely abnormal).
+   * `normal` always comes from the single authoritative age-specific reference
+   * table (`ratioReferenceLabel`), so no surface can print a different band.
+   */
   ratios: {
-    eiRatio: { value: number; normal: string; classification: Classification };
-    valsalvaRatio: { value: number; normal: string; classification: Classification };
-    thirtyFifteenRatio: { value: number; normal: string; classification: Classification };
+    eiRatio: { value: number | null; normal: string; classification: Classification | null };
+    valsalvaRatio: { value: number | null; normal: string; classification: Classification | null };
+    thirtyFifteenRatio: { value: number | null; normal: string; classification: Classification | null };
   };
   phaseFindings: PhaseFinding[];
   dysfunctionPatterns: DysfunctionPatterns;
@@ -284,8 +424,28 @@ interface ANSReport {
   clinicalFlags: string[];
   overallImpression: string;
   samplingRate: number;
-  // null when spectral is unavailable — FRF is a proprietary [P] measure.
+  /**
+   * Top-level respiratory frequency. Kept CONSISTENT with the per-phase FRF
+   * values: previously this was null while six per-phase FRF values were
+   * populated, so the same payload both denied and asserted the measure. It now
+   * mirrors the baseline phase and always ships alongside `respiratory`, which
+   * states the validation status explicitly.
+   */
   respiratoryFrequency: number | null;
+  /**
+   * Explicit validation envelope for the respiratory estimate. An `estimated`
+   * value is never presented as a measured fact by any surface.
+   */
+  respiratory: {
+    frequencyHz: number | null;
+    validation: "estimated" | "unavailable";
+    note: string;
+  };
+  /**
+   * ECG usability verdict that gated this report. Interpretation is suppressed
+   * when `usable` is false.
+   */
+  ecgQuality?: LegacyEcgQuality;
   rPeakCount: number;
   /**
    * ENVELOPE METADATA — wall-clock time the report object was generated. This is
@@ -416,9 +576,16 @@ function detectRPeaks(ecg: number[], samplingRate: number): {
   indices: number[];
   amplitudes: number[];
   rrIntervalsMs: number[];
+  /** Beats rejected because they sit on a sentinel/rail artifact. */
+  rejectedArtifactBeats: number;
+  /** R-R intervals discarded because an artifact fell inside them. */
+  rejectedArtifactIntervals: number;
 } {
   if (ecg.length < samplingRate * 2) {
-    return { indices: [], amplitudes: [], rrIntervalsMs: [] };
+    return {
+      indices: [], amplitudes: [], rrIntervalsMs: [],
+      rejectedArtifactBeats: 0, rejectedArtifactIntervals: 0,
+    };
   }
 
   // Derivative + squaring (simple Pan-Tompkins feature)
@@ -466,14 +633,53 @@ function detectRPeaks(ecg: number[], samplingRate: number): {
     }
   }
 
-  const amplitudes = peaks.map(i => ecg[i]);
+  // ---- SENTINEL / RAIL ARTIFACT REJECTION ----------------------------------
+  // Real exports contain ±31,8xx rail spikes. The detector happily locks onto
+  // them (they are the largest "peaks" in the trace), which is what produced
+  // per-phase RMSSD > SDNN in every phase and an inflated variability "reserve"
+  // that drove 18.7 of a 91-point wellness score. A spike is not a beat: reject
+  // any peak sitting on a sentinel sample, and discard any R-R interval that
+  // spans a sentinel sample (its endpoints are then not consecutive real beats).
+  // A beat is rejected only when the DETECTED PEAK SAMPLE ITSELF is clipped at
+  // the rail. We deliberately do NOT reject a beat because a rail sample merely
+  // lies nearby: in these exports a large negative rail deflection occurs once
+  // per cardiac cycle (~230 samples apart at 250 Hz), so a ±60 ms neighbourhood
+  // test rejected almost every beat and destroyed a legitimate, clinically
+  // useful heart rate. The rail deflections are still kept out of the
+  // variability metrics — a clipped peak has no trustworthy fiducial point, the
+  // plausibility gate in `analyzePhase` rejects the resulting series, and the
+  // parser marks the whole recording unusable (`sentinel_spikes`).
+  const isArtifactIndex = (idx: number): boolean => isSentinelSample(ecg[idx]);
+  const cleanPeaks: number[] = [];
+  const rejectedPeaks: number[] = [];
+  for (const p of peaks) {
+    if (isArtifactIndex(p)) rejectedPeaks.push(p);
+    else cleanPeaks.push(p);
+  }
+  const rejectedArtifactBeats = rejectedPeaks.length;
+
+  const amplitudes = cleanPeaks.map(i => ecg[i]);
   const rrIntervalsMs: number[] = [];
-  for (let i = 1; i < peaks.length; i++) {
-    const ms = ((peaks[i] - peaks[i - 1]) / samplingRate) * 1000;
+  let rejectedArtifactIntervals = 0;
+  for (let i = 1; i < cleanPeaks.length; i++) {
+    const a = cleanPeaks[i - 1];
+    const b = cleanPeaks[i];
+    // Reject the interval only when a beat was ACTUALLY REMOVED between these
+    // two peaks — the endpoints are then not consecutive beats and the interval
+    // is a fiction. We deliberately do NOT reject every interval that merely
+    // contains a sentinel sample somewhere: on real exports the rail spikes are
+    // sprinkled through the trace and that rule discarded essentially every
+    // interval, destroying a legitimate, clinically useful heart rate.
+    const lostBeatInGap = rejectedPeaks.some((r) => r > a && r < b);
+    if (lostBeatInGap) { rejectedArtifactIntervals++; continue; }
+    const ms = ((b - a) / samplingRate) * 1000;
     if (ms > 300 && ms < 2000) rrIntervalsMs.push(ms);
   }
 
-  return { indices: peaks, amplitudes, rrIntervalsMs };
+  return {
+    indices: cleanPeaks, amplitudes, rrIntervalsMs,
+    rejectedArtifactBeats, rejectedArtifactIntervals,
+  };
 }
 
 /**
@@ -485,14 +691,17 @@ function estimateRespiratoryFrequency(
   rPeakIndices: number[],
   rPeakAmplitudes: number[],
   samplingRate: number
-): number {
-  if (rPeakIndices.length < 8) return 0.2; // fallback
+): number | null {
+  // NO FABRICATED DEFAULT. The old code returned 0.2 Hz whenever the envelope
+  // was too short to analyse, publishing an invented respiratory rate as a
+  // measurement. Insufficient data now returns null.
+  if (rPeakIndices.length < 8) return null;
 
   // Resample R-peak amplitudes to a uniform 4 Hz signal
   const resampleFs = 4;
   const duration = (rPeakIndices[rPeakIndices.length - 1] - rPeakIndices[0]) / samplingRate;
   const n = Math.max(16, Math.floor(duration * resampleFs));
-  if (n < 16) return 0.2;
+  if (n < 16) return null;
 
   const resampled = new Array(n).fill(0);
   const t0 = rPeakIndices[0] / samplingRate;
@@ -517,7 +726,7 @@ function estimateRespiratoryFrequency(
   for (let i = 0; i < n; i++) resampled[i] -= mean;
 
   // Goertzel-style search for dominant frequency in 0.08–0.45 Hz (respiratory band)
-  let bestFreq = 0.2;
+  let bestFreq: number | null = null;
   let bestPower = 0;
   for (let f = 0.08; f <= 0.45; f += 0.005) {
     let re = 0, im = 0;
@@ -529,7 +738,7 @@ function estimateRespiratoryFrequency(
     const power = (re * re + im * im) / n;
     if (power > bestPower) { bestPower = power; bestFreq = f; }
   }
-  return Math.round(bestFreq * 1000) / 1000;
+  return bestFreq == null ? null : Math.round(bestFreq * 1000) / 1000;
 }
 
 // ============================================================================
@@ -592,11 +801,12 @@ function analyzePhase(
   label: string,
   durationSec: number
 ): PhaseMetrics {
-  const { indices, amplitudes, rrIntervalsMs } = detectRPeaks(ecgPhase, samplingRate);
+  const { indices, amplitudes, rrIntervalsMs, rejectedArtifactBeats, rejectedArtifactIntervals } =
+    detectRPeaks(ecgPhase, samplingRate);
   if (rrIntervalsMs.length < 4) {
-    // Not enough beats to compute anything for this phase. Emit nulls-as-zero
-    // for back-compat but tag every spectral metric as UNAVAILABLE so the UI
-    // renders "unavailable" rather than a fabricated 0 (never substituted).
+    // Not enough usable beats to compute anything for this phase. Every metric
+    // is NULL — never 0. A 0 bpm heart rate / 0 ms variability is a sentinel a
+    // clinician or a downstream score would read as a real, extreme value.
     const unavail = {
       LFa: unavailableProvenance("LFa", "Fewer than 4 usable beats in this phase."),
       RFa: unavailableProvenance("RFa", "Fewer than 4 usable beats in this phase."),
@@ -606,8 +816,16 @@ function analyzePhase(
     return {
       phase: phaseName, label,
       duration: formatDuration(durationSec), durationSec,
-      meanHR: 0, rangeHR: 0, FRF: 0, LFa: null, RFa: null, SB: null,
-      HRV_SDNN: 0, HRV_RMSSD: 0,
+      meanHR: null, rangeHR: null, FRF: null, LFa: null, RFa: null, SB: null,
+      hrvOverallVariabilityMs: null, hrvBeatToBeatMs: null,
+      hrvReliable: false,
+      hrvUnreliableReasons: [
+        `Fewer than 4 usable R-R intervals in this phase` +
+          (rejectedArtifactBeats + rejectedArtifactIntervals > 0
+            ? ` after rejecting ${rejectedArtifactBeats} artifact beat(s) and ` +
+              `${rejectedArtifactIntervals} artifact-spanning interval(s)`
+            : "") + ".",
+      ],
       provenance: unavail,
     };
   }
@@ -623,6 +841,32 @@ function analyzePhase(
   let ssd = 0;
   for (let i = 1; i < rrIntervalsMs.length; i++) ssd += (rrIntervalsMs[i] - rrIntervalsMs[i - 1]) ** 2;
   const rmssd = Math.sqrt(ssd / (rrIntervalsMs.length - 1));
+
+  // ---- Physiological plausibility gate on the variability metrics -----------
+  // Successive-difference variability cannot exceed overall variability in a
+  // genuine sinus series: RMSSD > SDNN across a whole phase is a classic
+  // R-peak mis-detection / artifact fingerprint. The audit found exactly this
+  // in all six phases (SDNN 88–141 ms with RMSSD 134–176 ms) and the resulting
+  // inflated "variability reserve" was worth 18.7 of a 91-point score. When the
+  // series is implausible we publish NO variability number for the phase and
+  // the composite becomes not-scorable — we do not silently score an artifact.
+  const hrvUnreliableReasons: string[] = [];
+  if (rmssd > sdnn) {
+    hrvUnreliableReasons.push(
+      `Beat-to-beat variability (${rmssd.toFixed(1)} ms) exceeds overall variability ` +
+        `(${sdnn.toFixed(1)} ms), which is not physiologically possible for a clean sinus ` +
+        "series and indicates R-peak mis-detection or residual artifact.",
+    );
+  }
+  if (rejectedArtifactBeats > 0 || rejectedArtifactIntervals > 0) {
+    hrvUnreliableReasons.push(
+      `${rejectedArtifactBeats} sentinel/rail artifact beat(s) and ${rejectedArtifactIntervals} ` +
+        "artifact-spanning interval(s) were excluded from this phase.",
+    );
+  }
+  // Artifact exclusion alone does not invalidate the remaining clean series;
+  // only the implausibility signature does.
+  const hrvReliable = rmssd <= sdnn;
 
   // Respiratory frequency for THIS phase (derived from the RR/peak envelope —
   // this is a genuine time-domain measure, not a proprietary spectral aggregate).
@@ -644,12 +888,14 @@ function analyzePhase(
     phase: phaseName, label,
     duration: formatDuration(durationSec), durationSec,
     meanHR, rangeHR,
-    FRF: Math.round(frf * 100) / 100,
+    FRF: frf == null ? null : Math.round(frf * 100) / 100,
     LFa: null,
     RFa: null,
     SB: null,
-    HRV_SDNN: Math.round(sdnn * 10) / 10,
-    HRV_RMSSD: Math.round(rmssd * 10) / 10,
+    hrvOverallVariabilityMs: hrvReliable ? Math.round(sdnn * 10) / 10 : null,
+    hrvBeatToBeatMs: hrvReliable ? Math.round(rmssd * 10) / 10 : null,
+    hrvReliable,
+    hrvUnreliableReasons,
     provenance: {
       LFa: unavailableProvenance("LFa", spectralUnavailableNote),
       RFa: unavailableProvenance("RFa", spectralUnavailableNote),
@@ -819,17 +1065,22 @@ function computeWellness(
   patterns?: DysfunctionPatterns,
 ): WellnessBreakdown {
   const age = patient.age;
+  const ecgUsable = patient.ecgQuality ? patient.ecgQuality.usable : true;
   const A = phases[0]; // Baseline A
   const B = phases[1]; // DB
   const F = phases[5]; // Stand
 
   // Spectral aggregates (LFa/RFa/SB) are only present when the paired vendor PDF
-  // supplied them (vendor_reported). For raw ECG-only .ans files they are null,
-  // and any sub-score component that depends on them is UNAVAILABLE — it is
-  // dropped from the composite and the remaining weights are renormalized, so
-  // the score reflects only measured data instead of collapsing a fabricated 0
-  // into ~85% of the weight. HR, Ewing ratios and HRV (SDNN/RMSSD) are always
-  // measured and always contribute.
+  // supplied them (vendor_reported). For raw ECG-only .ans files they are null
+  // and every sub-score component that depends on them is UNAVAILABLE.
+  //
+  // CRITICAL CHANGE: unavailable components/domains are NO LONGER renormalized
+  // away. They contribute ZERO out of their full nominal weight, so missing data
+  // can only ever LOWER the composite. Renormalizing let the absence of the one
+  // domain the vendor flagged as abnormal silently RAISE the number to 91 /
+  // "Optimal". Any unavailable domain also makes the result NOT SCORABLE, so the
+  // depressed composite is never published as a score either — it exists only as
+  // an internal audit figure inside the breakdown.
   const aRFa = A.RFa, aLFa = A.LFa, aSB = A.SB;
   const bRFa = B.RFa;
   const fRFa = F.RFa, fLFa = F.LFa, fSB = F.SB;
@@ -855,30 +1106,41 @@ function computeWellness(
     available: boolean;
   }
   function combineComponents(subWeight: number, comps: WComp[]): {
-    score: number;
+    score: number | null;
     available: boolean;
+    /** True when at least one component of this sub-score was unavailable. */
+    partial: boolean;
+    missing: string[];
     drivers: WellnessDriver[];
   } {
     const avail = comps.filter((c) => c.available);
+    const missing = comps.filter((c) => !c.available).map((c) => c.label);
     if (avail.length === 0) {
-      return { score: 0, available: false, drivers: [] };
+      return { score: null, available: false, partial: true, missing, drivers: [] };
     }
-    const wSum = avail.reduce((s, c) => s + c.nominalWeight, 0) || 1;
-    const score = Math.round(avail.reduce((s, c) => s + c.score * (c.nominalWeight / wSum), 0) * 10) / 10;
+    // Weighted over the FULL nominal weight set (missing components score 0).
+    // No renormalization: absence cannot raise the sub-score.
+    const wSumAll = comps.reduce((s, c) => s + c.nominalWeight, 0) || 1;
+    const score =
+      Math.round(avail.reduce((s, c) => s + c.score * (c.nominalWeight / wSumAll), 0) * 10) / 10;
     const drivers = avail.map((c) =>
-      mkDriver(c.label, c.value, c.score, subWeight * (c.nominalWeight / wSum)),
+      mkDriver(c.label, c.value, c.score, subWeight * (c.nominalWeight / wSumAll)),
     );
-    return { score, available: true, drivers };
+    return { score, available: true, partial: missing.length > 0, missing, drivers };
   }
 
   // ---- 1. Baseline Autonomic Tone (RFa/LFa spectral + resting HR) ----
-  const baselineHR = signedBandScore(A.meanHR, HR_n.lo, HR_n.hi, { lowPenalty: 1.4, highPenalty: 1.1 });
+  const hrKnown = A.meanHR != null && A.meanHR > 0;
+  const baselineHR = hrKnown
+    ? signedBandScore(A.meanHR as number, HR_n.lo, HR_n.hi, { lowPenalty: 1.4, highPenalty: 1.1 })
+    : 0;
   const c1 = combineComponents(W.baseline, [
     { label: `Resting RFa (parasympathetic)`, value: aRFa == null ? "Not assessed" : `${aRFa}`,
       score: aRFa == null ? 0 : signedBandScore(aRFa, RFa_n.lo, RFa_n.hi, { lowPenalty: 1.2 }), nominalWeight: 0.40, available: aRFa != null },
     { label: `Resting LFa (sympathetic)`, value: aLFa == null ? "Not assessed" : `${aLFa}`,
       score: aLFa == null ? 0 : signedBandScore(aLFa, LFa_n.lo, LFa_n.hi, { lowPenalty: 1.2 }), nominalWeight: 0.35, available: aLFa != null },
-    { label: `Resting heart rate`, value: `${A.meanHR} bpm`, score: baselineHR, nominalWeight: 0.25, available: true },
+    { label: `Resting heart rate`, value: hrKnown ? `${A.meanHR} bpm` : "Not assessed",
+      score: baselineHR, nominalWeight: 0.25, available: hrKnown },
   ]);
   const s1 = c1.score;
   const s1Drivers = c1.drivers;
@@ -905,10 +1167,15 @@ function computeWellness(
   const s2 = c2.score;
   const s2Drivers = c2.drivers;
 
-  // ---- 3. Reflex Integrity (Ewing battery — Ewing ratios always measured) ----
-  const eiScore  = thresholdScoreV2(patient.eiRatio,          EI_n.lo * 0.85,  EI_n.lo);
-  const valScore = thresholdScoreV2(patient.valsalvaRatio,    Val_n.lo * 0.85, Val_n.lo);
-  const tfScore  = thresholdScoreV2(patient.thirtyFifteenRatio, Tf_n.lo * 0.85, Tf_n.lo);
+  // ---- 3. Reflex Integrity (Ewing battery) ----
+  // Ratios may be null (not present in the file). A null ratio is NOT scored as
+  // 0 — that would read as a profoundly abnormal reflex. It is unavailable.
+  const eiScore  = patient.eiRatio == null ? 0
+    : thresholdScoreV2(patient.eiRatio, EI_n.lo * 0.85, EI_n.lo);
+  const valScore = patient.valsalvaRatio == null ? 0
+    : thresholdScoreV2(patient.valsalvaRatio, Val_n.lo * 0.85, Val_n.lo);
+  const tfScore  = patient.thirtyFifteenRatio == null ? 0
+    : thresholdScoreV2(patient.thirtyFifteenRatio, Tf_n.lo * 0.85, Tf_n.lo);
   const dbRFaGain = aRFa != null && bRFa != null && aRFa > 0 ? bRFa / aRFa : null;
   let dbGainScore = 0;
   if (dbRFaGain != null) {
@@ -919,9 +1186,12 @@ function computeWellness(
     dbGainScore = Math.round(dbGainScore * 10) / 10;
   }
   const c3 = combineComponents(W.reflex, [
-    { label: `E/I ratio (deep-breathing vagal)`, value: `${patient.eiRatio}`, score: eiScore, nominalWeight: 0.30, available: true },
-    { label: `Valsalva ratio`, value: `${patient.valsalvaRatio}`, score: valScore, nominalWeight: 0.30, available: true },
-    { label: `30:15 ratio (standing baroreflex)`, value: `${patient.thirtyFifteenRatio}`, score: tfScore, nominalWeight: 0.25, available: true },
+    { label: `E/I ratio (deep-breathing vagal)`, value: patient.eiRatio == null ? "Not assessed" : `${patient.eiRatio}`,
+      score: eiScore, nominalWeight: 0.30, available: patient.eiRatio != null },
+    { label: `Valsalva ratio`, value: patient.valsalvaRatio == null ? "Not assessed" : `${patient.valsalvaRatio}`,
+      score: valScore, nominalWeight: 0.30, available: patient.valsalvaRatio != null },
+    { label: `30:15 ratio (standing baroreflex)`, value: patient.thirtyFifteenRatio == null ? "Not assessed" : `${patient.thirtyFifteenRatio}`,
+      score: tfScore, nominalWeight: 0.25, available: patient.thirtyFifteenRatio != null },
     { label: `DB RFa gain (vagal augmentation)`, value: dbRFaGain == null ? "Not assessed" : `${Math.round(dbRFaGain * 100) / 100}×`,
       score: dbGainScore, nominalWeight: 0.15, available: dbRFaGain != null },
   ]);
@@ -929,15 +1199,20 @@ function computeWellness(
   const s3Drivers = c3.drivers;
 
   // ---- 4. Orthostatic Response (HR delta always measured; LFa/RFa spectral) ----
-  const hrDelta = F.meanHR - A.meanHR;
-  let hrDeltaScore: number;
-  if (hrDelta < 0) hrDeltaScore = 20;               // HR drop on stand = chronotropic failure
-  else if (hrDelta < 5) hrDeltaScore = 40;
-  else if (hrDelta < 10) hrDeltaScore = 75;
-  else if (hrDelta <= 20) hrDeltaScore = 100;
-  else if (hrDelta <= 30) hrDeltaScore = Math.max(55, 100 - (hrDelta - 20) * 4.5);
-  else hrDeltaScore = Math.max(10, 55 - (hrDelta - 30) * 3.5);   // POTS territory
-  hrDeltaScore = Math.round(hrDeltaScore * 10) / 10;
+  // ΔHR uses the SINGLE canonical definition shared with the parse payload and
+  // the diagnostic summary (`standDeltaBpm`), so the report can no longer say
+  // "+9 bpm" while another payload in the same response says "ΔHR = 8 bpm".
+  const hrDelta = standDeltaBpm(A.meanHR, F.meanHR);
+  let hrDeltaScore = 0;
+  if (hrDelta != null) {
+    if (hrDelta < 0) hrDeltaScore = 20;               // HR drop on stand = chronotropic failure
+    else if (hrDelta < 5) hrDeltaScore = 40;
+    else if (hrDelta < 10) hrDeltaScore = 75;
+    else if (hrDelta <= 20) hrDeltaScore = 100;
+    else if (hrDelta <= 30) hrDeltaScore = Math.max(55, 100 - (hrDelta - 20) * 4.5);
+    else hrDeltaScore = Math.max(10, 55 - (hrDelta - 30) * 3.5);   // POTS territory
+    hrDeltaScore = Math.round(hrDeltaScore * 10) / 10;
+  }
   const standLFaGain = aLFa != null && fLFa != null && aLFa > 0 ? fLFa / aLFa : null;
   let standLFaGainScore = 0;
   if (standLFaGain != null) {
@@ -948,7 +1223,8 @@ function computeWellness(
     standLFaGainScore = Math.round(standLFaGainScore * 10) / 10;
   }
   const c4 = combineComponents(W.ortho, [
-    { label: `HR response to stand`, value: `Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm`, score: hrDeltaScore, nominalWeight: 0.35, available: true },
+    { label: `HR response to stand`, value: hrDelta == null ? "Not assessed" : `Δ${hrDelta >= 0 ? "+" : ""}${hrDelta} bpm`,
+      score: hrDeltaScore, nominalWeight: 0.35, available: hrDelta != null },
     { label: `Standing LFa (sympathetic)`, value: fLFa == null ? "Not assessed" : `${fLFa}`,
       score: fLFa == null ? 0 : signedBandScore(fLFa, LFa_n.lo, LFa_n.hi * 1.4, { lowPenalty: 1.2 }), nominalWeight: 0.25, available: fLFa != null },
     { label: `Standing LFa gain`, value: standLFaGain == null ? "Not assessed" : `${Math.round(standLFaGain * 100) / 100}×`,
@@ -959,42 +1235,55 @@ function computeWellness(
   const s4 = c4.score;
   const s4Drivers = c4.drivers;
 
-  // ---- 5. HRV Reserve (SDNN — always measured from the raw waveform) ----
+  // ---- 5. Heart-rhythm variability reserve ----------------------------------
+  // Only phases whose beat series passed the artifact/plausibility gate are used.
+  // The audit's inflated "112.9 ms vs 45 ms expected" reserve was computed from
+  // series in which beat-to-beat variability exceeded overall variability in
+  // every phase — an R-peak artifact — and it was a POSITIVE driver of the 91.
   const expectedSDNN = age < 36 ? 55 : age < 56 ? 45 : 35;
-  const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
-  let sdnnScore = avgSDNN >= expectedSDNN
-    ? Math.min(100, 100 + (avgSDNN - expectedSDNN) * 0.25)
-    : Math.max(10, 100 * Math.pow(avgSDNN / expectedSDNN, 0.8));
-  sdnnScore = Math.round(sdnnScore * 10) / 10;
-  const sdnns = phases.map(p => p.HRV_SDNN);
-  const sdnnSpread = Math.max(...sdnns) - Math.min(...sdnns);
-  const spreadScore = sdnnSpread < 5 ? 40 : sdnnSpread > 60 ? 65 : Math.min(100, 40 + sdnnSpread * 1.5);
-  const s5 = Math.round((sdnnScore * 0.70 + spreadScore * 0.30) * 10) / 10;
-  const s5Drivers: WellnessDriver[] = [
-    // AUTHORIZED PhysioPS OUTPUT PROTOCOL: these driver labels are rendered in
-    // the PATIENT wellness breakdown, so they must not name the HRV-specific
-    // parameter (sdNN). The calculation, weight and score below are UNCHANGED —
-    // only the patient-facing wording is P&S/plain language.
-    mkDriver(`Heart-rhythm variability reserve`, `${Math.round(avgSDNN * 10) / 10} ms vs ${expectedSDNN} ms expected for age`, sdnnScore, W.hrv * 0.70),
-    mkDriver(`Heart-rhythm variability dynamic range`, `${Math.round(sdnnSpread * 10) / 10} ms spread across the test`, spreadScore, W.hrv * 0.30),
-  ];
+  const reliableVars = phases
+    .map((p) => p.hrvOverallVariabilityMs)
+    .filter((v): v is number => v != null);
+  const hrvAssessable = reliableVars.length >= 2;
+  let s5: number | null = null;
+  let s5Drivers: WellnessDriver[] = [];
+  let avgSDNN: number | null = null;
+  let sdnnSpread: number | null = null;
+  if (hrvAssessable) {
+    avgSDNN = reliableVars.reduce((s, v) => s + v, 0) / reliableVars.length;
+    let sdnnScore = avgSDNN >= expectedSDNN
+      ? Math.min(100, 100 + (avgSDNN - expectedSDNN) * 0.25)
+      : Math.max(10, 100 * Math.pow(avgSDNN / expectedSDNN, 0.8));
+    sdnnScore = Math.round(sdnnScore * 10) / 10;
+    sdnnSpread = Math.max(...reliableVars) - Math.min(...reliableVars);
+    const spreadScore = sdnnSpread < 5 ? 40 : sdnnSpread > 60 ? 65 : Math.min(100, 40 + sdnnSpread * 1.5);
+    s5 = Math.round((sdnnScore * 0.70 + spreadScore * 0.30) * 10) / 10;
+    s5Drivers = [
+      // AUTHORIZED PhysioPS OUTPUT PROTOCOL: these driver labels are rendered in
+      // the PATIENT wellness breakdown, so they must not name the HRV-specific
+      // parameter. Calculation, weight and score are unchanged.
+      mkDriver(`Heart-rhythm variability reserve`, `${Math.round(avgSDNN * 10) / 10} ms vs ${expectedSDNN} ms expected for age`, sdnnScore, W.hrv * 0.70),
+      mkDriver(`Heart-rhythm variability dynamic range`, `${Math.round(sdnnSpread * 10) / 10} ms spread across the test`, spreadScore, W.hrv * 0.30),
+    ];
+  }
 
-  // ---- Composite raw total (renormalized over AVAILABLE sub-scores) ----
-  // Each sub-score contributes only if it has at least one available component.
-  // Sub-scores 3 (Ewing) and 5 (HRV) are always available; 1 and 4 always have
-  // an HR-based component; only 2 (sympathovagal balance) drops out entirely
-  // when spectral is unavailable. Weights are renormalized so the final score
-  // is a true weighted average of what was actually measured.
-  const subScores: Array<{ score: number; weight: number; available: boolean }> = [
-    { score: s1, weight: W.baseline, available: c1.available },
-    { score: s2, weight: W.sb,       available: c2.available },
-    { score: s3, weight: W.reflex,   available: c3.available },
-    { score: s4, weight: W.ortho,    available: c4.available },
-    { score: s5, weight: W.hrv,      available: true },
+  // ---- Composite over the FULL nominal weight set (no renormalization) ------
+  const subScores: Array<{ key: string; label: string; score: number | null; weight: number; available: boolean; partial: boolean; missing: string[] }> = [
+    { key: "baselineAutonomic", label: "Baseline autonomic tone", score: s1, weight: W.baseline, available: c1.available, partial: c1.partial, missing: c1.missing },
+    { key: "sympathovagalBalance", label: "Sympathovagal balance", score: s2, weight: W.sb, available: c2.available, partial: c2.partial, missing: c2.missing },
+    { key: "reflexIntegrity", label: "Reflex integrity", score: s3, weight: W.reflex, available: c3.available, partial: c3.partial, missing: c3.missing },
+    { key: "orthostaticResponse", label: "Orthostatic response", score: s4, weight: W.ortho, available: c4.available, partial: c4.partial, missing: c4.missing },
+    { key: "hrvReserve", label: "Heart-rhythm variability reserve", score: s5, weight: W.hrv, available: hrvAssessable, partial: !hrvAssessable, missing: hrvAssessable ? [] : ["Heart-rhythm variability (artifact/insufficient beats)"] },
   ];
-  const availSubs = subScores.filter((s) => s.available);
-  const availWeightSum = availSubs.reduce((s, x) => s + x.weight, 0) || 1;
-  const rawTotal = Math.round(availSubs.reduce((s, x) => s + x.score * (x.weight / availWeightSum), 0) * 10) / 10;
+  const nominalWeightSum = subScores.reduce((s, x) => s + x.weight, 0) || 1;
+  const unavailableWeight =
+    Math.round(
+      (subScores.filter((s) => !s.available).reduce((s, x) => s + x.weight, 0) / nominalWeightSum) * 1000,
+    ) / 1000;
+  const rawTotal =
+    Math.round(
+      subScores.reduce((s, x) => s + (x.score ?? 0) * (x.weight / nominalWeightSum), 0) * 10,
+    ) / 10;
   const ageMul = age < 36 ? 1.00 : age < 56 ? 1.03 : 1.06;
   const ageAdjusted = Math.round(rawTotal * ageMul * 10) / 10;
 
@@ -1002,10 +1291,10 @@ function computeWellness(
   const patternDrivers: WellnessDriver[] = [];
   let patternPenaltyTotal = 0;
   if (patterns) {
-    // Sort detected patterns by severity so we can apply diminishing returns
-    const detected = (Object.entries(patterns) as Array<[keyof DysfunctionPatterns, boolean]>)
-      .filter(([, v]) => v === true)
-      .map(([k]) => ({ key: k, ...PATTERN_PENALTIES[k] }))
+    // Only patterns affirmatively PRESENT (=== true) penalize. `null` means "not
+    // assessable" and must neither penalize nor be read as absent.
+    const detected = presentPatterns(patterns)
+      .map((k) => ({ key: k, ...PATTERN_PENALTIES[k] }))
       .sort((a, b) => b.points - a.points);
     for (let i = 0; i < detected.length; i++) {
       const decay = Math.pow(0.75, i); // 1st at 100%, 2nd at 75%, 3rd at 56%, …
@@ -1025,7 +1314,72 @@ function computeWellness(
     ? Math.min(8, Math.log2(patient.ectopicBeats) * 1.2)
     : patient.ectopicBeats > 0 ? 0.5 : 0;
 
-  const final = Math.max(10, Math.min(100, Math.round((ageAdjusted - patternPenaltyTotal - ectopicPenalty) * 10) / 10));
+  const provisionalFinal = Math.max(10, Math.min(100, Math.round((ageAdjusted - patternPenaltyTotal - ectopicPenalty) * 10) / 10));
+
+  // ---- SCORABILITY GATE ----------------------------------------------------
+  // A composite is published ONLY when the recording is usable, the variability
+  // reserve is trustworthy, every scored domain had at least one measured input,
+  // and no clinical pattern is left unassessable. Otherwise no number, no tier.
+  const blockers: ScorabilityBlocker[] = [];
+  if (!ecgUsable) {
+    const reasons = patient.ecgQuality?.warnings ?? [];
+    blockers.push({
+      code: "ECG_UNUSABLE",
+      message:
+        "The ECG recording did not pass the signal-usability gate" +
+        (reasons.length ? `: ${reasons.join(" ")}` : ".") +
+        " Every metric derived from the waveform is therefore an observation to be confirmed, not a graded result.",
+      domains: ["all"],
+    });
+  }
+  if (!hrvAssessable) {
+    blockers.push({
+      code: "ECG_ARTIFACT_HRV_UNRELIABLE",
+      message:
+        "Heart-rhythm variability could not be measured reliably (artifact or too few clean beats), " +
+        "so the variability-reserve domain of the score has no input.",
+      domains: ["hrvReserve"],
+    });
+  }
+  const missingDomains = subScores.filter((s) => !s.available).map((s) => s.label);
+  const spectralDomainsMissing = subScores.filter((s) => !s.available && s.key !== "hrvReserve");
+  if (spectralDomainsMissing.length > 0) {
+    blockers.push({
+      code: "ESSENTIAL_DOMAIN_MISSING",
+      message:
+        `${spectralDomainsMissing.map((s) => s.label).join(", ")} could not be assessed on this ` +
+        "recording, so a composite that covers all autonomic domains cannot be produced. The " +
+        "missing weight is NOT redistributed to the remaining domains.",
+      domains: spectralDomainsMissing.map((s) => s.key),
+    });
+  }
+  const ratiosMissing = [
+    patient.eiRatio == null ? "E/I ratio" : null,
+    patient.valsalvaRatio == null ? "Valsalva ratio" : null,
+    patient.thirtyFifteenRatio == null ? "30:15 ratio" : null,
+  ].filter((x): x is string => x != null);
+  if (ratiosMissing.length > 0) {
+    blockers.push({
+      code: "RATIOS_MISSING",
+      message: `${ratiosMissing.join(", ")} not present in this file.`,
+      domains: ["reflexIntegrity"],
+    });
+  }
+  if (patterns) {
+    const unassessable = unassessablePatterns(patterns);
+    if (unassessable.length > 0) {
+      blockers.push({
+        code: "PATTERNS_UNASSESSABLE",
+        message:
+          `${unassessable.length} clinical pattern(s) could not be assessed on this recording ` +
+          `(${unassessable.join(", ")}), so the absence of an abnormality cannot be asserted.`,
+        domains: ["patterns"],
+      });
+    }
+  }
+  const scorability = scorabilityFrom(blockers, unavailableWeight, missingDomains);
+
+  const final = scorability.scorable ? provisionalFinal : null;
 
   // ---- Top drivers across all sub-scores + patterns (for the hover tooltip) ----
   const allDrivers = [
@@ -1035,46 +1389,74 @@ function computeWellness(
   const topNegativeDrivers = [...allDrivers].filter(d => d.points < 0).sort((a, b) => a.points - b.points).slice(0, 3);
 
   // ---- Headline ----
-  const headline = buildHeadline(final, patterns, topNegativeDrivers, topPositiveDrivers);
+  const headline = buildHeadline(final, patterns, topNegativeDrivers, topPositiveDrivers, scorability);
 
-  // Effective weight of a sub-score = its nominal weight renormalized over the
-  // available set (0 when the sub-score itself is unavailable).
+  // Effective weight of a sub-score = its NOMINAL weight share. Unavailable
+  // sub-scores have weight 0 and that weight is NOT given to anyone else.
   const effW = (nominal: number, available: boolean) =>
-    available ? Math.round((nominal / availWeightSum) * 1000) / 1000 : 0;
-  const subScore = (score: number, nominal: number, available: boolean, drivers: WellnessDriver[]): SubScore => {
+    available ? Math.round((nominal / nominalWeightSum) * 1000) / 1000 : 0;
+  const subScore = (
+    score: number | null,
+    nominal: number,
+    available: boolean,
+    drivers: WellnessDriver[],
+    missing: string[],
+  ): SubScore => {
     const w = effW(nominal, available);
     return {
       score,
       weight: w,
-      contribution: Math.round(score * w * 10) / 10,
+      contribution: Math.round((score ?? 0) * w * 10) / 10,
       drivers: drivers.slice().sort((a, b) => Math.abs(b.points) - Math.abs(a.points)),
-      notes: available ? drivers.map((d) => `${d.label}: ${d.value}`) : ["Not assessed — requires vendor spectral data"],
+      notes: available
+        ? [
+            ...drivers.map((d) => `${d.label}: ${d.value}`),
+            ...(missing.length ? [`Not assessed: ${missing.join(", ")}`] : []),
+          ]
+        : [`Not assessed — ${missing.join(", ") || "required inputs unavailable"}`],
       available,
     };
   };
 
   return {
-    baselineAutonomic:    subScore(s1, W.baseline, c1.available, s1Drivers),
-    sympathovagalBalance: subScore(s2, W.sb,       c2.available, s2Drivers),
-    reflexIntegrity:      subScore(s3, W.reflex,   c3.available, s3Drivers),
-    orthostaticResponse:  subScore(s4, W.ortho,    c4.available, s4Drivers),
-    hrvReserve:           subScore(s5, W.hrv,      true,         s5Drivers),
+    baselineAutonomic:    subScore(s1, W.baseline, c1.available, s1Drivers, c1.missing),
+    sympathovagalBalance: subScore(s2, W.sb,       c2.available, s2Drivers, c2.missing),
+    reflexIntegrity:      subScore(s3, W.reflex,   c3.available, s3Drivers, c3.missing),
+    orthostaticResponse:  subScore(s4, W.ortho,    c4.available, s4Drivers, c4.missing),
+    hrvReserve:           subScore(s5, W.hrv,      hrvAssessable, s5Drivers,
+                                   hrvAssessable ? [] : ["Heart-rhythm variability unreliable on this recording"]),
     patternPenalty:       { total: Math.round(patternPenaltyTotal * 10) / 10, items: patternDrivers },
     ageMultiplier: ageMul,
-    rawTotal, ageAdjusted, final,
+    rawTotal: scorability.scorable ? rawTotal : null,
+    ageAdjusted: scorability.scorable ? ageAdjusted : null,
+    final,
     topPositiveDrivers, topNegativeDrivers, headline,
+    scorability,
   };
 }
 
+
 function buildHeadline(
-  final: number,
+  final: number | null,
   patterns: DysfunctionPatterns | undefined,
   topNeg: WellnessDriver[],
   topPos: WellnessDriver[],
+  scorability: Scorability,
 ): string {
-  if (final >= 90) return `Strong autonomic function across all tests — no abnormal patterns detected.`;
+  // NOT SCORABLE: no reassurance, no number, no "no abnormal patterns". This is
+  // the headline that replaced "Strong autonomic function across all tests — no
+  // abnormal patterns detected" on a recording where the vendor clinician
+  // documented Advanced Autonomic Dysfunction.
+  if (final == null || !scorability.scorable) return scorability.notice;
+  // Even when a number exists, the "no abnormal patterns" claim requires that
+  // EVERY pattern was actually assessed and found absent.
+  if (final >= 90) {
+    return patterns && mayClaimNoAbnormalPatterns(patterns)
+      ? `Strong autonomic function across all tests — no abnormal patterns detected.`
+      : `Strong results on the measures that were assessed. Some patterns could not be assessed on this recording — see the not-assessed list below.`;
+  }
   if (final >= 78) {
-    const mildPatterns = patterns && Object.values(patterns).some(Boolean)
+    const mildPatterns = patterns && presentPatterns(patterns).length > 0
       ? ` (one or two borderline findings noted below)`
       : "";
     return `Resilient autonomic function with good reflex integrity${mildPatterns}.`;
@@ -1088,7 +1470,26 @@ function buildHeadline(
   return `Severely impaired autonomic function — multiple systems affected. Escalate to clinician review.`;
 }
 
-function tierFromScore(score: number): ANSReport["wellnessTier"] {
+/**
+ * Canonical stand-delta. ONE definition, shared by the report, the parse payload
+ * and the diagnostic summary, so the same response can no longer report both
+ * "Δ+9 bpm" and "ΔHR = 8 bpm" for the same recording. Baseline is the resting
+ * Baseline-A window (not a pool of A+C+E). Returns null when either rate is
+ * unknown — never 0.
+ */
+export function standDeltaBpm(
+  baselineHr: number | null | undefined,
+  standHr: number | null | undefined,
+): number | null {
+  if (baselineHr == null || standHr == null) return null;
+  if (!Number.isFinite(baselineHr) || !Number.isFinite(standHr)) return null;
+  if (baselineHr <= 0 || standHr <= 0) return null;
+  return Math.round(standHr - baselineHr);
+}
+
+function tierFromScore(score: number | null): ANSReport["wellnessTier"] {
+  // No score → no tier. A tier is an interpretation, not a placeholder.
+  if (score == null) return null;
   if (score >= 90) return "Optimal";
   if (score >= 78) return "Resilient";
   if (score >= 65) return "Balanced";
@@ -1140,7 +1541,7 @@ function computeBodyImpact(
   out.push({ system: "cardiovascular", impact: Math.max(-100, cv), assessed: cvSupported,
     label: cv < -30 ? "Significantly Affected" : cv < -10 ? "Mildly Affected" : "Stable",
     description: cv <= -10
-      ? (patterns.bradycardia ? `Resting heart rate is low (${phases[0].meanHR} bpm), which can contribute to fatigue and cold extremities.` : "Heart-rate response to the protocol was outside the expected range on this test.")
+      ? (patterns.bradycardia === true && phases[0].meanHR != null ? `Resting heart rate is low (${phases[0].meanHR} bpm), which can contribute to fatigue and cold extremities.` : "Heart-rate response to the protocol was outside the expected range on this test.")
       : "Heart-rate regulation is within functional range on the measures available (resting and standing heart rate)." });
 
   // --- Respiratory: FRF is a proprietary [P] measure — only when spectral. ----
@@ -1225,11 +1626,21 @@ function computeBodyImpact(
 
   // --- Immune (HRV/SDNN proxy): SDNN is ECG-derived (consensus tier) — always
   //     supported. --------------------------------------------------------------
-  const avgSDNN = phases.reduce((s, p) => s + p.HRV_SDNN, 0) / phases.length;
+  // Only phases whose beat series passed the artifact/plausibility gate count.
+  // When none did, this domain is NOT ASSESSED — the previous code averaged
+  // artifact-inflated values and used them to justify an "immune: Stable" claim.
+  const reliableVars = phases
+    .map((p) => p.hrvOverallVariabilityMs)
+    .filter((v): v is number => v != null);
+  if (reliableVars.length === 0) {
+    out.push(notAssessed("immune", "beat-to-beat heart-rhythm variability, which was not measurable on this recording"));
+    return out;
+  }
+  const avgSDNN = reliableVars.reduce((s, v) => s + v, 0) / reliableVars.length;
   let imm = 0;
   if (avgSDNN < 30) imm -= 25;
   else if (avgSDNN < 45) imm -= 10;
-  if (spectralAvailable && patterns.advancedAutonomicDysfunction) imm -= 15;
+  if (spectralAvailable && patterns.advancedAutonomicDysfunction === true) imm -= 15;
   out.push({ system: "immune", impact: imm, assessed: true,
     label: imm < -15 ? "Affected" : imm < 0 ? "Mildly Affected" : "Stable",
     // Patient-facing copy: plain language only, no HRV-specific parameter name
@@ -1345,7 +1756,7 @@ function buildCouplingWindow(
   samplingRate: number,
   phaseStartSec: number,
   phaseEndSec: number,
-  testStartClockSec: number,
+  testStartClockSec: number | null,
   windowSec: number,
   annotations: string[]
 ): CardioRespiratoryWindow {
@@ -1368,31 +1779,60 @@ function buildCouplingWindow(
   const hrRel: TimeSeries = { t: hr.t.map(x => x - startSec), v: hr.v };
   const brRel: TimeSeries = { t: breathing.t.map(x => x - startSec), v: breathing.v };
 
-  const startClock = secondsToClock(testStartClockSec + startSec);
-  const endClock = secondsToClock(testStartClockSec + endSec);
+  // Wall clocks are emitted ONLY from a real parsed time-of-day and only when
+  // the result is a valid < 24 h clock. Otherwise both are null and the UI uses
+  // the relative offsets. See `deriveStudyClockStartSec` for the "30:20:36" bug.
+  const startClock = secondsToClock(testStartClockSec, startSec);
+  const endClock = secondsToClock(testStartClockSec, endSec);
 
-  return { phase: phaseName, label, startClock, endClock, hr: hrRel, breathing: brRel, annotations };
+  return {
+    phase: phaseName, label,
+    startClock, endClock,
+    startOffsetSec: Math.round(startSec * 10) / 10,
+    endOffsetSec: Math.round(endSec * 10) / 10,
+    clockSource: startClock != null && endClock != null ? "file_timestamp" : "relative_only",
+    hr: hrRel, breathing: brRel, annotations,
+  };
 }
 
-function secondsToClock(totalSec: number): string {
+/**
+ * Format a wall clock, or return null when no valid clock can be produced.
+ *
+ * HARD INVARIANT: never emits an hour > 23. The previous implementation had no
+ * such guard, so a bogus start-of-recording seed produced "30:20:36" etc. on
+ * every coupling window while the file itself carried real 10:17:37 AM stamps.
+ */
+export function secondsToClock(
+  startClockSec: number | null | undefined,
+  offsetSec: number,
+): string | null {
+  if (startClockSec == null || !Number.isFinite(startClockSec)) return null;
+  if (startClockSec < 0 || startClockSec >= 24 * 3600) return null;
+  if (!Number.isFinite(offsetSec) || offsetSec < 0) return null;
+  const totalSec = Math.floor(startClockSec + offsetSec);
+  // A recording that runs past midnight would need a date to be meaningful; we
+  // decline to guess rather than print a > 23 h clock.
+  if (totalSec >= 24 * 3600) return null;
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = Math.floor(totalSec % 60);
+  if (h > 23) return null;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function parseTestStartClockSec(data: ParsedANSData): number {
-  // testDate often looks like "9/26/2025" — time isn't in the string. We pick
-  // 13:08:00 as the test-start baseline (matches Jill Shah PDF) unless a
-  // parseable time is embedded in testNotes. This is just for displaying
-  // clock labels on the coupling windows.
-  const m = (data.testNotes || "").match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (m) {
-    const h = parseInt(m[1], 10), min = parseInt(m[2], 10), s = parseInt(m[3] || "0", 10);
-    return h * 3600 + min * 60 + s;
-  }
-  // Default: 13:08:00
-  return 13 * 3600 + 8 * 60;
+/**
+ * Recording-start wall clock in seconds past midnight, or null.
+ *
+ * NO FABRICATED DEFAULT. The old version fell back to a hardcoded 13:08:00 and,
+ * worse, ran a loose `(\d{1,2}):(\d{2})` regex over the raw ASCII head which
+ * matched the literal "30:15" of the **30:15 Ratio** label — hour 30 — and
+ * emitted "30:20:36" / "30:25:27" as wall-clock times. The strict derivation
+ * lives in `deriveStudyClockStartSec` (api/_ans/legacyAdapter.ts) and is
+ * computed once at parse time; when it yields nothing we show relative time.
+ */
+function parseTestStartClockSec(data: ParsedANSData): number | null {
+  if (data.studyClockStartSec !== undefined) return data.studyClockStartSec;
+  return deriveStudyClockStartSec(data.testNotes);
 }
 
 // Returns true iff the raw ECG samples contain real signal (not all-zero / constant).
@@ -1488,10 +1928,15 @@ function computeMultiParameterGraphical(
   // otherwise they read "Not assessed" rather than a fabricated 0.00.
   const testClock = parseTestStartClockSec(data);
   const couplingSpecs: Array<{ phase: CardioRespiratoryWindow["phase"]; label: string; idx: number; win: number; annots: () => string[] }> = [
-    { phase: "Baseline", label: "Baseline (1 min)", idx: 2, win: 60, annots: () => [`RFA = ${A.RFa == null ? "Not assessed" : A.RFa.toFixed(2)}`, `LFA/RFA = ${A.SB == null ? "Not assessed" : A.SB.toFixed(2)}`] },
-    { phase: "DeepBreathing", label: "Deep Breathing (1 min)", idx: 1, win: 60, annots: () => [`E/I Ratio = ${data.eiRatio.toFixed(2)}`, `ref (1.2 - 1.6)`] },
-    { phase: "Valsalva", label: "Valsalva (1 min)", idx: 3, win: 60, annots: () => [`Valsalva Ratio = ${data.valsalvaRatio.toFixed(2)}`, `ref (1.2 - 1.6)`] },
-    { phase: "Stand", label: "Stand (1 min)", idx: 5, win: 90, annots: () => [`30:15 Ratio = ${data.thirtyFifteenRatio.toFixed(2)}`, `ref (1.15 - 1.5)`] },
+    // Vendor P&S casing is normalized to `LFa` / `RFa` everywhere (the mixed
+    // `LFA`/`LFa` spelling risked a future regex confusing `LFA` with `LF`).
+    { phase: "Baseline", label: "Baseline (1 min)", idx: 2, win: 60, annots: () => [`RFa = ${A.RFa == null ? "Not assessed" : A.RFa.toFixed(2)}`, `LFa/RFa = ${A.SB == null ? "Not assessed" : A.SB.toFixed(2)}`] },
+    // Reference ranges come from the SINGLE authoritative age-specific table.
+    // The old hardcoded "ref (1.2 - 1.6)" / "ref (1.15 - 1.5)" annotations were
+    // a third, inconsistent normal-limit set for the same three ratios.
+    { phase: "DeepBreathing", label: "Deep Breathing (1 min)", idx: 1, win: 60, annots: () => [`E/I Ratio = ${data.eiRatio == null ? "Not assessed" : data.eiRatio.toFixed(2)}`, ratioReferenceLabel("eiRatio", data.age || null)] },
+    { phase: "Valsalva", label: "Valsalva (1 min)", idx: 3, win: 60, annots: () => [`Valsalva Ratio = ${data.valsalvaRatio == null ? "Not assessed" : data.valsalvaRatio.toFixed(2)}`, ratioReferenceLabel("valsalvaRatio", data.age || null)] },
+    { phase: "Stand", label: "Stand (1 min)", idx: 5, win: 90, annots: () => [`30:15 Ratio = ${data.thirtyFifteenRatio == null ? "Not assessed" : data.thirtyFifteenRatio.toFixed(2)}`, ratioReferenceLabel("thirtyFifteenRatio", data.age || null)] },
   ];
   const coupling: CardioRespiratoryWindow[] = couplingSpecs.map(spec => {
     const seg = segs[spec.idx];
@@ -1914,10 +2359,17 @@ export function generateColomboReport(
       (ph as unknown as { LFa: number | null }).LFa = null;
       (ph as unknown as { RFa: number | null }).RFa = null;
       (ph as unknown as { SB: number | null }).SB = null;
+      // FRF is a proprietary [P] framing and is gated with the other spectral
+      // measures. It is nulled HERE TOO so the top-level `respiratoryFrequency`
+      // and the per-phase values agree: the audit found the top level null while
+      // six per-phase FRF numbers were populated, i.e. the same payload both
+      // denied and asserted the measure.
+      (ph as unknown as { FRF: number | null }).FRF = null;
       if (ph.provenance) {
         ph.provenance.LFa = unavailableProvenance("LFa", "Proprietary spectral aggregate is not reproducible from the raw .ans; vendor value available only in the signed PDF.");
         ph.provenance.RFa = unavailableProvenance("RFa", "Proprietary spectral aggregate is not reproducible from the raw .ans; vendor value available only in the signed PDF.");
         ph.provenance.SB = unavailableProvenance("SB", "Sympathovagal balance depends on unavailable LFa/RFa.");
+        ph.provenance.FRF = unavailableProvenance("FRF", "Fundamental respiratory frequency is a proprietary [P] framing and is gated with the spectral aggregates; the raw-envelope estimate is not published as a measured value.");
       }
     }
   }
@@ -1935,22 +2387,27 @@ export function generateColomboReport(
   // or above the Colombo threshold is Normal. Using the two-sided `classify`
   // here was the S1-3 defect (values comfortably above threshold were flagged
   // "Borderline Low"). Thresholds come from the single source of truth.
-  const eiT = EWING_THRESHOLDS.eiRatio;
-  const valT = EWING_THRESHOLDS.valsalvaRatio;
-  const tfT = EWING_THRESHOLDS.thirtyFifteenRatio;
+  // Thresholds are resolved for THIS patient's age from the single authoritative
+  // age-specific ratio reference table. A null ratio yields a null
+  // classification — never a fabricated "Normal" and never a 0.00 "Low".
+  const ageOrNull = data.age > 0 ? data.age : null;
+  const eiT = ewingThresholdForAge("eiRatio", ageOrNull);
+  const valT = ewingThresholdForAge("valsalvaRatio", ageOrNull);
+  const tfT = ewingThresholdForAge("thirtyFifteenRatio", ageOrNull);
   const toClassification = (
-    value: number,
+    value: number | null,
     t: typeof eiT,
-  ): Classification => {
+  ): Classification | null => {
+    if (value == null) return null;
     const c = classifyEwing(value, t);
     return { label: c.label, severity: c.severity, value, lo: t.normalAbove, hi: Infinity };
   };
   const ratios = {
-    eiRatio: { value: data.eiRatio, normal: ewingNormalRangeLabel(eiT),
+    eiRatio: { value: data.eiRatio, normal: ratioReferenceLabel("eiRatio", ageOrNull),
       classification: toClassification(data.eiRatio, eiT) },
-    valsalvaRatio: { value: data.valsalvaRatio, normal: ewingNormalRangeLabel(valT),
+    valsalvaRatio: { value: data.valsalvaRatio, normal: ratioReferenceLabel("valsalvaRatio", ageOrNull),
       classification: toClassification(data.valsalvaRatio, valT) },
-    thirtyFifteenRatio: { value: data.thirtyFifteenRatio, normal: ewingNormalRangeLabel(tfT),
+    thirtyFifteenRatio: { value: data.thirtyFifteenRatio, normal: ratioReferenceLabel("thirtyFifteenRatio", ageOrNull),
       classification: toClassification(data.thirtyFifteenRatio, tfT) },
   };
 
@@ -1967,12 +2424,27 @@ export function generateColomboReport(
   // is within normal limits and must not be called bradycardia. Aligns with the
   // < 50 cutoff already used by the syncope-risk indications.
   const BRADYCARDIA_BPM = 50;
-  const bradycardia = A.meanHR > 0 && A.meanHR < BRADYCARDIA_BPM;
-  const hrDelta = F.meanHR - A.meanHR;
-  const POTS = A.meanHR > 0 && hrDelta >= 30;
+  // TRI-STATE from here down. `resolvePattern(assessable, predicate)` returns
+  // null when the inputs were never captured, so `false` always means "assessed
+  // and absent". An unusable ECG makes even the HR-derived patterns
+  // unassessable: the beat series that produced the rate is not trustworthy.
+  const ecgUsableForPatterns = data.ecgQuality ? data.ecgQuality.usable : true;
+  const restingHrAssessable = ecgUsableForPatterns && A.meanHR != null && A.meanHR > 0;
+  const standHrAssessable = ecgUsableForPatterns && F.meanHR != null && F.meanHR > 0;
+  const bradycardia = resolvePattern(
+    restingHrAssessable,
+    () => (A.meanHR as number) < BRADYCARDIA_BPM,
+  );
+  const hrDelta = restingHrAssessable && standHrAssessable
+    ? standDeltaBpm(A.meanHR, F.meanHR)
+    : null;
+  const POTS = resolvePattern(hrDelta != null, () => (hrDelta as number) >= 30);
   // FRF norm band is the single source of truth (Colombo 0.09–0.15 Hz). FRF is
   // a proprietary [P] framing — gate it on spectral availability too.
-  const highFRF = spectralAvailable && B.FRF > COLOMBO_NORMS.FRF.hi;
+  const highFRF = resolvePattern(
+    spectralAvailable && B.FRF != null,
+    () => (B.FRF as number) > COLOMBO_NORMS.FRF.hi,
+  );
 
   // --- SPECTRAL-GATED patterns ------------------------------------------------
   // Every pattern below depends on LFa/RFa/SB. When spectral is unavailable they
@@ -1989,29 +2461,73 @@ export function generateColomboReport(
   const sfRFa = (p: PhaseMetrics): number | null => (standSpectralAvailable ? (p.RFa as number) : null);
   const F_RFa = sfRFa(F), F_LFa = sfLFa(F);
 
-  const parasympatheticDominance = A_SB != null && A_SB > 0 && A_SB < SB_n.lo;
+  // ==========================================================================
+  // TRI-STATE PATTERN RESOLUTION
+  // ==========================================================================
+  // THE FIX AT THE HEART OF THIS REPAIR. Previously every expression below was a
+  // plain boolean: with LFa/RFa/SB unavailable they all evaluated to `false`, and
+  // the report published "sympatheticExcess: false", "preSyncopeRisk: false",
+  // "advancedAutonomicDysfunction: false" for domains the SAME payload declared
+  // unassessable. On the Alex Pare recording the vendor clinician documented
+  // Sympathetic Excess, pre-clinical syncope risk and Advanced Autonomic
+  // Dysfunction — so those `false` values were affirmative false negatives.
+  //
+  // Each pattern now carries its own assessability precondition and resolves to
+  // `null` when the inputs were never captured. Missing proprietary vendor
+  // LFa/RFa/SB data is NEVER interpreted as normal or absent.
+  const parasympatheticDominance = resolvePattern(
+    A_SB != null && A_SB > 0,
+    () => (A_SB as number) < SB_n.lo,
+  );
   const dbRFaLow = B_RFa != null && B_RFa < 19; // Jill's PDF DB norm 19.97-70.79
-  const standRFaHigh =
-    F_RFa != null && A_RFa != null &&
-    (F_RFa > RFa_n.hi * 0.8 || F_RFa > A_RFa * 1.2);
-  const parasympatheticExcess = standRFaHigh;
-  const parasympatheticWithdrawal = A_RFa != null && A_RFa < RFa_n.lo;
-  const sympatheticExcess = F_LFa != null && F_LFa > LFa_n.hi;
-  const sympatheticWithdrawal = F_LFa != null && A_LFa != null && F_LFa < A_LFa * 0.9;
-  const maskedSW = parasympatheticExcess && sympatheticWithdrawal;
-  const preSyncopeRisk =
-    D_LFa != null && F_LFa != null && F_LFa > D_LFa * 0.9; // stand peak ≈ valsalva
+  const parasympatheticExcess = resolvePattern(
+    F_RFa != null && A_RFa != null,
+    () => (F_RFa as number) > RFa_n.hi * 0.8 || (F_RFa as number) > (A_RFa as number) * 1.2,
+  );
+  const parasympatheticWithdrawal = resolvePattern(
+    A_RFa != null,
+    () => (A_RFa as number) < RFa_n.lo,
+  );
+  const sympatheticExcess = resolvePattern(
+    F_LFa != null,
+    () => (F_LFa as number) > LFa_n.hi,
+  );
+  const sympatheticWithdrawal = resolvePattern(
+    F_LFa != null && A_LFa != null,
+    () => (F_LFa as number) < (A_LFa as number) * 0.9,
+  );
+  // A composite pattern is only assessable when BOTH of its inputs were.
+  const maskedSW = resolvePattern(
+    parasympatheticExcess !== null && sympatheticWithdrawal !== null,
+    () => parasympatheticExcess === true && sympatheticWithdrawal === true,
+  );
+  const preSyncopeRisk = resolvePattern(
+    D_LFa != null && F_LFa != null,
+    () => (F_LFa as number) > (D_LFa as number) * 0.9, // stand peak ≈ valsalva
+  );
   // Orthostatic hypotension requires real BASELINE AND STANDING cuff BP, and a
-  // genuine drop between them. The prior formula compared baseline to a default
-  // (120) and never used standing BP, so it could both mis-fire and fire without
-  // any standing measurement. Now: assessable only when both arms are present.
-  const orthostaticHypotension =
-    orthostaticBpAssessable &&
-    (((A.SBP as number) - (F.SBP as number)) >= 20 ||
-      ((A.DBP as number) - (F.DBP as number)) >= 10);
-  const vasovagalRisk = F_RFa != null && F_LFa != null && F_RFa > F_LFa;
-  const advancedAutonomicDysfunction = parasympatheticWithdrawal && sympatheticWithdrawal;
-  const CAN = advancedAutonomicDysfunction && ratios.eiRatio.classification.severity === "Abnormal";
+  // genuine drop between them. Without both arms it is NOT ASSESSABLE (null) —
+  // it used to be reported as `false`, i.e. "no orthostatic hypotension".
+  const orthostaticHypotension = resolvePattern(
+    orthostaticBpAssessable,
+    () =>
+      ((A.SBP as number) - (F.SBP as number)) >= 20 ||
+      ((A.DBP as number) - (F.DBP as number)) >= 10,
+  );
+  const vasovagalRisk = resolvePattern(
+    F_RFa != null && F_LFa != null,
+    () => (F_RFa as number) > (F_LFa as number),
+  );
+  const advancedAutonomicDysfunction = resolvePattern(
+    parasympatheticWithdrawal !== null && sympatheticWithdrawal !== null,
+    () => parasympatheticWithdrawal === true && sympatheticWithdrawal === true,
+  );
+  const CAN = resolvePattern(
+    advancedAutonomicDysfunction !== null && ratios.eiRatio.classification !== null,
+    () =>
+      advancedAutonomicDysfunction === true &&
+      ratios.eiRatio.classification?.severity === "Abnormal",
+  );
 
   const patterns: DysfunctionPatterns = {
     parasympatheticDominance, parasympatheticExcess, parasympatheticWithdrawal,
@@ -2073,7 +2589,7 @@ export function generateColomboReport(
   const valsalvaSpectralAssessed = lfaD != null || rfaD != null;
   if (spectralAvailable && (dbSpectralAssessed || valsalvaSpectralAssessed || highFRF)) {
     if (highFRF) {
-      dbFindings.push(`NOTE: Fundamental Respiratory Frequency (FRF) is high during DB (${B.FRF.toFixed(2)} Hz; Normal: 0.09–0.15) which may artificially reduce the parasympathetic measure. High FRF may be associated with upper respiratory or pulmonary disorder and anxiety. Consider treating the patient and retesting to obtain the true interpretation for the DB phase.`);
+      dbFindings.push(`NOTE: Fundamental Respiratory Frequency (FRF) is high during DB (${(B.FRF as number).toFixed(2)} Hz; Normal: 0.09–0.15) which may artificially reduce the parasympathetic measure. High FRF may be associated with upper respiratory or pulmonary disorder and anxiety. Consider treating the patient and retesting to obtain the true interpretation for the DB phase.`);
     }
     if (dbSpectralAssessed) {
       if (dbRFaLow) dbFindings.push("Low parasympathetic response (RFa) to DB suggesting possible autonomic dysfunction");
@@ -2095,11 +2611,16 @@ export function generateColomboReport(
   {
     const ei = ratios.eiRatio;
     const val = ratios.valsalvaRatio;
+    // A null ratio is reported as NOT PRESENT — never as a normal finding.
     dbFindings.push(
-      `${ei.classification.severity === "Normal" ? "Normal" : ei.classification.label} E/I ratio (deep-breathing cardiovagal response) = ${ei.value.toFixed(2)} (normal ${ei.normal})`,
+      ei.value == null || ei.classification == null
+        ? "E/I ratio not present in this file — deep-breathing cardiovagal response not assessed."
+        : `${ei.classification.severity === "Normal" ? "Normal" : ei.classification.label} E/I ratio (deep-breathing cardiovagal response) = ${ei.value.toFixed(2)} (${ei.normal})`,
     );
     dbFindings.push(
-      `${val.classification.severity === "Normal" ? "Normal" : val.classification.label} Valsalva ratio (cardiovagal response) = ${val.value.toFixed(2)} (normal ${val.normal})`,
+      val.value == null || val.classification == null
+        ? "Valsalva ratio not present in this file — Valsalva cardiovagal response not assessed."
+        : `${val.classification.severity === "Normal" ? "Normal" : val.classification.label} Valsalva ratio (cardiovagal response) = ${val.value.toFixed(2)} (${val.normal})`,
     );
   }
   phaseFindings.push({ phase: "DEEP BREATHING (DB) AND VALSALVA RESPONSES", indication: "Detection of early signs of autonomic dysfunction and chronic disease", findings: dbFindings });
@@ -2126,7 +2647,11 @@ export function generateColomboReport(
   // that evidence we report the measured delta as a neutral OBSERVATION and say
   // the orthostatic adequacy is not assessed — never assert "Insufficient".
   // POTS (>=30 bpm rise) is a validated HR-ONLY criterion and is retained.
-  if (POTS) {
+  if (hrDelta == null) {
+    standFindings.push(
+      "Heart-rate change on standing not assessed — a usable resting and standing beat series was not available on this recording.",
+    );
+  } else if (POTS === true) {
     standFindings.push(`Excessive HR rise of ${hrDelta} bpm on standing — meets the POTS heart-rate criterion (≥30 bpm); correlate with symptoms and standing BP.`);
   } else if (orthostaticBpAssessable) {
     // Standing BP is available (paired vendor/measured) → an adequacy verdict is supported.
@@ -2171,12 +2696,12 @@ export function generateColomboReport(
     // supported observations — never an autonomic-dysfunction grading that
     // depends on spectral challenge responses.
     const abnormalRatios: string[] = [];
-    if (ratios.eiRatio.classification.severity === "Abnormal") abnormalRatios.push("E/I ratio");
-    if (ratios.valsalvaRatio.classification.severity === "Abnormal") abnormalRatios.push("Valsalva ratio");
-    if (ratios.thirtyFifteenRatio.classification.severity === "Abnormal") abnormalRatios.push("30:15 ratio");
-    const hrNote = POTS
+    if (ratios.eiRatio.classification?.severity === "Abnormal") abnormalRatios.push("E/I ratio");
+    if (ratios.valsalvaRatio.classification?.severity === "Abnormal") abnormalRatios.push("Valsalva ratio");
+    if (ratios.thirtyFifteenRatio.classification?.severity === "Abnormal") abnormalRatios.push("30:15 ratio");
+    const hrNote = POTS === true
       ? ` Heart-rate rise on standing (${hrDelta} bpm) meets the POTS threshold and warrants clinician review.`
-      : bradycardia
+      : bradycardia === true
         ? ` Resting heart rate is low (${A.meanHR} bpm).`
         : "";
     overall = abnormalRatios.length === 0
@@ -2306,7 +2831,10 @@ export function generateColomboReport(
   // composite index stays stable; it is an internal reserve score, not a
   // spectral clinical claim. All spectral CLAIMS remain gated above.
   const breakdown = computeWellness(data, phaseEventsRaw, patterns);
-  const score = Math.round(breakdown.final);
+  // NO SCORE when the composite is not scorable. `Math.round(null)` used to be
+  // impossible to reach because `final` was always a number; now the absence is
+  // explicit and propagates to wellnessScore / wellnessTier as null.
+  const score = breakdown.final == null ? null : Math.round(breakdown.final);
   const tier = tierFromScore(score);
 
   let riskLevel = spectralAvailable ? "Normal" : "Not assessed — spectral/BP data unavailable";
@@ -2361,10 +2889,10 @@ export function generateColomboReport(
       };
 
   const clinicalFlags: string[] = [];
-  if (highFRF) clinicalFlags.push(`High FRF during DB (${B.FRF.toFixed(2)} Hz) — recommend retest with relaxed breathing`);
+  if (highFRF === true && B.FRF != null) clinicalFlags.push(`High FRF during DB (${B.FRF.toFixed(2)} Hz) — recommend retest with relaxed breathing`);
   if (data.ectopicBeats > 0) clinicalFlags.push(`${data.ectopicBeats} possible ectopic beat(s) detected`);
-  if (bradycardia) clinicalFlags.push(`Bradycardia: resting HR ${A.meanHR} bpm`);
-  if (parasympatheticDominance) clinicalFlags.push(`Parasympathetic dominance: SB = ${A.SB}`);
+  if (bradycardia === true) clinicalFlags.push(`Bradycardia: resting HR ${A.meanHR} bpm`);
+  if (parasympatheticDominance === true) clinicalFlags.push(`Parasympathetic dominance: SB = ${A.SB}`);
   if (!spectralAvailable) clinicalFlags.push("Spectral measures (LFa/RFa/SB) and continuous BP not assessed — not reproducible from this recording; clinician review of the vendor report required.");
 
   // --- Watch items — ONLY from abnormal MEASURED/verified fields --------------
@@ -2380,7 +2908,7 @@ export function generateColomboReport(
     if (lfaAbnormal) monitorParameters.push("Sympathetic modulation (LFa) trending toward the normal range");
     if (sbAbnormal) monitorParameters.push("Sympathovagal balance (SB) trending toward the normal range (0.4–3.0)");
     // FRF only when it was actually READ and is out of range (never when unread).
-    if (highFRF && B.FRF != null && B.FRF > 0) {
+    if (highFRF === true && B.FRF != null && B.FRF > 0) {
       monitorParameters.push(`FRF during deep breathing (currently ${B.FRF.toFixed(2)} Hz; normal ${COLOMBO_NORMS.FRF.lo}–${COLOMBO_NORMS.FRF.hi} Hz)`);
     }
   }
@@ -2442,8 +2970,25 @@ export function generateColomboReport(
     samplingRate,
     spectralAvailable,
     bpAvailable,
-    respiratoryFrequency: spectralAvailable ? A.FRF : null,
-    rPeakCount: phaseEvents.reduce((n, p) => n + Math.round(p.meanHR * p.durationSec / 60), 0),
+    // CONSISTENT with the per-phase values (previously null here while six
+    // per-phase FRF numbers were populated) and explicitly marked ESTIMATED, so
+    // no surface can present it as a measured fact.
+    respiratoryFrequency: A.FRF,
+    respiratory: {
+      frequencyHz: A.FRF,
+      validation: A.FRF == null ? "unavailable" : "estimated",
+      note:
+        A.FRF == null
+          ? "Respiratory frequency could not be estimated from this recording."
+          : "Estimated from the R-peak amplitude envelope (ECG-derived respiration). This is an " +
+            "estimate, not a validated spirometric or vendor-reported measurement, and matches the " +
+            "per-phase FRF values in phaseEvents.",
+    },
+    ecgQuality: data.ecgQuality,
+    rPeakCount: phaseEvents.reduce(
+      (n, p) => n + (p.meanHR == null ? 0 : Math.round(p.meanHR * p.durationSec / 60)),
+      0,
+    ),
     generatedAt: new Date().toISOString(),
     multiParameter,
     indications,
@@ -2536,6 +3081,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           DBP: pick(parsed.DBP),
         };
         const hasAnyMetric = Object.values(candidate).some((v) => v !== undefined);
+        const numericTotal = Object.keys(candidate).length;
+        const numericRead = Object.values(candidate).filter((v) => v !== undefined).length;
+        // Vendor documents supplied for cross-document conflict detection. The
+        // caller may pass their extracted text; we never fetch or guess.
+        const vendorDocs: VendorDocumentText[] = Array.isArray(parsed.documents)
+          ? (parsed.documents as unknown[])
+              .map((d) => d as { source?: unknown; text?: unknown })
+              .filter((d) => typeof d.text === "string")
+              .map((d) => ({
+                source: typeof d.source === "string" ? d.source : "vendor document",
+                text: d.text as string,
+              }))
+          : [];
+        const vendorConflicts = detectVendorConflicts(vendorDocs);
+        if (!hasAnyMetric) {
+          // ATTACHED BUT NUMERICALLY UNREADABLE. This is NOT the same as "no
+          // vendor PDF" and must not be reported as a low-confidence match.
+          vendorReconciliation = {
+            status: "unreadable_numerics",
+            numericFields: { read: 0, total: numericTotal },
+            conflicts: vendorConflicts.length ? vendorConflicts : undefined,
+            reason:
+              "A vendor payload was attached but no numeric field could be read from it. " +
+              "Nothing was inferred; the report reflects the uploaded .ans only.",
+          };
+          vendorWarnings.push(
+            `0 of ${numericTotal} numeric vendor fields could be read — vendor values were not applied.`,
+          );
+        }
         if (hasAnyMetric) {
           // Identity may be nested (`identity`) or flat on the payload.
           const idIn = parsed.identity ?? {
@@ -2559,14 +3133,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (recon.ok) {
             vendorMetrics = candidate;
             vendorReconciliation = {
-              status: "matched",
+              // A cross-document disagreement is its own state: the clinician
+              // must see both vendor recommendations rather than have one
+              // silently chosen (the audit's 3-vs-6-month retest defect).
+              status: vendorConflicts.length > 0 ? "conflicting_recommendations" : "matched",
               matchedName: `${patientData.firstName} ${patientData.lastName}`.trim(),
               matchedDate: patientData.testDate,
               checks: recon.checks,
+              numericFields: { read: numericRead, total: numericTotal },
+              conflicts: vendorConflicts.length ? vendorConflicts : undefined,
             };
+            if (vendorConflicts.length > 0) {
+              for (const c of vendorConflicts) vendorWarnings.push(c.message);
+            }
           } else {
             vendorWarnings.push(recon.reason ?? "Vendor report identity could not be reconciled with the uploaded .ans; vendor values were not applied.");
-            vendorReconciliation = { status: "mismatch", checks: recon.checks, reason: recon.reason };
+            vendorReconciliation = {
+              status: "mismatch",
+              checks: recon.checks,
+              reason: recon.reason,
+              numericFields: { read: numericRead, total: numericTotal },
+              conflicts: vendorConflicts.length ? vendorConflicts : undefined,
+            };
             console.warn("[upload] vendor identity reconciliation FAILED:", recon.reason);
           }
         }
@@ -2582,6 +3170,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (vendorReconciliation) {
       (report as { vendorReconciliation?: typeof vendorReconciliation }).vendorReconciliation = vendorReconciliation;
+    } else {
+      // NO VENDOR PDF is an explicit state, not the absence of information: the
+      // UI must be able to distinguish it from "attached but unreadable".
+      (report as { vendorReconciliation?: VendorReconciliationStatus }).vendorReconciliation = {
+        status: "no_vendor_pdf",
+        reason:
+          "No vendor PDF was supplied with this upload, so no vendor-reported value was available " +
+          "to compare against. The proprietary spectral aggregates remain not assessed.",
+      };
     }
     // Send only a preview of the raw ECG to the client — the full waveform
     // stays server-side (we'd blow past the Vercel payload limit otherwise).

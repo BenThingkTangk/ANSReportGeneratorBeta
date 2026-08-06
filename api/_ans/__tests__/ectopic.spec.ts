@@ -59,7 +59,7 @@ function stubStudy(asciiHead: string): AnsStudy {
       device: prov<string>(null),
     },
     anthropometrics: { heightInches: prov<number>(null), weightLbs: prov<number>(null), bmi: prov<number>(null) },
-    ecg: { preview: [], durationSec: 0, quality: { snrDb: 0, motionFraction: 0, leadOff: false, usable: false, warnings: [] } },
+    ecg: { preview: [], durationSec: 0, quality: { snrDb: 0, motionFraction: 0, sentinelFraction: 0, leadOff: false, usable: false, unusableReasons: ["low_snr"], warnings: [] } },
     baseline: p(60),
     deepBreathing: p(60),
     valsalva: p(60),

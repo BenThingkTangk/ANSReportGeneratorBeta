@@ -13,6 +13,13 @@ import {
 import type { MultiParameterGraphical, CardioRespiratoryWindow } from "@shared/schema";
 import { ColomboExplainer } from "../ColomboExplainer";
 
+/** mm:ss from the start of the recording. */
+function fmtOffset(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s - m * 60).padStart(2, "0")}`;
+}
+
 /**
  * Cardio-Respiratory Coupling 2×2 grid — mirrors page 4 of the PhysioPS
  * graphical report. Each quadrant shows beat-to-beat HR (line) overlaid on
@@ -82,7 +89,14 @@ function CouplingTile({ window: w }: { window: CardioRespiratoryWindow }) {
         <div>
           <div className="text-[12px] font-semibold text-foreground/90">{w.label}</div>
           <div className="text-[10px] text-muted-foreground/80 tabular-nums">
-            {w.startClock} → {w.endClock}
+            {/* Wall clock only when the file carried a real time-of-day.
+                Otherwise RELATIVE time — never a fabricated (or impossible,
+                e.g. "30:20:36") wall clock. */}
+            {w.startClock && w.endClock
+              ? `${w.startClock} → ${w.endClock}`
+              : w.startOffsetSec != null && w.endOffsetSec != null
+                ? `+${fmtOffset(w.startOffsetSec)} → +${fmtOffset(w.endOffsetSec)} from start of recording`
+                : "time not recorded"}
           </div>
         </div>
         {w.annotations && w.annotations.length > 0 && (

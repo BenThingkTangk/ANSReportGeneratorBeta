@@ -77,7 +77,10 @@ const AGE_NORM_TABLES: Record<AgeNormParam, { age: number; lo: number; hi: numbe
   RFa:      [{ age: 20, lo: 0.8, hi: 10 }, { age: 40, lo: 0.5, hi: 10 }, { age: 65, lo: 0.3, hi: 10 }],
   LFa:      [{ age: 20, lo: 0.5, hi: 10 }, { age: 40, lo: 0.5, hi: 10 }, { age: 65, lo: 0.3, hi: 10 }],
   SB:       [{ age: 20, lo: 0.4, hi: 3.0 }, { age: 40, lo: 0.4, hi: 3.0 }, { age: 65, lo: 0.4, hi: 3.0 }],
-  // Ewing ratios — Agelink Table 2
+  // Ewing ratios — PLACEHOLDERS ONLY. `ageContinuousNorm` intercepts these
+  // three keys and reads AGE_RATIO_REFERENCE (the single authoritative
+  // age-specific ratio table) instead, so the scoring curve and the displayed
+  // reference range can never disagree. Kept for shape/back-compat.
   EI:       [{ age: 20, lo: 1.15, hi: 1.60 }, { age: 40, lo: 1.10, hi: 1.40 }, { age: 60, lo: 1.05, hi: 1.30 }],
   Valsalva: [{ age: 20, lo: 1.30, hi: 1.80 }, { age: 40, lo: 1.20, hi: 1.60 }, { age: 60, lo: 1.15, hi: 1.50 }],
   ThirtyFifteen: [{ age: 20, lo: 1.15, hi: 1.50 }, { age: 40, lo: 1.10, hi: 1.40 }, { age: 60, lo: 1.05, hi: 1.30 }],
@@ -85,11 +88,26 @@ const AGE_NORM_TABLES: Record<AgeNormParam, { age: number; lo: number; hi: numbe
   DB_rangeHR: [{ age: 20, lo: 19, hi: 50 }, { age: 40, lo: 15, hi: 50 }, { age: 60, lo: 10, hi: 40 }],
 };
 
+/** Maps the scoring parameter name onto the authoritative ratio table key. */
+const RATIO_KEY_FOR_NORM_PARAM: Partial<Record<AgeNormParam, EwingRatioKey>> = {
+  EI: "eiRatio",
+  Valsalva: "valsalvaRatio",
+  ThirtyFifteen: "thirtyFifteenRatio",
+};
+
 /**
  * Age-continuous P10/P90 normal range for a scoring parameter, linearly
  * interpolated between anchor ages. Returns { lo, hi }.
  */
 export function ageContinuousNorm(param: AgeNormParam | string, age: number): { lo: number; hi: number } {
+  // The three cardiovagal ratios resolve through the SINGLE authoritative
+  // age-specific reference table (AGE_RATIO_REFERENCE) — never through a second
+  // interpolated curve. See the block comment on AGE_RATIO_REFERENCE.
+  const ratioKey = RATIO_KEY_FOR_NORM_PARAM[param as AgeNormParam];
+  if (ratioKey) {
+    const b = ratioBandForAge(ratioKey, age);
+    return { lo: b.normalAtOrAbove, hi: b.typicalUpper };
+  }
   const tbl = AGE_NORM_TABLES[param as AgeNormParam];
   if (!tbl) return { lo: 0, hi: 1 };
   if (age <= tbl[0].age) return { lo: tbl[0].lo, hi: tbl[0].hi };
@@ -112,6 +130,149 @@ export function ageContinuousNorm(param: AgeNormParam | string, age: number): { 
 
 export type EwingRatioKey = "eiRatio" | "valsalvaRatio" | "thirtyFifteenRatio";
 
+// ===========================================================================
+// AGE-SPECIFIC RATIO REFERENCE — THE SINGLE AUTHORITATIVE TABLE
+// ===========================================================================
+//
+// WHY THIS EXISTS
+// ---------------
+// Three mutually inconsistent normal-limit sets for the same three ratios used
+// to coexist in one report (the age-independent vendor floor used by
+// `report.ratios`, a hardcoded chart annotation "ref (1.2 - 1.6)", and the
+// age-banded table that lived privately in `api/_ans/thresholds.ts`). Under one
+// set E/I 1.22 was comfortably normal; under the chart annotation it was barely
+// inside range. Classification stability could not be asserted.
+//
+// THIS TABLE IS NOW THE ONLY SOURCE. Backend classification, the diagnostic
+// severity scorer, every clinician panel and every chart annotation read it.
+// `api/_ans/thresholds.ts` derives its default cardiovagal bands from here.
+//
+// PROVENANCE (traceable, not fabricated)
+// --------------------------------------
+//   • Age-banded decline of the cardiovagal ratios: Ewing/Low autonomic-reflex
+//     screening convention, as already documented in `api/_ans/thresholds.ts`
+//     ("starting points commonly cited in autonomic literature (Ewing, Low)").
+//     These are CONFIGURABLE lab parameters, not immutable medical facts.
+//   • `typicalUpper` is the upper end of the typical/expected range used for
+//     chart banding only. It is NOT an abnormality threshold: these ratios are
+//     one-sided (higher is better), so a value ABOVE `typicalUpper` is never
+//     classified abnormal.
+//   • `vendorPublishedFloor` records the age-independent "Time Domain Ratios"
+//     figure printed on the Colombo/PhysioPS report, retained here for
+//     traceability ONLY. It is not a second classification path.
+//
+// No value in this table is derived from any single patient's result.
+// ===========================================================================
+
+export interface AgeRatioBand {
+  /** Inclusive lower age in years. */
+  ageMin: number;
+  /** Exclusive upper age in years. */
+  ageMax: number;
+  /** Value at or above this is NORMAL for this age band. */
+  normalAtOrAbove: number;
+  /** Below this is frankly (severely) abnormal. */
+  severeBelow: number;
+  /** Upper end of the typical range — chart banding only, never abnormal. */
+  typicalUpper: number;
+}
+
+export interface AgeRatioReference {
+  label: string;
+  bands: AgeRatioBand[];
+  /** Age-independent figure printed on the vendor report — traceability only. */
+  vendorPublishedFloor: number;
+  /** Where the numbers come from. Must stay accurate; do not embellish. */
+  source: string;
+}
+
+export const AGE_RATIO_REFERENCE: Record<EwingRatioKey, AgeRatioReference> = {
+  eiRatio: {
+    label: "E/I Ratio",
+    vendorPublishedFloor: 1.094,
+    source:
+      "Age-banded cardiovagal (E:I) reference, Ewing/Low autonomic-reflex screening convention; " +
+      "vendor Colombo/PhysioPS report prints an age-independent floor of 1.094.",
+    bands: [
+      { ageMin: 0, ageMax: 30, normalAtOrAbove: 1.21, severeBelow: 1.10, typicalUpper: 1.60 },
+      { ageMin: 30, ageMax: 40, normalAtOrAbove: 1.15, severeBelow: 1.08, typicalUpper: 1.50 },
+      { ageMin: 40, ageMax: 50, normalAtOrAbove: 1.12, severeBelow: 1.06, typicalUpper: 1.40 },
+      { ageMin: 50, ageMax: 60, normalAtOrAbove: 1.10, severeBelow: 1.05, typicalUpper: 1.35 },
+      { ageMin: 60, ageMax: 120, normalAtOrAbove: 1.08, severeBelow: 1.04, typicalUpper: 1.30 },
+    ],
+  },
+  valsalvaRatio: {
+    label: "Valsalva Ratio",
+    vendorPublishedFloor: 1.2,
+    source:
+      "Age-banded Valsalva ratio reference, Ewing/Low autonomic-reflex screening convention; " +
+      "vendor Colombo/PhysioPS report prints an age-independent floor of 1.200.",
+    bands: [
+      { ageMin: 0, ageMax: 30, normalAtOrAbove: 1.50, severeBelow: 1.30, typicalUpper: 1.80 },
+      { ageMin: 30, ageMax: 40, normalAtOrAbove: 1.45, severeBelow: 1.25, typicalUpper: 1.70 },
+      { ageMin: 40, ageMax: 50, normalAtOrAbove: 1.40, severeBelow: 1.21, typicalUpper: 1.60 },
+      { ageMin: 50, ageMax: 60, normalAtOrAbove: 1.35, severeBelow: 1.20, typicalUpper: 1.55 },
+      { ageMin: 60, ageMax: 120, normalAtOrAbove: 1.30, severeBelow: 1.15, typicalUpper: 1.50 },
+    ],
+  },
+  thirtyFifteenRatio: {
+    label: "30:15 Ratio",
+    vendorPublishedFloor: 1.092,
+    source:
+      "Age-banded 30:15 standing ratio reference, Ewing/Low autonomic-reflex screening convention; " +
+      "vendor Colombo/PhysioPS report prints an age-independent floor of 1.092.",
+    bands: [
+      { ageMin: 0, ageMax: 30, normalAtOrAbove: 1.04, severeBelow: 1.00, typicalUpper: 1.50 },
+      { ageMin: 30, ageMax: 40, normalAtOrAbove: 1.03, severeBelow: 1.00, typicalUpper: 1.45 },
+      { ageMin: 40, ageMax: 50, normalAtOrAbove: 1.02, severeBelow: 1.00, typicalUpper: 1.40 },
+      { ageMin: 50, ageMax: 60, normalAtOrAbove: 1.01, severeBelow: 0.99, typicalUpper: 1.35 },
+      { ageMin: 60, ageMax: 120, normalAtOrAbove: 1.00, severeBelow: 0.98, typicalUpper: 1.30 },
+    ],
+  },
+};
+
+/**
+ * Resolve the authoritative age band for a ratio. When age is unknown we pick
+ * the WIDEST band rather than guessing an age — never a fabricated default.
+ */
+export function ratioBandForAge(key: EwingRatioKey, age: number | null | undefined): AgeRatioBand {
+  const bands = AGE_RATIO_REFERENCE[key].bands;
+  if (age == null || !Number.isFinite(age) || age <= 0) {
+    return bands.reduce(
+      (widest, b) => (b.ageMax - b.ageMin > widest.ageMax - widest.ageMin ? b : widest),
+      bands[0],
+    );
+  }
+  for (const b of bands) if (age >= b.ageMin && age < b.ageMax) return b;
+  return age < bands[0].ageMin ? bands[0] : bands[bands.length - 1];
+}
+
+/**
+ * The ONE reference-range string any surface may render for a ratio. Charts,
+ * tables and narrative all call this, so no surface can print a different band.
+ */
+export function ratioReferenceLabel(key: EwingRatioKey, age: number | null | undefined): string {
+  const b = ratioBandForAge(key, age);
+  const ageNote =
+    age == null || !Number.isFinite(age) || age <= 0
+      ? "age unknown — widest band"
+      : `age ${b.ageMin}\u2013${b.ageMax === 120 ? "120" : b.ageMax - 1}`;
+  return `normal \u2265 ${b.normalAtOrAbove.toFixed(2)} (${ageNote})`;
+}
+
+/** Classify a ratio against the authoritative age band. */
+export function classifyRatioForAge(
+  value: number | null | undefined,
+  key: EwingRatioKey,
+  age: number | null | undefined,
+): EwingClassification | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  const b = ratioBandForAge(key, age);
+  if (value >= b.normalAtOrAbove) return { label: "Normal", severity: "Normal" };
+  if (value >= b.severeBelow) return { label: "Borderline Low", severity: "Warning" };
+  return { label: "Low", severity: "Abnormal" };
+}
+
 export interface EwingThreshold {
   /** Value must be >= normalAbove to be NORMAL. */
   normalAbove: number;
@@ -130,25 +291,32 @@ export interface EwingThreshold {
  * only marginally clearing the cutoff, but a value clearly above the threshold
  * is always Normal.
  */
+/**
+ * Age-resolved Ewing threshold, DERIVED from AGE_RATIO_REFERENCE. This is the
+ * only constructor of an EwingThreshold: there is no second hardcoded set.
+ */
+export function ewingThresholdForAge(
+  key: EwingRatioKey,
+  age: number | null | undefined,
+): EwingThreshold {
+  const ref = AGE_RATIO_REFERENCE[key];
+  const b = ratioBandForAge(key, age);
+  return {
+    normalAbove: b.normalAtOrAbove,
+    abnormalBelow: b.severeBelow,
+    label: ref.label,
+    citation: ref.source,
+  };
+}
+
+/**
+ * Age-unknown fallback thresholds (widest band of the authoritative table).
+ * Prefer `ewingThresholdForAge(key, age)` whenever an age is available.
+ */
 export const EWING_THRESHOLDS: Record<EwingRatioKey, EwingThreshold> = {
-  eiRatio: {
-    normalAbove: 1.094,
-    abnormalBelow: 1.0,
-    label: "E/I Ratio",
-    citation: "MAIN_PDF Time Domain Ratios: Normal > 1.094",
-  },
-  valsalvaRatio: {
-    normalAbove: 1.2,
-    abnormalBelow: 1.1,
-    label: "Valsalva Ratio",
-    citation: "MAIN_PDF Time Domain Ratios: Normal > 1.200",
-  },
-  thirtyFifteenRatio: {
-    normalAbove: 1.092,
-    abnormalBelow: 1.0,
-    label: "30:15 Ratio",
-    citation: "MAIN_PDF Time Domain Ratios: Normal > 1.092",
-  },
+  eiRatio: ewingThresholdForAge("eiRatio", null),
+  valsalvaRatio: ewingThresholdForAge("valsalvaRatio", null),
+  thirtyFifteenRatio: ewingThresholdForAge("thirtyFifteenRatio", null),
 };
 
 export interface EwingClassification {
@@ -169,9 +337,9 @@ export function classifyEwing(value: number, t: EwingThreshold): EwingClassifica
   return { label: "Low", severity: "Abnormal" };
 }
 
-/** Human-readable "> X" normal-range string for a one-sided Ewing ratio. */
+/** Human-readable "≥ X" normal-range string for a one-sided Ewing ratio. */
 export function ewingNormalRangeLabel(t: EwingThreshold): string {
-  return `> ${t.normalAbove.toFixed(3)}`;
+  return `\u2265 ${t.normalAbove.toFixed(3)}`;
 }
 
 // ---------------------------------------------------------------------------

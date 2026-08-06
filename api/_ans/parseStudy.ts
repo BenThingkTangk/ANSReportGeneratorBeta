@@ -47,6 +47,7 @@ import {
 } from "./parseBinary.js";
 import { asciiView, sectionize, findSection } from "./sectionizer.js";
 import { deriveEcgPhases } from "./ecgPhases.js";
+import { SENTINEL_ABS } from "../../shared/ecgScaling.js";
 import {
   FIELD_SYNONYMS,
   buildFieldRegex,
@@ -1020,13 +1021,16 @@ function buildEcgSignal(
   const quality: AnsEcgQuality = {
     snrDb: null,
     motionFraction: null,
+    sentinelFraction: null,
     leadOff: false,
     usable: false,
+    unusableReasons: [],
     warnings: [],
   };
   if (!bin.sampling) {
     quality.leadOff = true;
-    quality.warnings.push("no ECG block located");
+    quality.unusableReasons.push("no_ecg_block");
+    quality.warnings.push("No ECG data block located in this file.");
     return { preview: [], durationSec: null, quality };
   }
   // Materialize a bounded preview (up to 4 KB samples = ~16 sec @ 250 Hz)
@@ -1043,33 +1047,73 @@ function buildEcgSignal(
     const v = buf.readInt16BE(pos);
     pos += 2;
     preview[i] = v;
-    if (v >= 32_000 || v <= -32_000) saturated++;
+    // Sentinel / rail magnitude. The old threshold was 32,000, which MISSED the
+    // ±31,8xx spikes present in real exports: those are acquisition artifacts,
+    // not physiology, and they were being fed straight into the beat detector.
+    if (v >= SENTINEL_ABS || v <= -SENTINEL_ABS) saturated++;
     if (i > 0 && v === last) flat++;
     last = v;
     sum += v;
     sumSq += v * v;
   }
   const motionFraction = (saturated + flat) / previewLen;
+  const sentinelFraction = saturated / previewLen;
   const mean = sum / previewLen;
   const variance = Math.max(0, sumSq / previewLen - mean * mean);
   const std = Math.sqrt(variance);
   const snrDb = std > 0 ? 20 * Math.log10(std / 10) : null;
   const leadOff = motionFraction > 0.5 || std < 2;
-  const usable = !leadOff && motionFraction < 0.25 && (snrDb ?? -Infinity) > 6;
+
+  // Each failing criterion is recorded SEPARATELY, so the record can no longer
+  // say "signal-to-noise too low" while reporting a 46 dB SNR. The gate itself
+  // is unchanged apart from the added sentinel-spike criterion.
+  const reasons: AnsEcgQuality["unusableReasons"] = [];
+  if (leadOff) reasons.push("lead_off_or_flatline");
+  if (motionFraction >= 0.25) reasons.push("excess_motion_or_saturation");
+  if ((snrDb ?? -Infinity) <= 6) reasons.push("low_snr");
+  if (sentinelFraction > 0) reasons.push("sentinel_spikes");
+
   quality.snrDb = snrDb;
   quality.motionFraction = Math.round(motionFraction * 1000) / 1000;
+  quality.sentinelFraction = Math.round(sentinelFraction * 10000) / 10000;
   quality.leadOff = leadOff;
-  quality.usable = usable;
+  quality.unusableReasons = reasons;
+  // `sentinel_spikes` alone does not condemn the recording (they are excluded
+  // downstream), but the other three criteria do.
+  quality.usable = !reasons.some((r) => r !== "sentinel_spikes");
+
+  const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
   if (leadOff) {
-    quality.warnings.push("ECG appears lead-off or flatlined");
+    quality.warnings.push(
+      `ECG appears lead-off or flatlined (motion/flat fraction ${pct(motionFraction)}` +
+        `${std < 2 ? ", amplitude spread below the noise floor" : ""}).`,
+    );
     warnings.push({
       code: "ECG_LEAD_OFF",
       message: "ECG preview suggests lead-off / flatline",
       severity: "warn",
       field: "ecg.quality",
     });
-  } else if (!usable) {
-    quality.warnings.push("ECG signal-to-noise too low for clinical scoring");
+  }
+  if (reasons.includes("excess_motion_or_saturation")) {
+    quality.warnings.push(
+      `Motion/saturation fraction ${pct(motionFraction)} exceeds the 25% limit for clinical ` +
+        `scoring. Signal-to-noise is ${snrDb == null ? "not computable" : `${snrDb.toFixed(1)} dB`} — ` +
+        "a high figure here reflects the artifact amplitude, not a clean trace.",
+    );
+  }
+  if (reasons.includes("low_snr")) {
+    quality.warnings.push(
+      `Signal-to-noise ${snrDb == null ? "not computable" : `${snrDb.toFixed(1)} dB`} is below the ` +
+        "6 dB minimum for clinical scoring.",
+    );
+  }
+  if (reasons.includes("sentinel_spikes")) {
+    quality.warnings.push(
+      `${pct(sentinelFraction)} of sampled points sit at or beyond the ±${SENTINEL_ABS} int16 rail. ` +
+        "These are acquisition artifacts and are excluded from beat detection and every " +
+        "heart-rhythm-variability metric.",
+    );
   }
   const durationSec = bin.sampling.dataPointCount * bin.sampling.samplingInterval;
   return { preview, durationSec, quality };

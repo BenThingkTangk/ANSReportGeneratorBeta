@@ -64,8 +64,11 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
     phases.find((e) => e.phase === "Baseline-A") ??
     phases.find((e) => e.phase === "Baseline-C") ??
     phases[0];
-  const rmssd = baselinePhase?.HRV_RMSSD ?? 0;
-  const sdnn = baselinePhase?.HRV_SDNN ?? 0;
+  // Neutral key names (renamed from HRV_RMSSD / HRV_SDNN — see PhaseMetrics).
+  // null when the beat series was not usable: the gauges then render
+  // "Not assessed" instead of a 0 ms reading.
+  const rmssd = baselinePhase?.hrvBeatToBeatMs ?? null;
+  const sdnn = baselinePhase?.hrvOverallVariabilityMs ?? null;
   const spectralAvailable = (report.spectralAvailable ?? ab.available ?? true) && balanceAssessed;
   // LF/HF uses Colombo's LFa/RFa ratio (SB) — only meaningful when available.
   const lfHf: number | null =
@@ -208,7 +211,7 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
                 hrvRmssdMs={rmssd}
                 hrvSdnnMs={sdnn}
                 lfHfRatio={lfHf}
-                balanceLabel={spectralAvailable ? tier : "Not assessed"}
+                balanceLabel={spectralAvailable ? (tier ?? "Not scorable") : "Not assessed"}
                 available={spectralAvailable}
                 // AUTHORIZED PhysioPS OUTPUT PROTOCOL: this is the PATIENT
                 // portal, so the gauge renders P&S readouts only (sympathetic %,

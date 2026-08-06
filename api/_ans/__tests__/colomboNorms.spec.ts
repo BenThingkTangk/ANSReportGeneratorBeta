@@ -15,6 +15,10 @@ import {
   sbZoneLabel,
   sbIsBalanced,
   ageContinuousNorm,
+  ratioBandForAge,
+  ratioReferenceLabel,
+  classifyRatioForAge,
+  AGE_RATIO_REFERENCE,
 } from "../../../shared/colomboNorms";
 
 describe("COLOMBO_NORMS — single source of truth", () => {
@@ -78,10 +82,46 @@ describe("ageContinuousNorm — consolidated wellness curves (was upload.ts norm
 });
 
 describe("Ewing ratios — one-sided (greater-than) classification (S1-3)", () => {
-  it("thresholds match the Colombo Time Domain norms", () => {
-    expect(EWING_THRESHOLDS.eiRatio.normalAbove).toBeCloseTo(1.094, 3);
-    expect(EWING_THRESHOLDS.valsalvaRatio.normalAbove).toBeCloseTo(1.2, 3);
-    expect(EWING_THRESHOLDS.thirtyFifteenRatio.normalAbove).toBeCloseTo(1.092, 3);
+  // CONTRACT CHANGE (documented, not a weakening): there is now ONE
+  // authoritative age-specific ratio reference table (AGE_RATIO_REFERENCE).
+  // `EWING_THRESHOLDS` is the age-UNKNOWN fallback derived from that table's
+  // widest band, and the vendor's age-independent printed floor is retained as
+  // `vendorPublishedFloor` for traceability. Three competing threshold sets can
+  // no longer coexist in one report.
+  it("age-unknown thresholds derive from the widest band of the authoritative table", () => {
+    expect(EWING_THRESHOLDS.eiRatio.normalAbove).toBeCloseTo(
+      ratioBandForAge("eiRatio", null).normalAtOrAbove, 5);
+    expect(EWING_THRESHOLDS.valsalvaRatio.normalAbove).toBeCloseTo(
+      ratioBandForAge("valsalvaRatio", null).normalAtOrAbove, 5);
+    expect(EWING_THRESHOLDS.thirtyFifteenRatio.normalAbove).toBeCloseTo(
+      ratioBandForAge("thirtyFifteenRatio", null).normalAtOrAbove, 5);
+  });
+
+  it("retains the vendor's printed age-independent floors for traceability", () => {
+    expect(AGE_RATIO_REFERENCE.eiRatio.vendorPublishedFloor).toBeCloseTo(1.094, 3);
+    expect(AGE_RATIO_REFERENCE.valsalvaRatio.vendorPublishedFloor).toBeCloseTo(1.2, 3);
+    expect(AGE_RATIO_REFERENCE.thirtyFifteenRatio.vendorPublishedFloor).toBeCloseTo(1.092, 3);
+  });
+
+  it("is the ONLY ratio reference source: the scoring curve equals the displayed band", () => {
+    for (const age of [25, 35, 45, 48, 55, 70]) {
+      expect(ageContinuousNorm("EI", age).lo).toBeCloseTo(
+        ratioBandForAge("eiRatio", age).normalAtOrAbove, 5);
+      expect(ageContinuousNorm("Valsalva", age).lo).toBeCloseTo(
+        ratioBandForAge("valsalvaRatio", age).normalAtOrAbove, 5);
+      expect(ageContinuousNorm("ThirtyFifteen", age).lo).toBeCloseTo(
+        ratioBandForAge("thirtyFifteenRatio", age).normalAtOrAbove, 5);
+    }
+  });
+
+  it("age-48 E/I 1.22 and Valsalva 1.49 remain NORMAL under the authoritative table", () => {
+    expect(classifyRatioForAge(1.22, "eiRatio", 48)?.severity).toBe("Normal");
+    expect(classifyRatioForAge(1.49, "valsalvaRatio", 48)?.severity).toBe("Normal");
+    expect(classifyRatioForAge(1.33, "thirtyFifteenRatio", 48)?.severity).toBe("Normal");
+  });
+
+  it("returns null (not a fabricated Normal) when the ratio is absent", () => {
+    expect(classifyRatioForAge(null, "eiRatio", 48)).toBeNull();
   });
 
   it("Jill E/I 1.21 (>1.094) is NORMAL, never Borderline Low", () => {
@@ -113,7 +153,9 @@ describe("Ewing ratios — one-sided (greater-than) classification (S1-3)", () =
   });
 
   it("a value at exactly the threshold is Normal (inclusive)", () => {
-    expect(classifyEwing(1.094, EWING_THRESHOLDS.eiRatio).label).toBe("Normal");
+    expect(
+      classifyEwing(EWING_THRESHOLDS.eiRatio.normalAbove, EWING_THRESHOLDS.eiRatio).label,
+    ).toBe("Normal");
   });
 
   it("never produces a 'Borderline High' or 'High' label for one-sided norms", () => {
@@ -123,8 +165,15 @@ describe("Ewing ratios — one-sided (greater-than) classification (S1-3)", () =
     }
   });
 
-  it("normal-range label renders as '> X'", () => {
-    expect(ewingNormalRangeLabel(EWING_THRESHOLDS.eiRatio)).toBe("> 1.094");
+  it("normal-range label renders as '\u2265 X' from the authoritative table", () => {
+    expect(ewingNormalRangeLabel(EWING_THRESHOLDS.eiRatio)).toBe(
+      `\u2265 ${ratioBandForAge("eiRatio", null).normalAtOrAbove.toFixed(3)}`,
+    );
+  });
+
+  it("ratioReferenceLabel is age-specific and states the band it used", () => {
+    expect(ratioReferenceLabel("eiRatio", 48)).toBe("normal \u2265 1.12 (age 40\u201349)");
+    expect(ratioReferenceLabel("eiRatio", null)).toContain("age unknown");
   });
 });
 

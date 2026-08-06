@@ -18,6 +18,11 @@
  * ============================================================================
  */
 
+import {
+  AGE_RATIO_REFERENCE,
+  type EwingRatioKey,
+} from "../../shared/colomboNorms.js";
+
 export interface BandedThreshold {
   /** Inclusive lower age in years. */
   ageMin: number;
@@ -73,32 +78,26 @@ export interface Thresholds {
  * Default thresholds. Starting values pulled from commonly cited references
  * (Ewing et al.; Low et al.). Adjust as needed for your clinical population.
  */
+/**
+ * Cardiovagal ratio bands are DERIVED from the single authoritative
+ * age-specific reference table (`shared/colomboNorms.ts AGE_RATIO_REFERENCE`).
+ * They are no longer duplicated here: a second copy of these numbers is exactly
+ * how three mutually inconsistent normal-limit sets ended up in one report.
+ */
+function bandsFrom(key: EwingRatioKey): BandedThreshold[] {
+  return AGE_RATIO_REFERENCE[key].bands.map((b) => ({
+    ageMin: b.ageMin,
+    ageMax: b.ageMax,
+    abnormalBelow: b.normalAtOrAbove,
+    severeBelow: b.severeBelow,
+  }));
+}
+
 export const DEFAULT_THRESHOLDS: Thresholds = {
   cardiovagal: {
-    // E:I ratio — declines with age.
-    eiRatio: [
-      { ageMin: 0,  ageMax: 30, abnormalBelow: 1.21, severeBelow: 1.10 },
-      { ageMin: 30, ageMax: 40, abnormalBelow: 1.15, severeBelow: 1.08 },
-      { ageMin: 40, ageMax: 50, abnormalBelow: 1.12, severeBelow: 1.06 },
-      { ageMin: 50, ageMax: 60, abnormalBelow: 1.10, severeBelow: 1.05 },
-      { ageMin: 60, ageMax: 120, abnormalBelow: 1.08, severeBelow: 1.04 },
-    ],
-    // Valsalva ratio — declines with age.
-    valsalvaRatio: [
-      { ageMin: 0,  ageMax: 30, abnormalBelow: 1.50, severeBelow: 1.30 },
-      { ageMin: 30, ageMax: 40, abnormalBelow: 1.45, severeBelow: 1.25 },
-      { ageMin: 40, ageMax: 50, abnormalBelow: 1.40, severeBelow: 1.21 },
-      { ageMin: 50, ageMax: 60, abnormalBelow: 1.35, severeBelow: 1.20 },
-      { ageMin: 60, ageMax: 120, abnormalBelow: 1.30, severeBelow: 1.15 },
-    ],
-    // 30:15 ratio — declines with age.
-    thirtyFifteenRatio: [
-      { ageMin: 0,  ageMax: 30, abnormalBelow: 1.04, severeBelow: 1.00 },
-      { ageMin: 30, ageMax: 40, abnormalBelow: 1.03, severeBelow: 1.00 },
-      { ageMin: 40, ageMax: 50, abnormalBelow: 1.02, severeBelow: 1.00 },
-      { ageMin: 50, ageMax: 60, abnormalBelow: 1.01, severeBelow: 0.99 },
-      { ageMin: 60, ageMax: 120, abnormalBelow: 1.00, severeBelow: 0.98 },
-    ],
+    eiRatio: bandsFrom("eiRatio"),
+    valsalvaRatio: bandsFrom("valsalvaRatio"),
+    thirtyFifteenRatio: bandsFrom("thirtyFifteenRatio"),
   },
   adrenergic: {
     // Orthostatic SBP drop thresholds (mmHg, baseline → stand).

@@ -4,8 +4,9 @@ import { useMemo } from "react";
 interface AutonomicBalanceGaugeProps {
   sympathetic: number | null;         // 0..100 (% of total); null = not assessed
   parasympathetic: number | null;     // 0..100 (% of total); null = not assessed
-  hrvRmssdMs: number;          // RMSSD in milliseconds (vagal HRV)
-  hrvSdnnMs: number;           // SDNN in milliseconds (total HRV)
+  /** null when the beat series was unusable — renders "—", never 0. */
+  hrvRmssdMs: number | null;          // RMSSD in milliseconds (vagal HRV)
+  hrvSdnnMs: number | null;           // SDNN in milliseconds (total HRV)
   lfHfRatio: number | null;           // LF/HF ratio (sympathovagal balance, ~0.5–2.0 normal); null = not assessed
   balanceLabel?: string;       // tier label
   /**
@@ -72,7 +73,7 @@ export function AutonomicBalanceGauge({
   const activeLeft = Math.round((sPct / 100) * arcTicksLeft.length);
   const activeRight = Math.round((pPct / 100) * arcTicksRight.length);
 
-  const fmt1 = (n: number) => (Number.isFinite(n) ? n.toFixed(1).replace(/\.0$/, "") : "—");
+  const fmt1 = (n: number | null) => (n != null && Number.isFinite(n) ? n.toFixed(1).replace(/\.0$/, "") : "—");
 
   return (
     <div

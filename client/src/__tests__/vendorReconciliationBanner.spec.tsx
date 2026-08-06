@@ -52,8 +52,58 @@ describe("VendorReconciliationBanner", () => {
     expect(banner.textContent).toMatch(/patient name/i);
   });
 
-  it("renders nothing when no vendor metrics were supplied", () => {
+  // CONTRACT CHANGE: "no vendor PDF" is now an EXPLICIT state. Rendering
+  // nothing made it indistinguishable from "a vendor PDF was attached but its
+  // numeric content could not be read" — two situations a clinician must be able
+  // to tell apart.
+  it("states explicitly that no vendor PDF was attached", () => {
     const { container } = render(<VendorReconciliationBanner report={baseReport({})} />);
-    expect(container.firstChild).toBeNull();
+    expect(container.querySelector('[data-vendor-status="no_vendor_pdf"]')).not.toBeNull();
+    expect(container.textContent).toContain("No vendor PDF attached");
+  });
+
+  it("distinguishes attached-but-unreadable from no vendor PDF, with a plain count", () => {
+    const { container } = render(
+      <VendorReconciliationBanner
+        report={baseReport({
+          vendorReconciliation: {
+            status: "unreadable_numerics",
+            numericFields: { read: 0, total: 18 },
+          },
+        })}
+      />,
+    );
+    expect(container.querySelector('[data-vendor-status="unreadable_numerics"]')).not.toBeNull();
+    // Plain count, NOT "18 fields, 0% mean confidence".
+    expect(container.textContent).toContain("0 of 18 numeric fields read");
+    expect(container.textContent).not.toContain("mean conf");
+    expect(container.textContent).not.toContain("0%");
+  });
+
+  it("shows a vendor 3-vs-6-month retest conflict instead of choosing one", () => {
+    const { container } = render(
+      <VendorReconciliationBanner
+        report={baseReport({
+          vendorReconciliation: {
+            status: "conflicting_recommendations",
+            conflicts: [
+              {
+                field: "followUp.retestInterval",
+                values: [
+                  { value: "6 months", source: "P&S report (page 3)" },
+                  { value: "3 months", source: "Clinician letter" },
+                ],
+                message:
+                  "The vendor documents recommend different retest intervals (6 months per P&S report (page 3); 3 months per Clinician letter).",
+              },
+            ],
+          },
+        })}
+      />,
+    );
+    expect(container.querySelector('[data-vendor-status="conflicting_recommendations"]')).not.toBeNull();
+    expect(container.textContent).toContain("6 months");
+    expect(container.textContent).toContain("3 months");
+    expect(container.textContent).toContain("Clinician letter");
   });
 });

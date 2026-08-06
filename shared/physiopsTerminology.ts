@@ -89,7 +89,10 @@ const TERM_RULES: TermRule[] = [
   {
     term: "LF",
     pattern: /\bLF(?![a-z])\s*(?:\/|:|\s+to\s+|\s+over\s+|-)\s*HF(?![a-z])(?:\s*(?:ratio|balance))?/gi,
-    replacement: "sympathovagal balance (LFa/RFa)",
+    // NEVER map an HRV spectral index onto the vendor's P&S aggregates: the two
+    // are different quantities and equating them would be a fabricated claim of
+    // equivalence. Plain language only.
+    replacement: "balance between the faster and slower rhythms of your heartbeat",
   },
   {
     term: "TSP",
@@ -108,18 +111,21 @@ const TERM_RULES: TermRule[] = [
   },
   // ── Time-domain indices ───────────────────────────────────────────────────
   { term: "pNN50", pattern: /\bpNN[-\s]?50\b/gi, replacement: "beat-to-beat variability" },
-  { term: "rmsSD", pattern: /\b(?:rms[-\s]?SD|RMSSD)\b/gi, replacement: "parasympathetic activity (RFa)" },
+  // RMSSD / SDNN are HRV time-domain indices. They are NOT the vendor's RFa/LFa
+  // and must never be relabelled as such — that would present one measurement
+  // under another measurement's name. Plain language only.
+  { term: "rmsSD", pattern: /\b(?:rms[-\s]?SD|RMSSD)\b/gi, replacement: "beat-to-beat heart-rhythm variability" },
   { term: "sdNN", pattern: /\b(?:sd[-\s]?NN|SDNN)\b/gi, replacement: "overall heart-rhythm variability" },
   // ── Bare band tokens last ─────────────────────────────────────────────────
   {
     term: "HF",
     pattern: /\bHF(?![a-z])(?:\s*(?:power|band|area|component))?|\bhigh[-\s]?frequency\s+(?:power|band|area|component)\b/gi,
-    replacement: "parasympathetic activity (RFa)",
+    replacement: "faster heartbeat rhythms",
   },
   {
     term: "LF",
     pattern: /\bLF(?![a-z])(?:\s*(?:power|band|area|component))?|\blow[-\s]?frequency\s+(?:power|band|area|component)\b/gi,
-    replacement: "sympathetic activity (LFa)",
+    replacement: "slower heartbeat rhythms",
   },
 ];
 
@@ -262,3 +268,36 @@ export const CLINICIAN_TERMINOLOGY_PROMPT = [
   "must still omit ULF, VLF, LF, HF, TSP, sdNN, rmsSD and pNN50 entirely.",
   "--------------------------------------------------",
 ].join("\n");
+
+
+// ===========================================================================
+// KEY-NAME SCREEN (payload identifiers, not narrative text)
+// ===========================================================================
+/**
+ * Banned parameter names also leak through JSON KEYS. The Alex Pare audit found
+ * `HRV_SDNN` / `HRV_RMSSD` on all six `report.phaseEvents[*]` objects: not
+ * narrative prose, but shipped inside the patient-facing `report` object, so any
+ * generic key/value renderer, debug view or JSON export exposes them.
+ *
+ * Walks an arbitrary object graph and returns every offending KEY PATH.
+ */
+export function findBannedHrvKeys(
+  value: unknown,
+  path = "",
+  out: string[] = [],
+): string[] {
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => findBannedHrvKeys(v, `${path}[${i}]`, out));
+    return out;
+  }
+  if (value && typeof value === "object") {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      // Match the key NAME only (LFa/RFa/SB are allowed P&S vocabulary).
+      if (findBannedHrvTerms(k.replace(/[_\-]/g, " ")).length > 0) {
+        out.push(path ? `${path}.${k}` : k);
+      }
+      findBannedHrvKeys(v, path ? `${path}.${k}` : k, out);
+    }
+  }
+  return out;
+}

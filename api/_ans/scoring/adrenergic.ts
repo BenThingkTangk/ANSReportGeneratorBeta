@@ -62,7 +62,12 @@ export function scoreAdrenergic(
 
   const sbpDelta = baseSbp != null && standSbp != null ? baseSbp - standSbp : null;
   const dbpDelta = baseDbp != null && standDbp != null ? baseDbp - standDbp : null;
-  const hrDelta  = baseHr  != null && standHr  != null ? standHr - baseHr  : null;
+  // Stand delta uses the SAME definition as the report engine
+  // (`standDeltaBpm` in api/upload.ts): standing minus the resting Baseline-A
+  // heart rate, rounded to whole bpm. The parse layer now derives its baseline
+  // from Baseline-A only (see api/_ans/ecgPhases.ts), so the two payloads can no
+  // longer disagree (previously 8 bpm here vs +9 bpm in the report).
+  const hrDelta  = baseHr  != null && standHr  != null ? Math.round(standHr - baseHr) : null;
 
   // If both BP arms are unavailable, we can't assess adrenergic.
   if (sbpDelta == null && dbpDelta == null) {

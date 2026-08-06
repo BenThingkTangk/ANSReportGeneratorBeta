@@ -117,9 +117,15 @@ describe("no false positives on authorized PhysioPS vocabulary", () => {
 });
 
 describe("sanitizePatientTerminology", () => {
-  it("relabels the LF/HF ratio as sympathovagal balance in P&S terms", () => {
+  // CONTRACT CHANGE: an HRV spectral index must NOT be relabelled as the
+  // vendor's P&S aggregate. LF/HF, SDNN and RMSSD are different quantities from
+  // LFa/RFa; renaming one to the other would assert an equivalence nobody has
+  // validated. The sanitizer now uses plain language instead.
+  it("replaces the LF/HF ratio with plain language, never with LFa/RFa", () => {
     const out = sanitizePatientTerminology("Your LF/HF ratio was 3.1, which is high.");
-    expect(out).toContain("sympathovagal balance (LFa/RFa)");
+    expect(out).toContain("balance between the faster and slower rhythms");
+    expect(out).not.toContain("LFa");
+    expect(out).not.toContain("RFa");
     expect(findBannedHrvTerms(out)).toEqual([]);
   });
 
@@ -202,7 +208,10 @@ describe("ask-atom patient answer gate", () => {
   it("sanitizes terminology and strips internal citation markers together", () => {
     const out = sanitizePatientAnswer("Your LF/HF was 3.1 with SDNN 42 ms.");
     expect(findBannedHrvTerms(out)).toEqual([]);
-    expect(out).toContain("sympathovagal balance");
+    // Plain language, and NOT a relabel onto the vendor's LFa/RFa aggregates.
+    expect(out).toContain("heartbeat");
+    expect(out).toContain("overall heart-rhythm variability");
+    expect(out).not.toContain("LFa");
   });
 
   it("is safe on empty input", () => {

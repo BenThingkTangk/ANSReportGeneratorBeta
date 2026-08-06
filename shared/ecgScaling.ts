@@ -75,3 +75,26 @@ export function ecgSampleToY(
   const usable = H - 2 * pad;
   return pad + ((1 - n) / 2) * usable;
 }
+
+// ===========================================================================
+// SENTINEL / RAIL AMPLITUDE
+// ===========================================================================
+/**
+ * Absolute int16 amplitude at or beyond which a sample is treated as an
+ * acquisition SENTINEL / rail artifact rather than physiology.
+ *
+ * Why 30,000 and not 32,000: real vendor exports contain ±31,8xx spikes. The
+ * previous 32,000 test missed them entirely, so those spikes reached the R-peak
+ * detector and inflated the heart-rhythm-variability metrics (RMSSD exceeded
+ * SDNN in every phase — a textbook R-peak mis-detection fingerprint) which then
+ * became a POSITIVE driver of the composite wellness score.
+ *
+ * Single source of truth: the parser's quality gate and the report engine's beat
+ * filter both read this constant.
+ */
+export const SENTINEL_ABS = 30_000;
+
+/** True when an int16 ECG sample is a sentinel/rail artifact. */
+export function isSentinelSample(v: number): boolean {
+  return v >= SENTINEL_ABS || v <= -SENTINEL_ABS;
+}

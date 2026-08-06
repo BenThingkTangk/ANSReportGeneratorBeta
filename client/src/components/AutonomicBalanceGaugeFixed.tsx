@@ -11,8 +11,9 @@ import { useMemo } from "react";
 interface AutonomicBalanceGaugeProps {
   sympathetic: number | null;         // 0..100 (% of total); null = not assessed
   parasympathetic: number | null;     // 0..100 (% of total); null = not assessed
-  hrvRmssdMs: number;          // RMSSD in milliseconds (vagal HRV)
-  hrvSdnnMs: number;           // SDNN in milliseconds (total HRV)
+  /** null when the beat series was unusable — renders "—", never 0. */
+  hrvRmssdMs: number | null;          // RMSSD in milliseconds (vagal HRV)
+  hrvSdnnMs: number | null;           // SDNN in milliseconds (total HRV)
   /**
    * Sympathovagal balance. The caller passes Colombo's SB = LFa/RFa (see
    * PatientPortalTwoColumn), so in the patient view it is LABELLED as
@@ -100,7 +101,7 @@ export function AutonomicBalanceGauge({
 
   // A pipeline zero (or non-finite) reading means the metric was not captured,
   // so render an em dash rather than a misleading "0".
-  const fmt1 = (n: number) => (Number.isFinite(n) && n > 0 ? n.toFixed(1).replace(/\.0$/, "") : "—");
+  const fmt1 = (n: number | null) => (n != null && Number.isFinite(n) && n > 0 ? n.toFixed(1).replace(/\.0$/, "") : "—");
   const rmssdText = fmt1(hrvRmssdMs);
   const sdnnText = fmt1(hrvSdnnMs);
 
