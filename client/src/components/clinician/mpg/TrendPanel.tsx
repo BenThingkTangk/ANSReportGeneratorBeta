@@ -11,7 +11,6 @@ import {
   ReferenceArea,
   ReferenceLine,
   Tooltip,
-  Legend,
 } from "recharts";
 import type { ANSReport, MultiParameterGraphical, TimeSeries } from "@shared/schema";
 import { ColomboExplainer } from "../ColomboExplainer";
@@ -23,6 +22,8 @@ import {
   ESTIMATE_RFA_COLOR,
   ESTIMATE_TITLE,
 } from "@/lib/spectralProvenance";
+import { PhaseBandLabel } from "./PhaseBandLabel";
+import { TrendSeriesLegend } from "./TrendSeriesLegend";
 import {
   AXIS_LINE_COLOR,
   AXIS_TICK,
@@ -30,15 +31,11 @@ import {
   AXIS_TICK_MARGIN,
   AXIS_Y_WIDTH,
   ESTIMATE_LFA_DASH,
-  ESTIMATE_LFA_PATTERN_LABEL,
   ESTIMATE_LFA_STROKE_WIDTH,
   ESTIMATE_RFA_DASH,
-  ESTIMATE_RFA_PATTERN_LABEL,
   ESTIMATE_RFA_STROKE_WIDTH,
-  PHASE_LABEL_DY,
-  PHASE_LABEL_FILL,
-  PHASE_LABEL_FONT_SIZE,
-  PHASE_LABEL_FONT_WEIGHT,
+  GRID_STROKE,
+  GRID_STROKE_WIDTH,
   REFERENCE_LABEL_DX,
   REFERENCE_LABEL_DY,
   REFERENCE_LABEL_FONT_SIZE,
@@ -186,7 +183,7 @@ export function TrendPanel({
         <RowLabel left="Heart Rate" right="bpm" />
         <ResponsiveContainer width="100%" height={168}>
           <LineChart data={hrData} margin={TREND_CHART_MARGIN}>
-            <CartesianGrid stroke="hsl(var(--border) / 0.15)" strokeDasharray="2 4" />
+            <CartesianGrid stroke={GRID_STROKE} strokeWidth={GRID_STROKE_WIDTH} strokeDasharray="2 4" />
             <XAxis
               dataKey="t"
               type="number"
@@ -264,7 +261,7 @@ export function TrendPanel({
                 <stop offset="100%" stopColor="hsl(200 90% 60%)" stopOpacity={0.05} />
               </linearGradient>
             </defs>
-            <CartesianGrid stroke="hsl(var(--border) / 0.15)" strokeDasharray="2 4" />
+            <CartesianGrid stroke={GRID_STROKE} strokeWidth={GRID_STROKE_WIDTH} strokeDasharray="2 4" />
             <XAxis
               dataKey="t"
               type="number"
@@ -331,9 +328,9 @@ export function TrendPanel({
             drive any score, pattern or patient-facing statement.
           </p>
         ) : null}
-        <ResponsiveContainer width="100%" height={188}>
+        <ResponsiveContainer width="100%" height={176}>
           <LineChart data={lfaRfaData} margin={TREND_CHART_MARGIN_PLAIN}>
-            <CartesianGrid stroke="hsl(var(--border) / 0.15)" strokeDasharray="2 4" />
+            <CartesianGrid stroke={GRID_STROKE} strokeWidth={GRID_STROKE_WIDTH} strokeDasharray="2 4" />
             <XAxis
               dataKey="t"
               type="number"
@@ -360,25 +357,6 @@ export function TrendPanel({
               labelFormatter={(t: number) => `t = ${t.toFixed(0)}s · ${fmtClock(t, testStartClock)}`}
               formatter={(v: number, name: string) => [v == null ? "—" : v.toFixed(2), name === "lfa" ? "LFa (Sympathetic)" : "RFa (Parasympathetic)"]}
             />
-            {/* Legend entries carry the stroke pattern in words, so the two
-                estimate traces stay distinguishable without relying on hue
-                (greyscale print, colour-vision deficiency). */}
-            <Legend
-              wrapperStyle={{ fontSize: 13, paddingTop: 10 }}
-              iconType="plainline"
-              iconSize={22}
-              formatter={(val) => (
-                <span
-                  style={{ fontSize: 13, fontWeight: 500, color: "hsl(var(--foreground) / 0.92)" }}
-                  data-testid={`mpg-lfa-rfa-legend-${val}`}
-                >
-                  {val === "lfa" ? "LFa — Sympathetic" : "RFa — Parasympathetic"}
-                  {spectralEstimated
-                    ? ` (est. · ${val === "lfa" ? ESTIMATE_LFA_PATTERN_LABEL : ESTIMATE_RFA_PATTERN_LABEL})`
-                    : ""}
-                </span>
-              )}
-            />
             {renderPhaseShading(mpg)}
             {/* Clinical color convention: red = sympathetic, blue = parasympathetic */}
             <Line
@@ -387,6 +365,7 @@ export function TrendPanel({
               stroke={spectralEstimated ? ESTIMATE_LFA_COLOR : "hsl(0 72% 51%)"}
               strokeWidth={spectralEstimated ? ESTIMATE_LFA_STROKE_WIDTH : 1.6}
               strokeDasharray={spectralEstimated ? ESTIMATE_LFA_DASH : undefined}
+              strokeLinecap="round"
               dot={false}
               isAnimationActive={false}
               connectNulls
@@ -397,12 +376,14 @@ export function TrendPanel({
               stroke={spectralEstimated ? ESTIMATE_RFA_COLOR : "hsl(217 91% 55%)"}
               strokeWidth={spectralEstimated ? ESTIMATE_RFA_STROKE_WIDTH : 1.6}
               strokeDasharray={spectralEstimated ? ESTIMATE_RFA_DASH : undefined}
+              strokeLinecap="round"
               dot={false}
               isAnimationActive={false}
               connectNulls
             />
           </LineChart>
         </ResponsiveContainer>
+        <TrendSeriesLegend estimated={spectralEstimated} />
       </div>
       )}
       {plotSpectral && spectralEstimated && report ? (
@@ -416,7 +397,10 @@ export function TrendPanel({
 }
 
 function renderPhaseShading(mpg: MultiParameterGraphical) {
-  return mpg.phases.map((p) => (
+  // Boundaries are passed through untouched; only the LABEL rendering changes
+  // (opaque pill + collision-aware row, see PhaseBandLabel).
+  const bands = mpg.phases.map((p) => ({ startSec: p.startSec, endSec: p.endSec }));
+  return mpg.phases.map((p, i) => (
     <ReferenceArea
       key={`phase-${p.name}`}
       x1={p.startSec}
@@ -425,14 +409,7 @@ function renderPhaseShading(mpg: MultiParameterGraphical) {
       fillOpacity={1}
       stroke="transparent"
       ifOverflow="extendDomain"
-      label={{
-        value: p.name,
-        position: "insideTop",
-        fill: PHASE_LABEL_FILL,
-        fontSize: PHASE_LABEL_FONT_SIZE,
-        fontWeight: PHASE_LABEL_FONT_WEIGHT,
-        dy: PHASE_LABEL_DY,
-      }}
+      label={<PhaseBandLabel name={p.name} index={i} bands={bands} />}
     />
   ));
 }

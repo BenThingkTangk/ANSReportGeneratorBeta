@@ -55,6 +55,73 @@ export const PHASE_LABEL_FONT_WEIGHT = 700;
 export const PHASE_LABEL_DY = 4;
 
 /**
+ * Phase-letter PILL geometry and colours.
+ *
+ * Mobile screenshot QA found the bare A–F letters unreliable: each band has a
+ * different tint (emerald B, slate C, amber D …), and over the brighter fills
+ * a single translucent glyph loses contrast. The letter is therefore drawn on
+ * its own opaque dark backplate with a light glyph, so its contrast is a
+ * constant of the pill — independent of whatever the band underneath is tinted.
+ * Nothing about the band geometry (start/end seconds) changes.
+ */
+export const PHASE_PILL_FILL = "hsl(222 60% 6% / 0.94)";
+export const PHASE_PILL_STROKE = "hsl(var(--foreground) / 0.45)";
+export const PHASE_PILL_STROKE_WIDTH = 1;
+export const PHASE_PILL_TEXT_FILL = "hsl(0 0% 100%)";
+export const PHASE_PILL_WIDTH = 19;
+export const PHASE_PILL_HEIGHT = 17;
+export const PHASE_PILL_RADIUS = 5;
+/** Distance from the top of the plot area to the first pill row. */
+export const PHASE_PILL_TOP_INSET = 3;
+
+/**
+ * Collision-aware label stacking.
+ *
+ * On a phone the B/C/D bands are only a few dozen pixels wide, so their pills
+ * would overlap on a single row. Rows alternate instead: a pill drops to the
+ * second row whenever its centre would sit closer than `PHASE_LABEL_MIN_GAP_PX`
+ * to the last pill already placed on that row. This is a pure layout decision
+ * — phase boundaries are never moved.
+ */
+export const PHASE_LABEL_MIN_GAP_PX = PHASE_PILL_WIDTH + 6;
+export const PHASE_LABEL_ROW_HEIGHT = PHASE_PILL_HEIGHT + 3;
+export const PHASE_LABEL_MAX_ROWS = 2;
+
+/**
+ * Greedy two-row packing of phase pills by band centre.
+ *
+ * Returns the row index (0-based, < `maxRows`) for each band, in input order.
+ * Pure geometry helper so the stagger is unit-testable without a chart.
+ */
+export function assignPhaseLabelRows(
+  bands: { startSec: number; endSec: number }[],
+  pxPerSec: number,
+  minGapPx: number = PHASE_LABEL_MIN_GAP_PX,
+  maxRows: number = PHASE_LABEL_MAX_ROWS,
+): number[] {
+  const lastCentre: number[] = new Array(Math.max(1, maxRows)).fill(
+    Number.NEGATIVE_INFINITY,
+  );
+  return bands.map((b) => {
+    const centre = ((b.startSec + b.endSec) / 2) * pxPerSec;
+    let row = 0;
+    for (let r = 0; r < lastCentre.length; r++) {
+      if (centre - lastCentre[r] >= minGapPx) {
+        row = r;
+        break;
+      }
+      // No row has clearance: fall back to the row whose last pill is furthest
+      // away, which maximises the remaining separation.
+      if (r === lastCentre.length - 1) {
+        row = lastCentre.indexOf(Math.min(...lastCentre));
+      }
+    }
+    lastCentre[row] = centre;
+    return row;
+  });
+}
+
+/**
  * Reference-line label geometry.
  *
  * Screenshot QA found the "POTS 120" / "Tachy 100" captions clipped against
@@ -89,8 +156,22 @@ export const ESTIMATE_LFA_DASH = "8 4";
 export const ESTIMATE_RFA_DASH = "2 4";
 export const ESTIMATE_LFA_PATTERN_LABEL = "long dash";
 export const ESTIMATE_RFA_PATTERN_LABEL = "dotted";
-export const ESTIMATE_LFA_STROKE_WIDTH = 2;
-export const ESTIMATE_RFA_STROKE_WIDTH = 1.8;
+/**
+ * Stroke widths raised after mobile QA: the dotted RFa trace sat near zero,
+ * right on top of the dashed gridlines, and at 1.8px read as part of the grid.
+ * The dotted series is now the THICKER of the two so its lower dash duty cycle
+ * still lands more ink on screen than the gridline it crosses.
+ */
+export const ESTIMATE_LFA_STROKE_WIDTH = 2.4;
+export const ESTIMATE_RFA_STROKE_WIDTH = 3;
+
+/** Gridline stroke for trend charts — kept clearly below the series weight. */
+export const GRID_STROKE = "hsl(var(--border) / 0.14)";
+export const GRID_STROKE_WIDTH = 1;
+
+/** Legend swatch geometry — long enough to show a dash cycle, thick enough to read. */
+export const LEGEND_SWATCH_WIDTH = 30;
+export const LEGEND_SWATCH_STROKE_WIDTH = 4;
 
 /**
  * Legend swatch shapes, so a legend entry is never colour-only.

@@ -24,8 +24,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { render, screen } from "@testing-library/react";
 import { ColomboExplainer } from "@/components/clinician/ColomboExplainer";
+import { PhaseBandLabel } from "@/components/clinician/mpg/PhaseBandLabel";
+import { TrendSeriesLegend } from "@/components/clinician/mpg/TrendSeriesLegend";
 import { SpectralEstimateBanner } from "@/components/clinician/mpg/SpectralEstimateBanner";
 import {
+  assignPhaseLabelRows,
   AXIS_TICK,
   AXIS_TICK_COLOR,
   AXIS_TICK_FONT_SIZE,
@@ -35,8 +38,19 @@ import {
   ESTIMATE_LFA_PATTERN_LABEL,
   ESTIMATE_RFA_DASH,
   ESTIMATE_RFA_PATTERN_LABEL,
+  ESTIMATE_LFA_STROKE_WIDTH,
+  ESTIMATE_RFA_STROKE_WIDTH,
+  GRID_STROKE_WIDTH,
+  LEGEND_SWATCH_STROKE_WIDTH,
+  LEGEND_SWATCH_WIDTH,
+  PHASE_LABEL_MIN_GAP_PX,
+  PHASE_LABEL_ROW_HEIGHT,
   PHASE_LABEL_FILL,
   PHASE_LABEL_FONT_SIZE,
+  PHASE_PILL_FILL,
+  PHASE_PILL_HEIGHT,
+  PHASE_PILL_TEXT_FILL,
+  PHASE_PILL_WIDTH,
   REFERENCE_LABEL_DX,
   REFERENCE_LABEL_DY,
   REFERENCE_LABEL_FONT_SIZE,
@@ -115,14 +129,25 @@ describe("TrendPanel chart chrome", () => {
     expect(TREND.match(/tick=\{AXIS_TICK\}/g)?.length).toBe(6);
   });
 
-  it("labels the phase A-F bands with the high-contrast fill", () => {
-    expect(TREND).toContain("fill: PHASE_LABEL_FILL");
-    expect(TREND).toContain("fontSize: PHASE_LABEL_FONT_SIZE");
+  it("labels the phase A-F bands with the pill component, not a raw glyph", () => {
+    expect(TREND).toContain("label={<PhaseBandLabel");
+    expect(TREND).not.toContain("value: p.name");
+    // band geometry still comes straight from the report
+    expect(TREND).toContain("x1={p.startSec}");
+    expect(TREND).toContain("x2={p.endSec}");
   });
 
-  it("names the stroke pattern in the estimate legend", () => {
-    expect(TREND).toContain("ESTIMATE_LFA_PATTERN_LABEL");
-    expect(TREND).toContain("ESTIMATE_RFA_PATTERN_LABEL");
+  it("keeps gridlines lighter than the plotted estimate traces", () => {
+    expect(GRID_STROKE_WIDTH).toBeLessThan(ESTIMATE_LFA_STROKE_WIDTH);
+    expect(GRID_STROKE_WIDTH).toBeLessThan(ESTIMATE_RFA_STROKE_WIDTH);
+    // the dotted series is the heavier of the two: less ink per dash cycle
+    expect(ESTIMATE_RFA_STROKE_WIDTH).toBeGreaterThan(ESTIMATE_LFA_STROKE_WIDTH);
+    expect(TREND).toContain('strokeLinecap="round"');
+  });
+
+  it("delegates the series key to the readable DOM legend, not the hairline recharts one", () => {
+    expect(TREND).toContain("<TrendSeriesLegend estimated={spectralEstimated} />");
+    expect(TREND).not.toMatch(/<Legend\b/);
     expect(TREND).toContain("strokeDasharray={spectralEstimated ? ESTIMATE_LFA_DASH");
     expect(TREND).toContain("strokeDasharray={spectralEstimated ? ESTIMATE_RFA_DASH");
   });
@@ -207,5 +232,142 @@ describe("estimate disclosure legibility", () => {
     const conf = screen.getByTestId("mpg-estimate-confidence");
     expect(conf.textContent).toContain("45% method confidence");
     expect(conf.className).not.toMatch(/\/(50|60|70)\b/);
+  });
+});
+
+describe("phase A-F band labels", () => {
+  const bands = [
+    { startSec: 0, endSec: 300 },   // A baseline
+    { startSec: 300, endSec: 360 }, // B deep breathing
+    { startSec: 360, endSec: 380 }, // C recovery  (tight)
+    { startSec: 380, endSec: 400 }, // D valsalva  (tight)
+    { startSec: 400, endSec: 460 }, // E recovery
+    { startSec: 460, endSec: 760 }, // F stand
+  ];
+
+  it("draws an opaque backplate with a light glyph, not bare text", () => {
+    const { container } = render(
+      <svg>
+        <PhaseBandLabel
+          viewBox={{ x: 100, y: 10, width: 40, height: 120 }}
+          name="B"
+          index={1}
+          bands={bands}
+        />
+      </svg>,
+    );
+    const group = container.querySelector('[data-testid="mpg-phase-pill-B"]');
+    expect(group).toBeTruthy();
+    const rect = group!.querySelector("rect")!;
+    expect(rect.getAttribute("fill")).toBe(PHASE_PILL_FILL);
+    expect(Number(rect.getAttribute("width"))).toBe(PHASE_PILL_WIDTH);
+    expect(Number(rect.getAttribute("height"))).toBe(PHASE_PILL_HEIGHT);
+    expect(rect.getAttribute("stroke")).toBeTruthy();
+    const text = group!.querySelector("text")!;
+    expect(text.textContent).toBe("B");
+    expect(text.getAttribute("fill")).toBe(PHASE_PILL_TEXT_FILL);
+    // pill backplate is opaque enough that the band tint underneath cannot
+    // change the glyph's effective contrast
+    const alpha = Number(/\/\s*([0-9.]+)\)/.exec(PHASE_PILL_FILL)?.[1]);
+    expect(alpha).toBeGreaterThanOrEqual(0.9);
+  });
+
+  it("centres the pill in its own band box", () => {
+    const { container } = render(
+      <svg>
+        <PhaseBandLabel
+          viewBox={{ x: 100, y: 10, width: 40, height: 120 }}
+          name="C"
+          index={2}
+          bands={bands}
+        />
+      </svg>,
+    );
+    const rect = container.querySelector('[data-testid="mpg-phase-pill-C"] rect')!;
+    expect(Number(rect.getAttribute("x"))).toBeCloseTo(100 + (40 - PHASE_PILL_WIDTH) / 2, 5);
+  });
+
+  it("staggers rows so tightly packed B/C/D never collide", () => {
+    // ~0.35 px per second: a phone-width chart. C and D are 20 s bands.
+    const rows = assignPhaseLabelRows(bands, 0.35);
+    expect(rows).toHaveLength(bands.length);
+    expect(new Set(rows).size).toBeGreaterThan(1);
+    for (let i = 1; i < rows.length; i++) {
+      const prevCentre = ((bands[i - 1].startSec + bands[i - 1].endSec) / 2) * 0.35;
+      const centre = ((bands[i].startSec + bands[i].endSec) / 2) * 0.35;
+      if (centre - prevCentre < PHASE_LABEL_MIN_GAP_PX) {
+        // too close horizontally => must be on different rows
+        expect(rows[i]).not.toBe(rows[i - 1]);
+      }
+    }
+  });
+
+  it("keeps every pill on the first row when there is room (desktop)", () => {
+    expect(assignPhaseLabelRows(bands, 2.5)).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+
+  it("offsets the second row vertically by a full pill height", () => {
+    expect(PHASE_LABEL_ROW_HEIGHT).toBeGreaterThanOrEqual(PHASE_PILL_HEIGHT);
+    const rows = assignPhaseLabelRows(bands, 0.35);
+    const secondRowIndex = rows.findIndex((r) => r === 1);
+    expect(secondRowIndex).toBeGreaterThan(-1);
+    const { container } = render(
+      <svg>
+        <PhaseBandLabel
+          viewBox={{ x: 10, y: 20, width: 0.35 * (bands[secondRowIndex].endSec - bands[secondRowIndex].startSec), height: 120 }}
+          name="D"
+          index={secondRowIndex}
+          bands={bands}
+        />
+      </svg>,
+    );
+    const group = container.querySelector('[data-testid="mpg-phase-pill-D"]')!;
+    expect(group.getAttribute("data-phase-label-row")).toBe("1");
+    expect(Number(group.querySelector("rect")!.getAttribute("y"))).toBeGreaterThanOrEqual(
+      20 + PHASE_LABEL_ROW_HEIGHT,
+    );
+  });
+
+  it("does not alter phase boundaries anywhere in the label path", () => {
+    const before = JSON.stringify(bands);
+    assignPhaseLabelRows(bands, 0.35);
+    expect(JSON.stringify(bands)).toBe(before);
+  });
+});
+
+describe("LFa/RFa legend swatches", () => {
+  it("draws a thick, pattern-preserving swatch for each series", () => {
+    const { container } = render(<TrendSeriesLegend estimated />);
+    const lfa = container.querySelector('[data-testid="mpg-lfa-rfa-legend-swatch-lfa"]')!;
+    const rfa = container.querySelector('[data-testid="mpg-lfa-rfa-legend-swatch-rfa"]')!;
+    for (const swatch of [lfa, rfa]) {
+      const line = swatch.querySelector("line")!;
+      expect(Number(line.getAttribute("stroke-width"))).toBe(LEGEND_SWATCH_STROKE_WIDTH);
+      // swatch is heavier than the plotted trace so it reads at legend scale
+      expect(LEGEND_SWATCH_STROKE_WIDTH).toBeGreaterThan(ESTIMATE_RFA_STROKE_WIDTH);
+      expect(Number(swatch.getAttribute("width"))).toBe(LEGEND_SWATCH_WIDTH);
+    }
+    // long dash vs dotted semantics preserved and distinct
+    expect(lfa.getAttribute("data-dash")).toBe(ESTIMATE_LFA_DASH);
+    expect(rfa.getAttribute("data-dash")).toBe(ESTIMATE_RFA_DASH);
+    expect(lfa.getAttribute("data-dash")).not.toBe(rfa.getAttribute("data-dash"));
+  });
+
+  it("names the pattern in the estimate legend text", () => {
+    render(<TrendSeriesLegend estimated />);
+    expect(screen.getByTestId("mpg-lfa-rfa-legend-lfa").textContent).toContain(
+      ESTIMATE_LFA_PATTERN_LABEL,
+    );
+    expect(screen.getByTestId("mpg-lfa-rfa-legend-rfa").textContent).toContain(
+      ESTIMATE_RFA_PATTERN_LABEL,
+    );
+  });
+
+  it("shows solid vendor swatches with no estimate wording when values are vendor-reported", () => {
+    const { container } = render(<TrendSeriesLegend estimated={false} />);
+    expect(
+      container.querySelector('[data-testid="mpg-lfa-rfa-legend-swatch-lfa"]')!.getAttribute("data-dash"),
+    ).toBe("solid");
+    expect(screen.getByTestId("mpg-lfa-rfa-legend-lfa").textContent).not.toContain("est.");
   });
 });
