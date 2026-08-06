@@ -11,6 +11,12 @@ import {
   verifyRequest as verifyAdminRequest,
   ADMIN_SUBJECT,
 } from "./_adminSession.js";
+import {
+  DbConfigError,
+  dbNotConfiguredError,
+  resolveDbConfig,
+  type DbConfigResult,
+} from "./_ans/dbConfig.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -25,18 +31,45 @@ export interface AdminUser {
 // ── Singleton service-role client ────────────────────────────────────────────
 
 let _adminClient: SupabaseClient | null = null;
+let _adminClientRef: string | null = null;
 
+/**
+ * Service-role client for the project named by SUPABASE_URL.
+ *
+ * Fails LOUDLY and specifically when the deployment is not configured: a
+ * DbConfigError carrying `statusCode`, `kind`, and a concrete `remediation`
+ * naming the exact env vars to set (never their values). The project ref is
+ * never hard-coded — re-pointing the app at a new Supabase project is purely an
+ * environment change (see api/_ans/dbConfig.ts).
+ *
+ * The memoised client is invalidated if SUPABASE_URL changes at runtime, so a
+ * reconfigured environment (and every test that swaps env vars) is honoured
+ * instead of silently reusing a client for a dead project.
+ */
 export function createSupabaseAdmin(): SupabaseClient {
-  if (_adminClient) return _adminClient;
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) {
-    throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
-  }
-  _adminClient = createClient(url, key, {
+  const cfg: DbConfigResult = resolveDbConfig();
+  if (!cfg.configured || !cfg.url) throw dbNotConfiguredError(cfg);
+  if (_adminClient && _adminClientRef === cfg.url) return _adminClient;
+  _adminClient = createClient(cfg.url, process.env.SUPABASE_SERVICE_ROLE_KEY as string, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+  _adminClientRef = cfg.url;
   return _adminClient;
+}
+
+/**
+ * Non-throwing variant for OPTIONAL, read-only paths (knowledge retrieval).
+ * Returns null when the database is not configured so the caller can degrade to
+ * report-only grounding instead of failing a request that does not require the
+ * database at all. Paths that genuinely need the DB must use
+ * createSupabaseAdmin() and surface the DbConfigError.
+ */
+export function tryCreateSupabaseAdmin(): SupabaseClient | null {
+  try {
+    return createSupabaseAdmin();
+  } catch {
+    return null;
+  }
 }
 
 // ── Per-request client (from Bearer token) ───────────────────────────────────
@@ -221,5 +254,10 @@ export function handleError(
   const e = err as Error & { statusCode?: number };
   const statusCode = e.statusCode ?? 500;
   console.error(e.message, e);
+  // A configuration failure must be UNAMBIGUOUS: return the kind, the concrete
+  // remediation, and the env var NAMES (never values) rather than a bare 500.
+  if (e instanceof DbConfigError) {
+    return res.status(e.statusCode).json(e.toJSON());
+  }
   return res.status(statusCode).json({ success: false, error: e.message });
 }

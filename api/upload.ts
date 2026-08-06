@@ -971,8 +971,12 @@ function computeWellness(
   const spreadScore = sdnnSpread < 5 ? 40 : sdnnSpread > 60 ? 65 : Math.min(100, 40 + sdnnSpread * 1.5);
   const s5 = Math.round((sdnnScore * 0.70 + spreadScore * 0.30) * 10) / 10;
   const s5Drivers: WellnessDriver[] = [
-    mkDriver(`Overall HRV (SDNN)`,   `${Math.round(avgSDNN * 10) / 10} ms vs ${expectedSDNN} expected`, sdnnScore, W.hrv * 0.70),
-    mkDriver(`HRV dynamic range`,     `${Math.round(sdnnSpread * 10) / 10} ms spread`, spreadScore, W.hrv * 0.30),
+    // AUTHORIZED PhysioPS OUTPUT PROTOCOL: these driver labels are rendered in
+    // the PATIENT wellness breakdown, so they must not name the HRV-specific
+    // parameter (sdNN). The calculation, weight and score below are UNCHANGED —
+    // only the patient-facing wording is P&S/plain language.
+    mkDriver(`Heart-rhythm variability reserve`, `${Math.round(avgSDNN * 10) / 10} ms vs ${expectedSDNN} ms expected for age`, sdnnScore, W.hrv * 0.70),
+    mkDriver(`Heart-rhythm variability dynamic range`, `${Math.round(sdnnSpread * 10) / 10} ms spread across the test`, spreadScore, W.hrv * 0.30),
   ];
 
   // ---- Composite raw total (renormalized over AVAILABLE sub-scores) ----
@@ -1228,11 +1232,13 @@ function computeBodyImpact(
   if (spectralAvailable && patterns.advancedAutonomicDysfunction) imm -= 15;
   out.push({ system: "immune", impact: imm, assessed: true,
     label: imm < -15 ? "Affected" : imm < 0 ? "Mildly Affected" : "Stable",
+    // Patient-facing copy: plain language only, no HRV-specific parameter name
+    // (output protocol). Thresholds and the impact score above are unchanged.
     description: avgSDNN < 30
-      ? `Low heart-rate variability across the test (average SDNN ${avgSDNN.toFixed(0)} ms) is associated at a population level with reduced resilience and slower recovery. HRV is an indirect marker — not a direct immune measurement.`
+      ? `Low beat-to-beat heart-rhythm variability across the test (averaging ${avgSDNN.toFixed(0)} ms) is associated at a population level with reduced resilience and slower recovery. This is an indirect marker — not a direct immune measurement.`
       : avgSDNN < 45
-        ? `Your heart-rate variability is modest (average SDNN ${avgSDNN.toFixed(0)} ms); building autonomic reserve through sleep, activity, and stress management may help.`
-        : `Your heart-rate variability reserve (average SDNN ${avgSDNN.toFixed(0)} ms) is adequate on this test.` });
+        ? `Your beat-to-beat heart-rhythm variability is modest (averaging ${avgSDNN.toFixed(0)} ms); building autonomic reserve through sleep, activity, and stress management may help.`
+        : `Your beat-to-beat heart-rhythm variability reserve (averaging ${avgSDNN.toFixed(0)} ms) is adequate on this test.` });
 
   return out;
 }

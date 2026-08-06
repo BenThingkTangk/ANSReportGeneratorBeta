@@ -9,7 +9,14 @@ import {
 import { rankKnowledgeSources } from "./_knowledgeRetrieval.js";
 import { selectPassages, buildPassagePromptSection } from "./_ans/knowledgePassages.js";
 import { retrieveCandidates } from "./_ans/hybridRetrieval.js";
-import { createSupabaseAdmin } from "./_supabase.js";
+import { tryCreateSupabaseAdmin } from "./_supabase.js";
+import { isDbConfigured } from "./_ans/dbConfig.js";
+import {
+  PATIENT_TERMINOLOGY_PROMPT,
+  CLINICIAN_TERMINOLOGY_PROMPT,
+  sanitizePatientTerminology,
+  findBannedHrvTerms,
+} from "../shared/physiopsTerminology.js";
 
 /**
  * /api/ask-atom — Colombo P&S grounded chat (Path B)
@@ -66,6 +73,23 @@ export function stripCitationMarkers(text: string): string {
     .replace(/\n+\s*(?:sources|references|citations)\s*:[\s\S]*$/i, "")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
+}
+
+/**
+ * The single patient-facing output gate for ATOM.
+ *
+ * 1. Removes literature citation markers (patient answers are grounded in the
+ *    patient's own report, not external literature).
+ * 2. Enforces the AUTHORIZED PhysioPS OUTPUT PROTOCOL: ULF, VLF, LF, HF, TSP,
+ *    sdNN, rmsSD and pNN50 are relabelled into P&S terminology. The model is
+ *    already instructed not to emit them; this is the deterministic backstop for
+ *    output we do not control.
+ *
+ * Clinician answers are NOT passed through the terminology gate — instrument-
+ * derived metrics are permitted there for exact vendor parity.
+ */
+export function sanitizePatientAnswer(text: string): string {
+  return sanitizePatientTerminology(stripCitationMarkers(text)).trim();
 }
 
 function cacheGet(key: string): CachedAnswer | null {
@@ -177,12 +201,20 @@ async function streamSonar(opts: {
           if (delta) {
             full += delta;
             if (patientMode) {
-              // Emit only the sanitized suffix so bracket citations never reach
-              // the patient client, even mid-stream. (A trailing '[' is held
-              // back until the next chunk resolves whether it's a citation.)
-              const safeFull = stripCitationMarkers(full);
+              // Emit only the sanitized suffix so neither bracket citations nor
+              // banned HRV parameters reach the patient client, even mid-stream.
+              // A trailing '[' is held back until the next chunk resolves whether
+              // it's a citation; a trailing partial token (e.g. "SD" of "SDNN",
+              // or a value still being written after a parameter name) is held
+              // back so the terminology gate always sees whole tokens.
+              const safeFull = sanitizePatientAnswer(full);
               const pendingBracket = /\[[\d\s,–-]*$/.test(safeFull);
-              const upTo = pendingBracket ? safeFull.replace(/\[[\d\s,–-]*$/, "") : safeFull;
+              const withoutBracket = pendingBracket
+                ? safeFull.replace(/\[[\d\s,–-]*$/, "")
+                : safeFull;
+              // Hold back a trailing word/number run: it may still grow into a
+              // banned parameter or into "<param> = 42 ms".
+              const upTo = withoutBracket.replace(/[A-Za-z0-9./^²-]+$/, "");
               if (upTo.length > emitted.length) {
                 send("delta", { text: upTo.slice(emitted.length) });
                 emitted = upTo;
@@ -200,8 +232,9 @@ async function streamSonar(opts: {
     }
 
     const rawMessage = full.trim();
-    // Patient mode: strip citation markers + suppress the web-citation list.
-    const message = patientMode ? stripCitationMarkers(rawMessage) : rawMessage;
+    // Patient mode: strip citation markers, enforce the PhysioPS terminology
+    // protocol, and suppress the web-citation list.
+    const message = patientMode ? sanitizePatientAnswer(rawMessage) : rawMessage;
     const outWebCitations = patientMode ? [] : webCitations;
     if (message) cacheSet(cacheKey, { message, webCitations: outWebCitations });
     // Mid-stream truncation with no content is an explicit error event, not a
@@ -357,24 +390,42 @@ interface PhaseRow {
   HRV_RMSSD?: number; HRV_SDNN?: number; SBP?: number; DBP?: number;
 }
 
-export function buildEventMeanTable(phaseEvents: PhaseRow[] | undefined): string {
+/**
+ * Per-phase table for the prompt.
+ *
+ * AUTHORIZED PhysioPS OUTPUT PROTOCOL: the HRV(RMSSD) column is instrument-
+ * derived and is only included for the CLINICIAN view, where it is needed for
+ * exact vendor parity. In PATIENT view the column is omitted entirely so the
+ * model is never handed an HRV-specific parameter it could surface to a patient.
+ * No value is altered, recomputed, or invented in either mode.
+ */
+export function buildEventMeanTable(
+  phaseEvents: PhaseRow[] | undefined,
+  viewerRole: "patient" | "clinician" = "clinician",
+): string {
   if (!phaseEvents || phaseEvents.length === 0) {
     return `(no per-phase data — treat every spectral metric as ${NOT_ASSESSED})`;
   }
+  const includeInstrumentHrv = viewerRole === "clinician";
   const cell = (v: number | null | undefined, digits: number): string => {
     const a = assessedNum(v);
     return a === null ? NOT_ASSESSED : a.toFixed(digits);
   };
-  const rows = [
-    "Event | LFa | RFa | SB | HRV(RMSSD) | mHR | BP",
-    "--- | --- | --- | --- | --- | --- | ---",
-  ];
+  const rows = includeInstrumentHrv
+    ? [
+        "Event | LFa | RFa | SB | HRV(RMSSD) | mHR | BP",
+        "--- | --- | --- | --- | --- | --- | ---",
+      ]
+    : ["Event | LFa | RFa | SB | mHR | BP", "--- | --- | --- | --- | --- | ---"];
   for (const p of phaseEvents) {
     const sbp = assessedNum(p.SBP);
     const dbp = assessedNum(p.DBP);
     const bp = sbp !== null && dbp !== null ? `${sbp}/${dbp}` : NOT_ASSESSED;
+    const head = `${p.phase} | ${cell(p.LFa, 2)} | ${cell(p.RFa, 2)} | ${cell(p.SB, 2)}`;
     rows.push(
-      `${p.phase} | ${cell(p.LFa, 2)} | ${cell(p.RFa, 2)} | ${cell(p.SB, 2)} | ${cell(p.HRV_RMSSD, 1)} | ${cell(p.meanHR, 0)} | ${bp}`,
+      includeInstrumentHrv
+        ? `${head} | ${cell(p.HRV_RMSSD, 1)} | ${cell(p.meanHR, 0)} | ${bp}`
+        : `${head} | ${cell(p.meanHR, 0)} | ${bp}`,
     );
   }
   return rows.join("\n");
@@ -585,7 +636,10 @@ export function buildPatientContext(report: any, viewerRole: string, vendorExtra
     ? report.indications.map((i: any) => `- **${i.name}** (${i.severity}): ${i.description}`).join("\n")
     : "None detected by automated rules.";
 
-  const meanTable = buildEventMeanTable(report.phaseEvents);
+  const meanTable = buildEventMeanTable(
+    report.phaseEvents,
+    viewerRole === "clinician" ? "clinician" : "patient",
+  );
   const assessability = buildAssessabilitySection(report);
   // Vendor-reported evidence from any attached signed vendor PDF(s). Empty
   // string when nothing is attached, so .ans-only context is unchanged.
@@ -695,8 +749,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // in the RPC). Never throws: any vector-path problem (no embedding column,
       // all-NULL embeddings, pgvector or RPC absent, provider unconfigured or
       // erroring) degrades to the lexical ranker.
+      // SAFE FAILURE: when the database is not configured (or the project ref in
+      // SUPABASE_URL no longer resolves) we must NOT 500 an answer that does not
+      // need the database. tryCreateSupabaseAdmin() returns null instead of
+      // throwing and retrieveCandidates() reports the reason honestly, so ATOM
+      // degrades to report-only grounding and says so.
       retrieveCandidates(
-        createSupabaseAdmin(),
+        tryCreateSupabaseAdmin(),
         [...messages].reverse().find((m: any) => m.role === "user")?.content ?? "",
         () => getCandidatePassages(),
       ),
@@ -746,7 +805,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       : { mode: "report_only" as const, chunks: 0, activeSources: corpus.activeSources,
           retrieval: retrieval.mode,
           retrievalFallbackReason: retrieval.fallbackReason,
-          note: corpus.ragFunctional
+          // Distinguish "nothing relevant in the corpus" from "there is no
+          // database configured" so an operator can tell misconfiguration apart
+          // from an empty knowledge base.
+          databaseConfigured: isDbConfigured(),
+          note: retrieval.mode === "unavailable"
+            ? "Knowledge retrieval is unavailable because the database is not configured for this deployment; the answer is grounded in the report and clearly-labeled external evidence only."
+            : corpus.ragFunctional
             ? "No knowledge passage was relevant to this question; the answer is grounded in the report and clearly-labeled external evidence, not RAG."
             : "Private knowledge corpus has no full-text chunks; answer is grounded in the report and clearly-labeled external evidence, not RAG." };
 
@@ -757,6 +822,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       SYSTEM_PROMPT,
       knowledgeSection,
       passageSection,
+      // AUTHORIZED PhysioPS OUTPUT PROTOCOL — role-specific terminology contract.
+      viewerRole === "patient" ? PATIENT_TERMINOLOGY_PROMPT : CLINICIAN_TERMINOLOGY_PROMPT,
       buildPatientContext(report, viewerRole, vendorExtraction),
     ]
       .filter(Boolean)
@@ -825,8 +892,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const rawWebCitations = j?.citations || j?.search_results?.map((s: any) => s?.url).filter(Boolean) || [];
     // Patient mode must never expose literature citations: strip bracket markers
     // from the prose and drop the web-citation list. Clinician mode keeps them.
-    const message = viewerRole === "patient" ? stripCitationMarkers(rawMessage) : rawMessage;
+    const message = viewerRole === "patient" ? sanitizePatientAnswer(rawMessage) : rawMessage;
     const webCitations = viewerRole === "patient" ? [] : rawWebCitations;
+    // Defence in depth: if anything still slipped through, do not ship it.
+    if (viewerRole === "patient") {
+      const leaked = findBannedHrvTerms(message);
+      if (leaked.length > 0) {
+        console.error(
+          `ask-atom: PhysioPS protocol backstop tripped for patient view (${leaked.join(", ")})`,
+        );
+        return res.status(500).json({
+          success: false,
+          error:
+            "Answer withheld: it did not satisfy the PhysioPS patient output protocol. Please retry.",
+        });
+      }
+    }
 
     // Only cache non-empty answers so a transient blank never sticks.
     if (message) cacheSet(cacheKey, { message, webCitations });

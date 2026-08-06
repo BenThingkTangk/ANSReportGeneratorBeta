@@ -28,7 +28,7 @@
 import type { PassageRow } from "./knowledgePassages.js";
 import { embedQuery, EmbeddingUnavailableError, isEmbeddingConfigured } from "./embeddings.js";
 
-export type RetrievalMode = "vector" | "lexical";
+export type RetrievalMode = "vector" | "fulltext" | "lexical" | "unavailable";
 
 export interface RetrievalOutcome {
   /** Candidate rows for the lexical/prompt layer to rank + format. */
@@ -45,6 +45,47 @@ export interface RetrievalOutcome {
 interface SupabaseLike {
   from: (table: string) => any;
   rpc: (fn: string, args: Record<string, unknown>) => any;
+}
+
+/**
+ * DEDUPLICATION — "avoid duplicate weighting".
+ *
+ * The same passage can arrive twice: once from the vector RPC and once from the
+ * full-text RPC, or twice from a corpus where a source was re-ingested and the
+ * identical text exists under two chunk rows. Two copies of one passage would
+ * double its influence on the prompt (and could crowd out every other source),
+ * so rows are collapsed on (a) chunk id, then (b) source_id + normalised
+ * content, keeping the FIRST (highest-ranked) occurrence.
+ */
+export function dedupePassages(rows: PassageRow[]): PassageRow[] {
+  const seenIds = new Set<string>();
+  const seenText = new Set<string>();
+  const out: PassageRow[] = [];
+  for (const r of rows ?? []) {
+    if (!r) continue;
+    const id = r.id ? String(r.id) : null;
+    if (id && seenIds.has(id)) continue;
+    const norm = (r.content ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+    const textKey = `${r.source_id ?? r.source?.id ?? "?"}::${norm}`;
+    if (norm.length > 0 && seenText.has(textKey)) continue;
+    if (id) seenIds.add(id);
+    if (norm.length > 0) seenText.add(textKey);
+    out.push(r);
+  }
+  return out;
+}
+
+/**
+ * GATING — clinical safeguard, enforced in-process regardless of which path
+ * produced the row. Both RPCs and the PostgREST query already filter on
+ * review_status='approved' AND active_in_ai_analysis=true, but a row that cannot
+ * PROVE it is approved + active is dropped here too, so a schema drift or a
+ * hand-written RPC can never widen the corpus silently.
+ */
+export function isGatedApprovedActive(row: PassageRow): boolean {
+  const src = row?.source;
+  if (!src) return false;
+  return src.review_status === "approved" && src.active_in_ai_analysis === true;
 }
 
 /** Shape returned by the repaired match_ans_knowledge_chunks RPC (migration 0006). */
@@ -140,37 +181,122 @@ async function tryVector(
 }
 
 /**
+ * TIER 2 — DATABASE FULL-TEXT SEARCH.
+ *
+ * Postgres `websearch_to_tsquery` + `ts_rank_cd` over the generated tsvector
+ * added by migration 0007, exposed as `match_ans_knowledge_chunks_lexical`. This
+ * is the robust grounded fallback when embeddings are unavailable: it needs no
+ * AI provider at all, applies the SAME source gating in SQL, and returns the
+ * same provenance fields.
+ *
+ * Returns `{ unavailable }` (never throws) when the RPC or index is absent, so
+ * the in-process lexical ranker still backs it up on an un-migrated database.
+ */
+async function tryFullText(
+  admin: SupabaseLike,
+  query: string,
+  opts: { matchCount: number },
+): Promise<{ rows: PassageRow[] } | { unavailable: string }> {
+  try {
+    const { data, error } = await admin.rpc("match_ans_knowledge_chunks_lexical", {
+      query_text: query,
+      match_count: opts.matchCount,
+    });
+    if (error) {
+      if (isMissingObject(error)) {
+        return {
+          unavailable:
+            "match_ans_knowledge_chunks_lexical unavailable (apply migration 0007)",
+        };
+      }
+      return { unavailable: `full-text search error: ${error.message}` };
+    }
+    const rows = (Array.isArray(data) ? data : []) as MatchRow[];
+    if (rows.length === 0) return { unavailable: "full-text search returned no rows" };
+    return { rows: rows.map(matchRowToPassage) };
+  } catch (e) {
+    return { unavailable: `full-text search exception: ${(e as Error)?.message ?? String(e)}` };
+  }
+}
+
+/**
  * Retrieve candidate passages for a question.
  *
- * @param admin        service-role Supabase client
+ * Tiered, each tier degrading silently-but-honestly into the next:
+ *   1. `vector`    — pgvector cosine search over embeddings (needs the provider).
+ *   2. `fulltext`  — Postgres full-text search (needs no provider at all).
+ *   3. `lexical`   — in-process deterministic term-overlap ranker (needs only rows).
+ *   4. `unavailable` — no database at all; caller degrades to report-only.
+ *
+ * Every returned row is gated (approved + AI-active) and de-duplicated, so no
+ * passage is weighted twice and no unapproved source can ever reach the prompt.
+ *
+ * @param admin        service-role Supabase client, or null when the database is
+ *                     not configured (safe failure — see api/_ans/dbConfig.ts)
  * @param query        the user's latest question
  * @param lexicalFetch loader for the lexical path (usually getCandidatePassages)
  */
 export async function retrieveCandidates(
-  admin: SupabaseLike,
+  admin: SupabaseLike | null | undefined,
   query: string,
   lexicalFetch: () => Promise<PassageRow[]>,
-  opts: { matchCount?: number; matchThreshold?: number; preferVector?: boolean } = {},
+  opts: {
+    matchCount?: number;
+    matchThreshold?: number;
+    preferVector?: boolean;
+    preferFullText?: boolean;
+  } = {},
 ): Promise<RetrievalOutcome> {
   const matchCount = opts.matchCount ?? 12;
   const matchThreshold = opts.matchThreshold ?? 0.05;
   const preferVector = opts.preferVector ?? true;
+  const preferFullText = opts.preferFullText ?? true;
+  const hasQuery = (query ?? "").trim().length > 0;
 
-  if (preferVector && (query ?? "").trim().length > 0) {
+  // No database configured/reachable: report it explicitly rather than pretending
+  // the corpus is simply empty.
+  if (!admin) {
+    return {
+      rows: [],
+      mode: "unavailable",
+      fallbackReason:
+        "database not configured (set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY); " +
+        "answer is grounded in the report only",
+    };
+  }
+
+  const reasons: string[] = [];
+
+  if (preferVector && hasQuery) {
     const attempt = await tryVector(admin, query, { matchCount, matchThreshold });
-    if ("rows" in attempt) {
-      return { rows: attempt.rows, mode: "vector", fallbackReason: null };
-    }
-    // Fall through to lexical, remembering why.
-    const rows = await safeLexical(lexicalFetch);
-    return { rows, mode: "lexical", fallbackReason: attempt.unavailable };
+    if ("rows" in attempt) return finalize(attempt.rows, "vector", null);
+    reasons.push(attempt.unavailable);
+  } else if (preferVector) {
+    reasons.push("no query terms to embed");
+  } else {
+    reasons.push("vector retrieval disabled by caller");
+  }
+
+  if (preferFullText && hasQuery) {
+    const attempt = await tryFullText(admin, query, { matchCount });
+    if ("rows" in attempt) return finalize(attempt.rows, "fulltext", reasons.join("; "));
+    reasons.push(attempt.unavailable);
   }
 
   const rows = await safeLexical(lexicalFetch);
+  return finalize(rows, "lexical", reasons.join("; ") || null);
+}
+
+/** Gate → dedupe → outcome. Applied to every tier, so nothing bypasses it. */
+function finalize(
+  rows: PassageRow[],
+  mode: RetrievalMode,
+  fallbackReason: string | null,
+): RetrievalOutcome {
   return {
-    rows,
-    mode: "lexical",
-    fallbackReason: preferVector ? "no query terms to embed" : "vector retrieval disabled by caller",
+    rows: dedupePassages((rows ?? []).filter(isGatedApprovedActive)),
+    mode,
+    fallbackReason: fallbackReason && fallbackReason.length > 0 ? fallbackReason : null,
   };
 }
 

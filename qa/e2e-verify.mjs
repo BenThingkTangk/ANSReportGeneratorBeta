@@ -72,17 +72,25 @@ for (const vp of [
     rec(`${vp.tag}: honest not-assessed gating shown`,
       /not assessed|not reproducible|require|clinician review|unavailable/.test(patText), "patient copy");
 
-    // Step 8: SDNN / LF-HF labels present and not clipped out of the gauge.
+    // Step 8: gauge readout labels present and not clipped out of the gauge.
+    // NOTE (PhysioPS output protocol): the PATIENT portal no longer renders the
+    // HRV-specific rmsSD/sdNN readouts, so only the P&S sympathovagal-balance
+    // readout (data-testid="abg-lfhf") is asserted here. The clinician gauge
+    // (audience="clinician") still renders abg-rmssd / abg-sdnn.
     // (Presence proves the metric overlays render; the fixed-width nowrap boxes
     // keep them inside the gauge — visually confirmed via screenshot.)
     await page.click('[data-testid="toggle-patient"]');
     // Wait for the gauge to finish its enter transition before counting labels,
     // so we don't sample mid-animation.
     await page.waitForSelector('[data-testid="autonomic-balance-gauge"]', { timeout: 10000 });
-    await page.waitForSelector('[data-testid="abg-sdnn"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="abg-lfhf"]', { timeout: 10000 });
     const sdnn = await page.locator('[data-testid="abg-sdnn"]').count();
     const lfhf = await page.locator('[data-testid="abg-lfhf"]').count();
-    rec(`${vp.tag}: SDNN + LF/HF metric labels render`, sdnn > 0 && lfhf > 0, `sdnn=${sdnn} lfhf=${lfhf}`);
+    rec(
+      `${vp.tag}: sympathovagal-balance readout renders; no HRV-specific readout in patient view`,
+      lfhf > 0 && sdnn === 0,
+      `sdnn=${sdnn} (expected 0) lfhf=${lfhf}`,
+    );
 
     await page.screenshot({ path: `${OUT}/e2e-${vp.tag}-clinician.png`, fullPage: false });
   } catch (e) {

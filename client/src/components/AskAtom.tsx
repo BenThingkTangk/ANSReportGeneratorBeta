@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { X, Send, Plus, Square, RotateCcw, CornerUpLeft, User, Stethoscope, Mic, Volume2 } from "lucide-react";
 import { AtomLogo } from "./AtomLogo";
 import { AtomMarkdown } from "./AtomMarkdown";
+import { sanitizePatientTerminology } from "@shared/physiopsTerminology";
 import { apiRequest } from "@/lib/queryClient";
 import { useAtomVoice } from "@/hooks/useAtomVoice";
 import { phiTermsFromReport } from "@/lib/speech";
@@ -567,7 +568,8 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
       return;
     }
     setSpeakingId(msg.id);
-    voice.speak(msg.content, redactTerms);
+    // Read aloud must obey the same output protocol as the rendered text.
+    voice.speak(mode === "patient" ? sanitizePatientTerminology(msg.content) : msg.content, redactTerms);
   };
 
   // Branch back: rewind to an earlier question, restoring its text for editing.
@@ -829,7 +831,15 @@ export function AskAtom({ report, vendorExtraction, viewerRole, open: openProp, 
                           color: "hsl(210 12% 82%)",
                         }}
                       >
-                        <AtomMarkdown content={msg.content} />
+                        {/* AUTHORIZED PhysioPS OUTPUT PROTOCOL — client-side
+                            backstop. /api/ask-atom already gates patient answers,
+                            but the renderer refuses to display an HRV-specific
+                            parameter (ULF, VLF, LF, HF, TSP, sdNN, rmsSD, pNN50)
+                            in patient mode even if an older/cached deployment
+                            returns one. Clinician mode is untouched. */}
+                        <AtomMarkdown
+                          content={mode === "patient" ? sanitizePatientTerminology(msg.content) : msg.content}
+                        />
                         {msg.status === "streaming" && (
                           <span
                             className="inline-block w-1.5 h-3 align-middle ml-0.5 animate-pulse"

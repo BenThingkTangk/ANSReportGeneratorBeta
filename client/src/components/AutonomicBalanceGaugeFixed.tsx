@@ -13,21 +13,38 @@ interface AutonomicBalanceGaugeProps {
   parasympathetic: number | null;     // 0..100 (% of total); null = not assessed
   hrvRmssdMs: number;          // RMSSD in milliseconds (vagal HRV)
   hrvSdnnMs: number;           // SDNN in milliseconds (total HRV)
-  lfHfRatio: number | null;           // LF/HF ratio (sympathovagal balance, ~0.5–2.0 normal); null = not assessed
+  /**
+   * Sympathovagal balance. The caller passes Colombo's SB = LFa/RFa (see
+   * PatientPortalTwoColumn), so in the patient view it is LABELLED as
+   * sympathovagal balance rather than as the HRV LF/HF ratio. null = not assessed.
+   */
+  lfHfRatio: number | null;
   balanceLabel?: string;       // tier label
   /** When false, spectral split is not available — render "Not assessed". */
   available?: boolean;
+  /**
+   * AUTHORIZED PhysioPS OUTPUT PROTOCOL. Defaults to "patient" (fail-safe).
+   *
+   * "patient"   — HRV-specific parameters (rmsSD/RMSSD, sdNN/SDNN, LF, HF, ULF,
+   *               VLF, TSP, pNN50) are NOT rendered. The patient sees the P&S
+   *               readouts only: sympathetic %, parasympathetic %, and
+   *               sympathovagal balance (LFa/RFa).
+   * "clinician" — instrument-derived RMSSD/SDNN readouts are shown for exact
+   *               vendor parity, exactly as measured (never recomputed).
+   */
+  audience?: "patient" | "clinician";
 }
 
 /**
  * Cinematic dual-ring Sympathetic ⋂ Parasympathetic balance gauge.
  *
  * Real per-patient values driven by the parsed .ans file:
- *   • HRV RMSSD (ms)   — top
- *   • Sympathetic %    — left circle
+ *   • Sympathetic %     — left circle
  *   • Parasympathetic % — right circle
- *   • SDNN (ms)        — bottom-left
- *   • LF/HF ratio      — bottom-right
+ *   • Sympathovagal balance (SB = LFa/RFa) — bottom-right
+ *   • HRV RMSSD (ms) — top, and SDNN (ms) — bottom-left: CLINICIAN VIEW ONLY
+ *     (`audience="clinician"`). Under the authorized PhysioPS output protocol
+ *     rmsSD/sdNN are not shown to patients.
  *
  * The outer dotted arc segments illuminate proportionally to the
  * sympathetic (left, orange) and parasympathetic (right, cyan)
@@ -42,7 +59,10 @@ export function AutonomicBalanceGauge({
   lfHfRatio,
   balanceLabel,
   available = true,
+  audience = "patient",
 }: AutonomicBalanceGaugeProps) {
+  // Instrument-derived HRV readouts are clinician-only (output protocol).
+  const showInstrumentHrv = audience === "clinician";
   const reduce = useReducedMotion();
 
   // Balance is NOT assessed when spectral is unavailable OR the split is null /
@@ -348,7 +368,9 @@ export function AutonomicBalanceGauge({
 
       {/* Text overlays — positioned in % so they scale with the SVG */}
       <div className="absolute inset-0 pointer-events-none">
-        {/* HRV RMSSD — top center */}
+        {/* HRV RMSSD — top center. CLINICIAN VIEW ONLY: rmsSD is an
+            HRV-specific parameter and is omitted from patient-facing output. */}
+        {showInstrumentHrv && (
         <div
           className="absolute left-1/2 -translate-x-1/2 text-center"
           style={{ top: "5%" }}
@@ -376,6 +398,7 @@ export function AutonomicBalanceGauge({
             )}
           </div>
         </div>
+        )}
 
         {/* When the sympathetic/parasympathetic split is NOT assessed, a single
             centered label is shown instead of three overlapping "Not assessed"
@@ -465,7 +488,10 @@ export function AutonomicBalanceGauge({
         )}
 
         {/* SDNN — bottom-left. Fixed-width, centered, nowrap box so the value
-            (e.g. "60.1 ms") never clips past the gauge edge. */}
+            (e.g. "60.1 ms") never clips past the gauge edge.
+            CLINICIAN VIEW ONLY: sdNN is an HRV-specific parameter and is omitted
+            from patient-facing output. */}
+        {showInstrumentHrv && (
         <div
           className="absolute text-center"
           style={{ top: "68%", left: "20%", transform: "translate(-50%, -50%)", width: "34%" }}
@@ -490,15 +516,18 @@ export function AutonomicBalanceGauge({
             )}
           </div>
         </div>
+        )}
 
-        {/* LF/HF — bottom-right. Fixed-width, centered, nowrap so "LF / HF" and
-            the value stay inside the gauge instead of clipping at the edge. */}
+        {/* Sympathovagal balance — bottom-right. The value IS Colombo's
+            SB = LFa/RFa, so the patient view labels it in P&S terms; only the
+            clinician view uses the instrument's "LF / HF" wording. Fixed-width,
+            centered, nowrap so the label and value stay inside the gauge. */}
         <div
           className="absolute text-center"
           style={{ top: "68%", left: "80%", transform: "translate(-50%, -50%)", width: "34%" }}
         >
           <div className="ps-overline whitespace-nowrap" style={{ color: "hsl(185 70% 70%)", fontSize: fs(10, 8) }}>
-            LF / HF
+            {showInstrumentHrv ? "LF / HF" : "SB · LFa/RFa"}
           </div>
           <div
             className="ps-text-mono font-bold leading-none mt-1 whitespace-nowrap"

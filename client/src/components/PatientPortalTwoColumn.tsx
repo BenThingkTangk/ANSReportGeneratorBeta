@@ -210,6 +210,12 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
                 lfHfRatio={lfHf}
                 balanceLabel={spectralAvailable ? tier : "Not assessed"}
                 available={spectralAvailable}
+                // AUTHORIZED PhysioPS OUTPUT PROTOCOL: this is the PATIENT
+                // portal, so the gauge renders P&S readouts only (sympathetic %,
+                // parasympathetic %, sympathovagal balance LFa/RFa). rmsSD and
+                // sdNN are withheld here; clinician views may show them for
+                // exact vendor parity.
+                audience="patient"
               />
               {balanceAssessed ? (
                 ab.interpretation && (

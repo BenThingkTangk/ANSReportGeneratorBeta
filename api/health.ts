@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { configReport } from "./_ans/dbConfig.js";
 
 /**
  * /api/health — enriched deploy + runtime info.
@@ -39,6 +40,11 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
       buildTime: process.env.BUILD_TIME ?? null,
       deploymentUrl: process.env.VERCEL_URL ?? null,
     },
+    // Configuration diagnostics. PRESENCE ONLY — no key, no key fragment, no
+    // value is ever returned here. `database.projectRef` is the public project
+    // ref parsed from SUPABASE_URL, so a stale/dead project ref is immediately
+    // visible in the field instead of surfacing as an opaque 500.
+    config: configReport(),
     runtime: {
       node: process.version,
       platform: process.platform,

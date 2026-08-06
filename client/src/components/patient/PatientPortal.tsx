@@ -184,6 +184,8 @@ export function PatientPortal({ report }: PatientPortalProps) {
               lfHfRatio={lfHf}
               balanceLabel={balanceChipLabel}
               available={spectralAvailable}
+              // PATIENT portal: P&S readouts only (output protocol).
+              audience="patient"
             />
             {ab.interpretation && (
               <p className="text-sm text-white/70 leading-relaxed mt-4 text-center max-w-xl mx-auto">

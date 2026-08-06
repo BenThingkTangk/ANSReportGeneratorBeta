@@ -9,6 +9,13 @@ interface AutonomicBalanceGaugeProps {
   lfHfRatio: number | null;           // LF/HF ratio (sympathovagal balance, ~0.5–2.0 normal); null = not assessed
   balanceLabel?: string;       // tier label
   /**
+   * AUTHORIZED PhysioPS OUTPUT PROTOCOL. Defaults to "patient" (fail-safe):
+   * HRV-specific parameters (rmsSD/RMSSD, sdNN/SDNN, LF, HF) are not rendered
+   * for patients. Set "clinician" to show instrument-derived readouts for exact
+   * vendor parity.
+   */
+  audience?: "patient" | "clinician";
+  /**
    * When false, the sympathetic/parasympathetic spectral split is NOT available
    * (e.g. raw ECG-only .ans). The gauge must render "Not assessed" instead of
    * fabricating a 0/100 percentage split. HR-derived HRV (RMSSD/SDNN) is still
@@ -40,7 +47,9 @@ export function AutonomicBalanceGauge({
   lfHfRatio,
   balanceLabel,
   available = true,
+  audience = "patient",
 }: AutonomicBalanceGaugeProps) {
+  const showInstrumentHrv = audience === "clinician";
   const reduce = useReducedMotion();
 
   // Spectral split is only meaningful when available AND both inputs are real
@@ -316,7 +325,8 @@ export function AutonomicBalanceGauge({
 
       {/* Text overlays — positioned in % so they scale with the SVG */}
       <div className="absolute inset-0 pointer-events-none">
-        {/* HRV RMSSD — top center */}
+        {/* HRV RMSSD — top center. CLINICIAN VIEW ONLY (output protocol). */}
+        {showInstrumentHrv && (
         <div
           className="absolute left-1/2 -translate-x-1/2 text-center"
           style={{ top: "5%" }}
@@ -342,6 +352,7 @@ export function AutonomicBalanceGauge({
             </span>
           </div>
         </div>
+        )}
 
         {/* Sympathetic % — left circle */}
         <div
@@ -404,7 +415,8 @@ export function AutonomicBalanceGauge({
           </div>
         </div>
 
-        {/* SDNN — bottom-left */}
+        {/* SDNN — bottom-left. CLINICIAN VIEW ONLY (output protocol). */}
+        {showInstrumentHrv && (
         <div
           className="absolute text-center"
           style={{ top: "68%", left: "20%", transform: "translate(-50%, -50%)" }}
@@ -427,14 +439,16 @@ export function AutonomicBalanceGauge({
             </span>
           </div>
         </div>
+        )}
 
-        {/* LF/HF — bottom-right */}
+        {/* Sympathovagal balance (SB = LFa/RFa) — bottom-right. The patient view
+            labels it in P&S terms; only the clinician view uses "LF / HF". */}
         <div
           className="absolute text-center"
           style={{ top: "68%", left: "80%", transform: "translate(-50%, -50%)" }}
         >
           <div className="ps-overline" style={{ color: "hsl(185 70% 70%)", fontSize: 10 }}>
-            LF / HF
+            {showInstrumentHrv ? "LF / HF" : "SB · LFa/RFa"}
           </div>
           <div
             className="ps-text-mono font-bold leading-none mt-1"
