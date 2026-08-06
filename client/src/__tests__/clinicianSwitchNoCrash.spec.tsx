@@ -141,12 +141,19 @@ describe("Patient -> Clinician switch does not blank the app (THIRD FINAL-QA)", 
     }
   });
 
-  it("confirms the crash-input: spectralAvailable false + null spectral fields", () => {
+  it("confirms the crash-input: spectral clinically unavailable, BP absent", () => {
+    // The crash input is the UNAVAILABLE CLINICAL GATE, not a null number:
+    // waveform-derived LFa/RFa/SB are now published as HumanOS estimates, so the
+    // render path must survive "values present but not clinically usable" too.
     expect(report.spectralAvailable).toBe(false);
     expect(report.bpAvailable).toBe(false);
-    expect(report.phaseEvents[0].LFa).toBeNull();
-    expect(report.phaseEvents[0].RFa).toBeNull();
-    expect(report.phaseEvents[0].SB).toBeNull();
+    for (const key of ["LFa", "RFa", "SB"] as const) {
+      const prov = report.phaseEvents[0].provenance?.[key];
+      expect(["computed", "unavailable"]).toContain(prov?.method);
+      if (report.phaseEvents[0][key] !== null) {
+        expect(prov?.validation).toBe("estimated");
+      }
+    }
   });
 
   it("renders ReportDashboard, clicks Clinician, and never blanks", async () => {

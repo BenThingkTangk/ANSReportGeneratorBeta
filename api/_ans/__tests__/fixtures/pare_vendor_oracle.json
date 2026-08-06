@@ -79,7 +79,8 @@
       "note": "Vendor summary supplies identity + anthropometrics + qualitative findings; it carries NO numeric spectral grid, so per-phase LFa/RFa/SB remain Not assessed even when the summary is attached."
     },
     "mustNever": [
-      "generate LFa/RFa/SB phase numbers from the .ans waveform",
+      "publish waveform-derived LFa/RFa/SB as vendor-reported, PhysioPS-validated, or clinically interpretable values (HumanOS may compute them only as labelled estimates)",
+      "calibrate waveform-derived spectral values with a constant fitted to any single patient or PDF",
       "emit ALA / hydration / salt / Nortriptyline / Midodrine as automatic therapy recommendations",
       "treat the Colombo letter's treatment prose as an engine recommendation",
       "show an ATOM connection error as the primary clinical summary"

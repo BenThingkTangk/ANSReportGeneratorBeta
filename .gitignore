@@ -22,3 +22,6 @@ fixtures/*.ans
 api/_ans/__tests__/smoke.mjs
 api/_ans/__tests__/adapter_smoke.mjs
 api/parse.ts.full
+
+# dev-only scratch probes (not part of the build)
+scratch/

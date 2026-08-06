@@ -25,12 +25,31 @@ source file, but the patient is no longer identifiable.
 Consumed by `realFixtureGoldenMaster.spec.ts` (golden master + anti-oracle +
 vendor-parity contract). The un-redacted source files are **never** committed.
 
-## What is NOT derivable from the `.ans` alone
+## What the `.ans` waveform CAN and CANNOT support
 
-The proprietary spectral aggregates (LFa/RFa/SB), the sympathovagal balance,
-and cuff blood pressure are **not** reproducible from the raw waveform — the
-vendor's wavelet algorithm and calibration are undisclosed. The tests assert
-these stay `null` / "Not assessed" unless a paired vendor PDF supplies them
-(`x-vendor-metrics` / OCR path, `vendor_reported` provenance). See the
-project-root recovery report for the full source-data specification required to
-derive them generically.
+**Estimable generically (HumanOS estimates, `computed` + `validation:"estimated"`):**
+LFa / RFa / SB / FRF and their rolling trends. `api/_ans/spectral.ts` detects
+R-peaks, interpolates R-R to an instantaneous-bpm grid at 4 Hz, high-passes and
+detrends it, then integrates Morlet-wavelet band power (Q = 5) over a
+sympathetic band (0.04-0.15 Hz) and a respiration-adaptive respiratory band.
+No fitted calibration constant is used: the unit conversion is done on the
+signal (bpm²), not by scaling the answer.
+
+**NOT supported at any confidence:**
+
+- **Vendor parity.** The vendor's wavelet implementation, windowing, and
+  calibration are undisclosed, so a HumanOS estimate is *not* the vendor's LFa /
+  RFa / SB and must never be labelled `vendor_reported` or presented as
+  PhysioPS-validated. Broadband validation shows the estimator reads roughly
+  10-19% high on white-noise band power (Gaussian band-edge leakage).
+- **Clinical interpretation.** `mayInterpretClinically()` is false for
+  `estimated` values, so estimates cannot drive a composite wellness score, a
+  dysfunction pattern, or a narrative finding. `spectralAvailable` stays `false`
+  without a paired vendor report.
+- **Cuff blood pressure.** Not in the file at all; stays `null` / "Not assessed"
+  unless a paired vendor PDF supplies it (`x-vendor-metrics` / OCR path,
+  `vendor_reported` provenance).
+
+The tests assert both halves: estimates are present and labelled, and the
+clinical surfaces stay closed. See the project-root recovery report for the full
+source-data specification a validated derivation would require.

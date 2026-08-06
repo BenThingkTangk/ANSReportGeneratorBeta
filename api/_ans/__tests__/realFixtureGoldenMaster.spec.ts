@@ -16,9 +16,11 @@
  *      identity and study date the vendor recorded (Pare: E/I 1.22, Valsalva
  *      1.49, 30:15 1.33, ectopy 1 — asserted verbatim per the task).
  *   2. Parsing is deterministic across repeated runs on the same bytes.
- *   3. Proprietary spectral aggregates (LFa/RFa/SB) and cuff BP are NOT
- *      synthesized from the raw waveform — they stay null/unavailable unless a
- *      paired vendor PDF supplies them.
+ *   3. Waveform-derived spectral values (LFa/RFa/SB) are published ONLY as
+ *      HumanOS estimates with `computed`/`estimated` provenance: they never
+ *      carry vendor provenance, never unlock the clinical gate, and never come
+ *      from a patient-fitted calibration constant. Cuff BP is not in the file at
+ *      all and stays unavailable unless a paired vendor PDF supplies it.
  *   4. ANTI-ORACLE: no per-patient hardcode. Renaming the patient does not
  *      change any measured value; the removed `isJillShah` fabrication is gone;
  *      and no fabricated demographic defaults (weight=150 / BMI) leak in.
@@ -144,21 +146,31 @@ describe("real de-identified fixtures — golden master", () => {
 });
 
 describe("anti-oracle — no per-patient hardcode, no fabricated proprietary data", () => {
-  it("no phase carries a synthesized spectral aggregate (all null without vendor data)", () => {
+  it("waveform-derived spectral values are published ONLY as computed estimates, never as vendor data", () => {
     for (const fn of ["pare_deid.ans", "jill_deid.ans"]) {
       const { report } = reportFor(fixture(fn), fn);
+      // Without a paired vendor report the values are HumanOS estimates.
+      expect(report.spectralSource).toBe("humanos_estimated");
       for (const ph of report.phaseEvents) {
-        expect(ph.LFa).toBeNull();
-        expect(ph.RFa).toBeNull();
-        expect(ph.SB).toBeNull();
+        for (const key of ["LFa", "RFa", "SB"] as const) {
+          const prov = ph.provenance?.[key];
+          // NEVER vendor-sourced, whatever the value.
+          expect(prov?.method).not.toBe("vendor_reported");
+          expect(prov?.method).not.toBe("derived_from_vendor");
+          if (ph[key] === null) continue;
+          expect(prov?.method).toBe("computed");
+          expect(prov?.validation).toBe("estimated");
+          expect(Number.isFinite(ph[key] as number)).toBe(true);
+        }
       }
-      // Balance gauge + spectral trends carry no invented numbers.
+      // The CLINICAL surfaces stay closed: the balance gauge shows nothing.
+      expect(report.spectralAvailable).toBe(false);
       expect(report.autonomicBalance.available).toBe(false);
       expect(report.autonomicBalance.parasympathetic).toBeNull();
       expect(report.autonomicBalance.sympathetic).toBeNull();
-      expect(report.multiParameter?.lfaTrend.t.length ?? 0).toBe(0);
-      expect(report.multiParameter?.rfaTrend.t.length ?? 0).toBe(0);
-      expect(report.multiParameter?.scatter.baselineRFa ?? null).toBeNull();
+      // But the raw measurable trends are preserved for the clinician view.
+      expect(report.multiParameter?.lfaTrend.t.length ?? 0).toBeGreaterThan(0);
+      expect(report.multiParameter?.rfaTrend.t.length ?? 0).toBeGreaterThan(0);
     }
   });
 
@@ -198,12 +210,23 @@ describe("anti-oracle — no per-patient hardcode, no fabricated proprietary dat
     // The isJillShah name-keyed branch and its fabricated ratio literals are gone.
     expect(src).not.toMatch(/isJillShah\s*[=?]/);
     expect(src).not.toMatch(/\/\^shah\$\/i\.test/);
-    // The curve-fit spectral calibration constant is gone.
+    // The curve-fit spectral calibration constant is gone AND must never return.
+    // This is the real defect the earlier beta engine carried: a single scalar
+    // fitted so ONE patient's estimates landed on ONE vendor PDF. The generic
+    // waveform engine is allowed back (it lives in api/_ans/spectral.ts and
+    // converts R-R to instantaneous bpm so band power is natively in bpm²); a
+    // fitted magic constant is not.
     expect(src).not.toContain("const SCALE = 0.0018");
-    // No morletBandPower DEFINITION or CALL remains (a comment noting the
-    // removal is fine — we only forbid `function morletBandPower` and callsites).
-    expect(src).not.toMatch(/function morletBandPower/);
-    expect(src).not.toMatch(/morletBandPower\(/);
+    expect(src).not.toMatch(/^\s*(?:const|let|var)\s+SCALE\s*=/m);
+    // No spectral maths is DEFINED inline in the endpoint — it must be imported
+    // from the reviewed, unit-tested engine module.
+    expect(src).not.toMatch(/function\s+morletBandPower/);
+    expect(src).toMatch(/from\s+"\.\/_ans\/spectral\.js"/);
+
+    const engine = readFileSync(path.join(__dirname, "..", "spectral.ts"), "utf-8");
+    // The engine itself carries no patient-specific fitting or name keys.
+    expect(engine).not.toMatch(/jill|shah|alex|pare/i);
+    expect(engine).not.toMatch(/^\s*(?:const|let|var)\s+SCALE\s*=/m);
   });
 
   it("no fabricated demographic defaults (weight=150 / height=1.73) leak in", () => {
@@ -241,9 +264,19 @@ describe("vendor-parity contract — unresolved values are explicit, never inven
     expect(report.phaseEvents[0].RFa).toBe(2.5);
     expect(report.phaseEvents[0].SB).toBe(0.6);
     expect(report.autonomicBalance.available).toBe(true);
-    // Phases the vendor did NOT supply (B–F) stay unavailable — never inferred.
-    expect(report.phaseEvents[5].LFa).toBeNull();
-    expect(report.phaseEvents[5].RFa).toBeNull();
+    expect(report.phaseEvents[0].provenance?.LFa.method).toBe("vendor_reported");
+    // Phases the vendor did NOT supply (B–F) are NOT given vendor status. They
+    // may carry a HumanOS estimate, but it must be tagged computed/estimated so
+    // no surface can read it as a vendor measurement of that phase.
+    for (const i of [1, 2, 3, 4, 5]) {
+      const prov = report.phaseEvents[i].provenance;
+      expect(prov?.LFa.method).not.toBe("vendor_reported");
+      expect(prov?.RFa.method).not.toBe("vendor_reported");
+      if (report.phaseEvents[i].LFa !== null) {
+        expect(prov?.LFa.method).toBe("computed");
+        expect(prov?.LFa.validation).toBe("estimated");
+      }
+    }
   });
 
   it("real Jill/Pare source files (when present locally) match the fixtures' ratios", () => {
@@ -281,9 +314,16 @@ describe("BLOCKER 1 regression — baseline-only vendor never fabricates B–F f
       expect(report.spectralAvailable).toBe(true); // baseline A is vendor-reported
       // Baseline A carries the real vendor values.
       expect(report.phaseEvents[0].LFa).toBe(1.5);
-      // Phases B–F remain null (vendor gave baseline only).
-      expect(report.phaseEvents[3].LFa).toBeNull(); // Valsalva D
-      expect(report.phaseEvents[5].LFa).toBeNull(); // Stand F
+      expect(report.phaseEvents[0].provenance?.LFa.method).toBe("vendor_reported");
+      // Phases B–F were NOT supplied by the vendor. Any value there is a
+      // HumanOS estimate and is tagged as such; the standing/Valsalva clinical
+      // gates therefore stay shut (asserted by the narrative checks below).
+      for (const i of [3, 5]) {
+        expect(report.phaseEvents[i].provenance?.LFa.method).not.toBe("vendor_reported");
+        if (report.phaseEvents[i].LFa !== null) {
+          expect(report.phaseEvents[i].provenance?.LFa.validation).toBe("estimated");
+        }
+      }
 
       const allText = [
         ...report.phaseFindings.flatMap((p: any) => p.findings),

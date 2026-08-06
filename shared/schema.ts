@@ -58,9 +58,28 @@ export interface PhaseMetrics {
   rangeHR: number | null;
   /** ESTIMATED respiratory frequency; null when not derivable. */
   FRF: number | null;
+  /**
+   * Spectral aggregates. Read `provenance` to know WHAT these are:
+   * `vendor_reported`/`derived_from_vendor` = verbatim vendor value;
+   * `computed` (+ validation `estimated`) = HumanOS waveform-derived estimate
+   * that must be labelled as such and must not be presented as vendor parity;
+   * `unavailable` = value is null because the calculation was impossible.
+   */
   LFa: number | null;
   RFa: number | null;
   SB: number | null;
+  /** Uncertainty envelope for a waveform-derived (estimated) spectral value. */
+  spectralEstimate?: {
+    confidence: number;
+    warnings: string[];
+    bands: {
+      lfLo: number; lfHi: number; hfLo: number; hfHi: number;
+      bandSource: "respiration_adaptive" | "fixed_standard";
+      respFreqHz: number | null;
+    };
+    beats: number;
+    method: "morlet_cwt_bpm2";
+  };
   SBP?: number;
   DBP?: number;
   PP?: number;
@@ -77,6 +96,13 @@ export interface PhaseMetrics {
   /** False when the beat series showed an artifact/implausibility signature. */
   hrvReliable?: boolean;
   hrvUnreliableReasons?: string[];
+  /**
+   * The variability numbers AS MEASURED, kept even when `hrvReliable` is false
+   * so a raw trend can still be charted with an explicit low-confidence label.
+   * Never consumed by scoring or by any clinical claim.
+   */
+  hrvOverallVariabilityRawMs?: number | null;
+  hrvBeatToBeatRawMs?: number | null;
   /**
    * Per-metric provenance for the proprietary [P] spectral aggregates. Present
    * for reports produced after the numericalSummaryOverride removal. `method`
@@ -291,6 +317,21 @@ export interface ANSReport {
    * gated OFF, and the UI must render "Not assessed".
    */
   spectralAvailable?: boolean;
+  /**
+   * Where the spectral numbers in `phaseEvents` came from. "humanos_estimated"
+   * means displayable-but-unvalidated waveform estimates: charts and trends are
+   * populated, while `spectralAvailable` stays false so no clinical conclusion
+   * or composite score consumes them.
+   */
+  spectralSource?: "vendor_reported" | "humanos_estimated" | "unavailable";
+  /** Uncertainty envelope + mandatory disclosure for waveform estimates. */
+  spectralEstimation?: {
+    present: boolean;
+    method: "morlet_cwt_bpm2" | null;
+    confidence: number | null;
+    warnings: string[];
+    disclosure: string;
+  };
   bpAvailable?: boolean;
   autonomicBalance: {
     // null when spectral aggregates are unavailable — the UI must render

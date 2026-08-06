@@ -45,6 +45,19 @@ import {
   mayInterpretClinically,
   type MetricProvenance,
 } from "../shared/metricProvenance.js";
+import {
+  estimatePhaseSpectral,
+  estimateRespiratoryFrequencyFromPeaks,
+  respirationAdaptiveBands,
+  morletBandPowerSeries,
+  resampleBeatsToBpmGrid,
+  highPassMovingAverage,
+  ESTIMATED_SPECTRAL_NOTE,
+  ESTIMATED_SB_NOTE,
+  ESTIMATED_FRF_NOTE,
+  RESAMPLE_FS,
+  type SpectralBands,
+} from "./_ans/spectral.js";
 
 /**
  * Vendor-reported metrics parsed verbatim from the paired signed PDF
@@ -189,11 +202,37 @@ interface PhaseMetrics {
    * validation status is `estimated` — never published as a measured fact.
    */
   FRF: number | null;
-  // null when the proprietary spectral aggregate is not clinically available
-  // (raw ECG-only files): the UI must render "Not assessed", never 0.
+  /**
+   * Spectral aggregates. Three distinct states, always disambiguated by
+   * `provenance` (never by the number alone):
+   *   - `vendor_reported` / `derived_from_vendor` — verbatim from the paired
+   *     signed PDF (baseline A only). Clinically interpretable.
+   *   - `computed` + `validation: "estimated"` — HumanOS waveform-derived
+   *     estimate (Morlet band power in bpm² over respiration-adaptive bands).
+   *     Publishable as a labelled estimate/chart; NOT clinically interpretable
+   *     and NOT asserted to match PhysioPS output.
+   *   - `unavailable` → value is `null` (too few usable beats / segment too
+   *     short for the band). Never 0, never fabricated.
+   */
   LFa: number | null;
   RFa: number | null;
   SB: number | null;
+  /**
+   * Uncertainty envelope for the WAVEFORM-DERIVED spectral estimate of this
+   * phase. Present whenever the estimator ran (even if it declined to produce a
+   * number). Absent for vendor-reported values.
+   */
+  spectralEstimate?: {
+    /** 0..1 self-assessed confidence. Never a clinical gate on its own. */
+    confidence: number;
+    /** Reasons the estimate is uncertain (artifacts, short segment, ...). */
+    warnings: string[];
+    /** Band edges used + how they were chosen. */
+    bands: SpectralBands;
+    /** R-R intervals the estimate was built from. */
+    beats: number;
+    method: "morlet_cwt_bpm2";
+  };
   SBP?: number;
   DBP?: number;
   PP?: number;
@@ -218,6 +257,16 @@ interface PhaseMetrics {
    * false the variability values above are `null` and MUST NOT feed any score.
    */
   hrvReliable: boolean;
+  /**
+   * The variability numbers AS MEASURED, retained even when `hrvReliable` is
+   * false so the raw measurable trend can still be charted with an explicit
+   * low-confidence label. These are NEVER read by scoring or by any clinical
+   * claim — scoring reads `hrvOverallVariabilityMs`/`hrvBeatToBeatMs`, which
+   * stay `null` for an unreliable series. `null` only when the computation was
+   * impossible (fewer than 4 usable intervals).
+   */
+  hrvOverallVariabilityRawMs: number | null;
+  hrvBeatToBeatRawMs: number | null;
   /** Why `hrvReliable` is false. Empty when the series is usable. */
   hrvUnreliableReasons: string[];
   /**
@@ -393,6 +442,30 @@ interface ANSReport {
    * ratios remain supported observations regardless.
    */
   spectralAvailable: boolean;
+  /**
+   * WHERE the spectral numbers in `phaseEvents` came from:
+   *   - "vendor_reported"    — verbatim from the paired signed PDF (baseline A).
+   *   - "humanos_estimated"  — computed generically from the waveform by
+   *     `api/_ans/spectral.ts`. Displayable, chartable, and explicitly NOT
+   *     vendor parity: `spectralAvailable` stays false so no clinical
+   *     conclusion, pattern, therapy or composite score may use them.
+   *   - "unavailable"        — neither source produced a value.
+   */
+  spectralSource: "vendor_reported" | "humanos_estimated" | "unavailable";
+  /**
+   * Uncertainty envelope for the waveform-derived estimates. Present whenever
+   * `spectralSource === "humanos_estimated"`.
+   */
+  spectralEstimation: {
+    present: boolean;
+    method: "morlet_cwt_bpm2" | null;
+    /** Best per-phase confidence (0..1). Never a clinical gate. */
+    confidence: number | null;
+    /** De-duplicated uncertainty reasons across phases. */
+    warnings: string[];
+    /** Mandatory provenance sentence every surface must show alongside a value. */
+    disclosure: string;
+  };
   bpAvailable: boolean;
   autonomicBalance: {
     // null when spectral aggregates are unavailable — the UI must render
@@ -682,65 +755,6 @@ function detectRPeaks(ecg: number[], samplingRate: number): {
   };
 }
 
-/**
- * ECG-Derived Respiration (EDR) — extracts breathing frequency from
- * R-peak amplitude modulation (chest expansion modulates QRS amplitude).
- * Returns the Fundamental Respiratory Frequency (Hz).
- */
-function estimateRespiratoryFrequency(
-  rPeakIndices: number[],
-  rPeakAmplitudes: number[],
-  samplingRate: number
-): number | null {
-  // NO FABRICATED DEFAULT. The old code returned 0.2 Hz whenever the envelope
-  // was too short to analyse, publishing an invented respiratory rate as a
-  // measurement. Insufficient data now returns null.
-  if (rPeakIndices.length < 8) return null;
-
-  // Resample R-peak amplitudes to a uniform 4 Hz signal
-  const resampleFs = 4;
-  const duration = (rPeakIndices[rPeakIndices.length - 1] - rPeakIndices[0]) / samplingRate;
-  const n = Math.max(16, Math.floor(duration * resampleFs));
-  if (n < 16) return null;
-
-  const resampled = new Array(n).fill(0);
-  const t0 = rPeakIndices[0] / samplingRate;
-  for (let i = 0; i < n; i++) {
-    const t = t0 + i / resampleFs;
-    // Linear interp between nearest peaks
-    let lo = 0, hi = rPeakIndices.length - 1;
-    for (let k = 0; k < rPeakIndices.length - 1; k++) {
-      const tk = rPeakIndices[k] / samplingRate;
-      const tk1 = rPeakIndices[k + 1] / samplingRate;
-      if (t >= tk && t <= tk1) { lo = k; hi = k + 1; break; }
-    }
-    const tlo = rPeakIndices[lo] / samplingRate;
-    const thi = rPeakIndices[hi] / samplingRate;
-    const span = Math.max(1e-6, thi - tlo);
-    const frac = (t - tlo) / span;
-    resampled[i] = rPeakAmplitudes[lo] + frac * (rPeakAmplitudes[hi] - rPeakAmplitudes[lo]);
-  }
-
-  // Detrend
-  const mean = resampled.reduce((a, b) => a + b, 0) / n;
-  for (let i = 0; i < n; i++) resampled[i] -= mean;
-
-  // Goertzel-style search for dominant frequency in 0.08–0.45 Hz (respiratory band)
-  let bestFreq: number | null = null;
-  let bestPower = 0;
-  for (let f = 0.08; f <= 0.45; f += 0.005) {
-    let re = 0, im = 0;
-    for (let i = 0; i < n; i++) {
-      const phase = 2 * Math.PI * f * (i / resampleFs);
-      re += resampled[i] * Math.cos(phase);
-      im += resampled[i] * Math.sin(phase);
-    }
-    const power = (re * re + im * im) / n;
-    if (power > bestPower) { bestPower = power; bestFreq = f; }
-  }
-  return bestFreq == null ? null : Math.round(bestFreq * 1000) / 1000;
-}
-
 // ============================================================================
 // STAGE 2 — Morlet-style Continuous Wavelet Transform on RR intervals
 // ============================================================================
@@ -818,6 +832,7 @@ function analyzePhase(
       duration: formatDuration(durationSec), durationSec,
       meanHR: null, rangeHR: null, FRF: null, LFa: null, RFa: null, SB: null,
       hrvOverallVariabilityMs: null, hrvBeatToBeatMs: null,
+      hrvOverallVariabilityRawMs: null, hrvBeatToBeatRawMs: null,
       hrvReliable: false,
       hrvUnreliableReasons: [
         `Fewer than 4 usable R-R intervals in this phase` +
@@ -870,37 +885,77 @@ function analyzePhase(
 
   // Respiratory frequency for THIS phase (derived from the RR/peak envelope —
   // this is a genuine time-domain measure, not a proprietary spectral aggregate).
-  const frf = estimateRespiratoryFrequency(indices, amplitudes, samplingRate);
+  const frf = estimateRespiratoryFrequencyFromPeaks(indices, amplitudes, samplingRate);
 
-  // Proprietary spectral aggregates (LFa / RFa / SB) are NOT reproducible from
-  // the raw .ans waveform: the vendor's wavelet algorithm and its bpm²
-  // calibration are undisclosed. The previous code estimated them via a Morlet
-  // band-power routine scaled by an empirical constant (SCALE=0.0018) that was
-  // curve-fit to one patient — presenting a fabricated estimate as a
-  // measurement. That routine has been removed. These fields are emitted as
-  // `null` with `unavailable` provenance so nothing downstream can read an
-  // invented number. The only legitimate source of spectral values is the
-  // paired vendor PDF (OCR / x-vendor-metrics), applied to baseline A in
-  // generateColomboReport with `vendor_reported` provenance.
-  const spectralUnavailableNote =
-    "Proprietary spectral aggregate (LFa/RFa/SB) is not reproducible from the raw .ans waveform; the vendor value is available only in the signed PDF.";
+  // --- WAVEFORM-DERIVED SPECTRAL ESTIMATE (restored generic engine) ----------
+  // LFa / RFa / SB are computed generically from THIS phase's R-R series by
+  // `api/_ans/spectral.ts`: instantaneous heart rate in bpm, resampled to 4 Hz,
+  // linearly detrended, Morlet CWT band power with an analytic (parameter-free)
+  // normalisation, over respiration-adaptive band edges. There is NO empirical
+  // output multiplier — the removed `SCALE = 0.0018` had been curve-fit to a
+  // single patient's report, which is why it (and, wrongly, the whole engine)
+  // was deleted. Nothing here reads a patient name, a filename, demographics,
+  // BP, a vendor value or a fingerprint.
+  //
+  // PROVENANCE: `computed` + `validation: "estimated"`. `mayInterpretClinically`
+  // is therefore FALSE for these values, so they cannot drive a diagnosis,
+  // pattern, therapy recommendation or composite score — they are published as
+  // clearly-labelled HumanOS estimates with an uncertainty envelope. They are
+  // NOT vendor-reported and are NOT claimed to reproduce PhysioPS output.
+  const est = estimatePhaseSpectral({
+    rrIntervalsMs,
+    respFreqHz: frf,
+    rejectedArtifactBeats,
+    rejectedArtifactIntervals,
+    variabilityImplausible: !hrvReliable,
+    // Generic protocol property, not a patient-specific input: sub-0.15 Hz
+    // respiration is EXPECTED during the paced deep-breathing manoeuvre.
+    pacedBreathing: phaseName === "DeepBreathing-B",
+  });
+
+  const spectralImpossibleNote =
+    "Waveform-derived estimate could not be computed for this phase: " +
+    (est.warnings[0] ?? "insufficient usable R-R data.") +
+    " A vendor-reported value, if any, is available only in the signed PDF.";
+
   return {
     phase: phaseName, label,
     duration: formatDuration(durationSec), durationSec,
     meanHR, rangeHR,
     FRF: frf == null ? null : Math.round(frf * 100) / 100,
-    LFa: null,
-    RFa: null,
-    SB: null,
+    LFa: est.lfa,
+    RFa: est.rfa,
+    SB: est.sb,
+    spectralEstimate: {
+      confidence: est.confidence,
+      warnings: est.warnings,
+      bands: est.bands,
+      beats: est.beats,
+      method: "morlet_cwt_bpm2",
+    },
+    // Scoring-facing variability: suppressed for an implausible series.
     hrvOverallVariabilityMs: hrvReliable ? Math.round(sdnn * 10) / 10 : null,
     hrvBeatToBeatMs: hrvReliable ? Math.round(rmssd * 10) / 10 : null,
+    // Chart-facing variability: always the measured number, carrying
+    // `hrvReliable=false` + reasons so the surface can label the uncertainty
+    // instead of erasing a real measurement.
+    hrvOverallVariabilityRawMs: Math.round(sdnn * 10) / 10,
+    hrvBeatToBeatRawMs: Math.round(rmssd * 10) / 10,
     hrvReliable,
     hrvUnreliableReasons,
     provenance: {
-      LFa: unavailableProvenance("LFa", spectralUnavailableNote),
-      RFa: unavailableProvenance("RFa", spectralUnavailableNote),
-      SB: unavailableProvenance("SB", "Sympathovagal balance depends on unavailable proprietary LFa/RFa."),
-      FRF: computedProvenance("FRF", { note: "Fundamental respiratory frequency estimated from RR/peak envelope." }),
+      LFa: est.lfa == null
+        ? unavailableProvenance("LFa", spectralImpossibleNote)
+        : computedProvenance("LFa", { note: ESTIMATED_SPECTRAL_NOTE }),
+      RFa: est.rfa == null
+        ? unavailableProvenance("RFa", spectralImpossibleNote)
+        : computedProvenance("RFa", { note: ESTIMATED_SPECTRAL_NOTE }),
+      SB: est.sb == null
+        ? unavailableProvenance("SB", spectralImpossibleNote)
+        : computedProvenance("SB", { note: ESTIMATED_SB_NOTE }),
+      FRF: frf == null
+        ? unavailableProvenance("FRF", "Respiratory envelope too short to estimate a fundamental respiratory frequency.")
+        : computedProvenance("FRF", { note: ESTIMATED_FRF_NOTE }),
     },
   };
 }
@@ -1728,21 +1783,121 @@ function breathingTrendFromPeaks(
 }
 
 /**
- * Rolling LFa/RFa wavelet power over sliding windows.
- * LFa/RFa rolling trends are DELIBERATELY NOT computed from the raw waveform.
- * They previously used the Morlet band-power estimate scaled by the empirical
- * SCALE=0.0018 constant, which is not the vendor's proprietary algorithm and
- * was curve-fit to one patient — so plotting them presented fabricated numbers
- * as a clinician trend. Until a real vendor spectral time series is available,
- * these charts stay empty and the UI renders "Not assessed" for spectral
- * trends. HR and breathing trends (genuine time-domain measures) are unaffected.
+ * Rolling LFa/RFa band-power trends over sliding windows (restored generic
+ * engine).
+ *
+ * WINDOW LENGTH IS A HARD CONSTRAINT, NOT A STYLE CHOICE: a Morlet wavelet with
+ * Q=5 cycles at the bottom of the sympathetic band (0.04 Hz) spans ~20 s per
+ * sigma, so a window shorter than ~2 minutes cannot support the low edge of the
+ * band at all. The old 30 s window silently dropped everything below ~0.1 Hz
+ * and reported the remainder as "LFa". We therefore use a 120 s window stepped
+ * every 10 s and say so, instead of publishing a fast-updating trend that is
+ * quietly missing most of its band.
+ *
+ * Band edges follow the containing phase's OWN respiratory-frequency estimate
+ * where available, and fall back to the fixed standard edges otherwise — the
+ * old code silently substituted 0.2 Hz.
+ *
+ * Every point is a HumanOS ESTIMATE in bpm², never a vendor value. The series
+ * is a raw measurable trend: it is preserved even when the composite clinical
+ * score is withheld, and consumers must label it as an unvalidated estimate.
  */
 function lfaRfaTrendsFromEcg(
-  _ecg: number[], _samplingRate: number,
-  _phases: PhaseBoundary[],
-  _phaseMetrics: PhaseMetrics[]
+  ecg: number[], samplingRate: number,
+  phases: PhaseBoundary[],
+  phaseMetrics: PhaseMetrics[]
 ): { lfa: TimeSeries; rfa: TimeSeries } {
-  return { lfa: { t: [], v: [] }, rfa: { t: [], v: [] } };
+  const lfa: TimeSeries = { t: [], v: [] };
+  const rfa: TimeSeries = { t: [], v: [] };
+  const windowSec = 120;
+  const stepSec = 10;
+  const totalSec = ecg.length / samplingRate;
+  if (!Number.isFinite(totalSec) || totalSec < windowSec) return { lfa, rfa };
+
+  // Detect R-peaks ONCE over the whole record. Re-running the detector on every
+  // overlapping slice was both far slower and inconsistent at the slice edges
+  // (a beat could be found in one window and missed in the next because the
+  // adaptive threshold shifted).
+  const { indices: allPeaks } = detectRPeaks(ecg, samplingRate);
+  const beatSec: number[] = [];
+  const beatRrMs: number[] = [];
+  for (let i = 1; i < allPeaks.length; i++) {
+    const ms = ((allPeaks[i] - allPeaks[i - 1]) / samplingRate) * 1000;
+    if (ms > 300 && ms < 2000) {
+      beatSec.push(allPeaks[i] / samplingRate);
+      beatRrMs.push(ms);
+    }
+  }
+  if (beatRrMs.length < 12) return { lfa, rfa };
+
+  // One record-length bpm grid, high-pass filtered below the sympathetic band
+  // so the heart-rate STEPS the protocol provokes (notably on standing) are not
+  // read as sympathetic band power.
+  const grid = highPassMovingAverage(
+    resampleBeatsToBpmGrid(beatSec, beatRrMs, totalSec, RESAMPLE_FS),
+    RESAMPLE_FS,
+  );
+  if (grid.length < 16) return { lfa, rfa };
+
+  // Each phase contributes its own respiration-adaptive band edges, so group the
+  // phases by band tuple and run ONE wavelet pass per distinct tuple (at most a
+  // handful) instead of one per window.
+  const bandsForPhase = phases.map((_, i) => {
+    const pm = phaseMetrics[i];
+    return respirationAdaptiveBands(pm?.FRF ?? null, {
+      pacedBreathing: pm?.phase === "DeepBreathing-B",
+    });
+  });
+  const phaseIndexAt = (t: number): number => {
+    const p = phases.findIndex((ph) => t >= ph.startSec && t < ph.endSec);
+    return p < 0 ? 0 : p;
+  };
+  const keyOf = (b: SpectralBands) => `${b.lfLo}|${b.lfHi}|${b.hfLo}|${b.hfHi}`;
+  const unique = new Map<string, SpectralBands>();
+  for (const b of bandsForPhase) if (!unique.has(keyOf(b))) unique.set(keyOf(b), b);
+
+  type Row = { lf: Map<number, number>; hf: Map<number, number> };
+  const byKey = new Map<string, Row>();
+  for (const [key, b] of unique) {
+    const lfSeries =
+      b.lfHi - b.lfLo >= 0.01
+        ? morletBandPowerSeries(grid, RESAMPLE_FS, b.lfLo, b.lfHi, { windowSec, stepSec })
+        : { t: [], v: [] };
+    const hfSeries = morletBandPowerSeries(grid, RESAMPLE_FS, b.hfLo, b.hfHi, { windowSec, stepSec });
+    const row: Row = { lf: new Map(), hf: new Map() };
+    lfSeries.t.forEach((t, i) => row.lf.set(Math.round(t * 10) / 10, lfSeries.v[i]));
+    hfSeries.t.forEach((t, i) => row.hf.set(Math.round(t * 10) / 10, hfSeries.v[i]));
+    byKey.set(key, row);
+  }
+
+  // Emit one point per window centre, taken from the series belonging to the
+  // band tuple of the phase that contains that centre.
+  for (let tCenter = windowSec / 2; tCenter + windowSec / 2 <= totalSec; tCenter += stepSec) {
+    const t = Math.round(tCenter * 10) / 10;
+    const bands = bandsForPhase[phaseIndexAt(tCenter)] ?? bandsForPhase[0];
+    if (!bands) continue;
+    // Require real beats inside the window: an all-bridged span must not be
+    // published as if it had been measured.
+    let beatsInWindow = 0;
+    for (let i = 0; i < beatSec.length; i++) {
+      if (beatSec[i] >= tCenter - windowSec / 2 && beatSec[i] < tCenter + windowSec / 2) beatsInWindow++;
+    }
+    if (beatsInWindow < 12) continue;
+
+    const row = byKey.get(keyOf(bands));
+    if (!row) continue;
+    const lfPower = row.lf.get(t);
+    const hfPower = row.hf.get(t);
+    if (lfPower != null) {
+      lfa.t.push(t);
+      lfa.v.push(Math.round(Math.max(0, lfPower) * 100) / 100);
+    }
+    if (hfPower != null) {
+      rfa.t.push(t);
+      rfa.v.push(Math.round(Math.max(0, hfPower) * 100) / 100);
+    }
+  }
+  return { lfa, rfa };
 }
 
 /**
@@ -2308,14 +2463,26 @@ export function generateColomboReport(
   }
 
   // --- Spectral / BP availability gate ---------------------------------------
-  // For a raw ECG-only .ans the proprietary spectral aggregates (LFa/RFa/SB) are
-  // `unavailable` (this engine never estimates them). They become clinically
-  // actionable ONLY when baseline A carries a vendor_reported/derived_from_vendor
-  // value from the paired PDF. mayInterpretClinically() encodes that rule, so a
-  // missing spectral value can never be read as "sympathetic 0%" or trigger an
-  // autonomic-neuropathy / parasympathetic / treatment finding. NOTE this is the
-  // GLOBAL (baseline-A) gate; per-phase narrative classification additionally
-  // checks each phase's own value (classifyOrNull) — see phaseFindings below.
+  // TWO DIFFERENT QUESTIONS, TWO DIFFERENT FLAGS:
+  //
+  //  * `spectralAvailable` = may a spectral value DRIVE A CLINICAL CONCLUSION?
+  //    True only when baseline A carries a vendor_reported / derived_from_vendor
+  //    value from the paired signed PDF. A HumanOS waveform estimate is
+  //    `computed` + `estimated`, for which `mayInterpretClinically()` is false,
+  //    so an estimate can never be read as "sympathetic 0%" or trigger an
+  //    autonomic-neuropathy / parasympathetic / treatment finding, and can never
+  //    unlock the composite score. This flag is UNCHANGED in meaning.
+  //
+  //  * `spectralEstimated` (below) = did the generic waveform engine produce
+  //    displayable LFa/RFa/SB estimates? Those numbers stay in `phaseEvents`
+  //    with `computed`/`estimated` provenance so charts, trends and the
+  //    clinician instrument view keep the raw measurable content instead of
+  //    being blanket-nulled. Requirement: preserve measurable output even when
+  //    a composite score is withheld.
+  //
+  // NOTE this is the GLOBAL (baseline-A) clinical gate; per-phase narrative
+  // classification additionally checks each phase's own provenance
+  // (classifyOrNull) — see phaseFindings below.
   const spectralAvailable = !!(
     A.provenance &&
     mayInterpretClinically(A.provenance.LFa) &&
@@ -2344,42 +2511,84 @@ export function generateColomboReport(
   const standBpAvailable = F.SBP != null && F.DBP != null;
   const orthostaticBpAssessable = bpAvailable && standBpAvailable;
 
-  // Snapshot the raw (estimated) spectral values BEFORE nulling. The internal
-  // wellness index and the clinician trend charts operate on these numeric
-  // estimates; the report-facing `phaseEvents` (and every clinical claim /
-  // therapy / balance / body-impact consumer) use the NULLED copy so nothing
-  // fabricated ever surfaces as a clinical finding when spectral is
-  // unavailable. This keeps types sound (raw = numbers) while the gate holds.
+  // The raw copy is kept for the internal wellness index and clinician trend
+  // charts. It is now identical in its spectral fields to `phaseEvents` — the
+  // former blanket-null pass over `phaseEvents` has been removed (see below) —
+  // but the snapshot is retained so any future gate that does mutate the
+  // published copy still has an unmutated reference.
   const phaseEventsRaw: PhaseMetrics[] = phaseEvents.map((p) => ({ ...p }));
 
-  if (!spectralAvailable) {
-    // Explicitly mark spectral fields unavailable across all phases so the UI
-    // renders "Not assessed" and downstream numeric logic can't coerce them.
-    for (const ph of phaseEvents) {
-      (ph as unknown as { LFa: number | null }).LFa = null;
-      (ph as unknown as { RFa: number | null }).RFa = null;
-      (ph as unknown as { SB: number | null }).SB = null;
-      // FRF is a proprietary [P] framing and is gated with the other spectral
-      // measures. It is nulled HERE TOO so the top-level `respiratoryFrequency`
-      // and the per-phase values agree: the audit found the top level null while
-      // six per-phase FRF numbers were populated, i.e. the same payload both
-      // denied and asserted the measure.
-      (ph as unknown as { FRF: number | null }).FRF = null;
-      if (ph.provenance) {
-        ph.provenance.LFa = unavailableProvenance("LFa", "Proprietary spectral aggregate is not reproducible from the raw .ans; vendor value available only in the signed PDF.");
-        ph.provenance.RFa = unavailableProvenance("RFa", "Proprietary spectral aggregate is not reproducible from the raw .ans; vendor value available only in the signed PDF.");
-        ph.provenance.SB = unavailableProvenance("SB", "Sympathovagal balance depends on unavailable LFa/RFa.");
-        ph.provenance.FRF = unavailableProvenance("FRF", "Fundamental respiratory frequency is a proprietary [P] framing and is gated with the spectral aggregates; the raw-envelope estimate is not published as a measured value.");
-      }
-    }
-  }
+  // NO BLANKET NULLING.
+  //
+  // Production previously overwrote LFa/RFa/SB/FRF with `null` on EVERY phase
+  // whenever `spectralAvailable` was false, i.e. on every .ans-only upload. That
+  // erased values the engine can legitimately compute from the waveform and left
+  // the report with no spectral content whatsoever. The correct separation is
+  // provenance-based, and it is already enforced downstream:
+  //   - `sLFa/sRFa/sSB` below return null unless the CLINICAL gate is open, so
+  //     no narrative, pattern, therapy or score can consume an estimate;
+  //   - each value carries `computed`/`estimated` provenance so every surface
+  //     must label it as a HumanOS estimate, never as a vendor value;
+  //   - values that were genuinely impossible to compute are already `null`
+  //     with `unavailable` provenance from `analyzePhase`.
+  // Only phases whose estimator declined to produce a number are null here.
+  const spectralEstimated = phaseEvents.some(
+    (ph) =>
+      ph.provenance?.LFa.method === "computed" ||
+      ph.provenance?.RFa.method === "computed",
+  );
+  /** Where the published spectral numbers came from, for every surface to read. */
+  const spectralSource: "vendor_reported" | "humanos_estimated" | "unavailable" =
+    spectralAvailable ? "vendor_reported" : spectralEstimated ? "humanos_estimated" : "unavailable";
+  const spectralEstimateConfidence = spectralEstimated
+    ? Math.max(
+        0,
+        ...phaseEvents.map((ph) => (ph.LFa != null || ph.RFa != null ? ph.spectralEstimate?.confidence ?? 0 : 0)),
+      )
+    : null;
+  const spectralEstimateWarnings = Array.from(
+    new Set(phaseEvents.flatMap((ph) => ph.spectralEstimate?.warnings ?? [])),
+  );
+
+  // CLINICAL-CONSUMER COPY. Everything that can produce a clinical conclusion —
+  // the composite wellness index, the body-system impact cards and the
+  // indication detector — reads THIS copy, in which spectral values are null
+  // unless they passed the clinical provenance gate. Charts, trends and the
+  // published `phaseEvents` keep the estimates (clearly labelled). This is what
+  // lets a raw measurable trend be preserved while the composite score is
+  // withheld, without the estimate ever leaking into a diagnosis or a number
+  // that the patient would read as a finding.
+  const phaseEventsClinical: PhaseMetrics[] = phaseEvents.map((p) => ({
+    ...p,
+    LFa: spectralAvailable && !!p.provenance && mayInterpretClinically(p.provenance.LFa) ? p.LFa : null,
+    RFa: spectralAvailable && !!p.provenance && mayInterpretClinically(p.provenance.RFa) ? p.RFa : null,
+    SB: spectralAvailable && !!p.provenance && mayInterpretClinically(p.provenance.SB) ? p.SB : null,
+  }));
 
   // Numeric accessors that are safe under the availability gate. When spectral
   // is unavailable these return null so no comparison can silently treat a
   // fabricated 0 as a real low value.
-  const sLFa = (p: PhaseMetrics): number | null => (spectralAvailable ? (p.LFa as number) : null);
-  const sRFa = (p: PhaseMetrics): number | null => (spectralAvailable ? (p.RFa as number) : null);
-  const sSB = (p: PhaseMetrics): number | null => (spectralAvailable ? (p.SB as number) : null);
+  // The gate is TWO-part and both parts are necessary:
+  //   1. the study-level `spectralAvailable` gate (a paired vendor report exists),
+  //   2. THIS phase's OWN provenance being clinically interpretable.
+  // Part 2 is what stops a HumanOS waveform estimate for phases the vendor did
+  // not supply from being classified as a Low/Normal/Abnormal response once the
+  // baseline unlocks the study-level gate.
+  const clinicalSpectral = (
+    p: PhaseMetrics,
+    key: "LFa" | "RFa" | "SB",
+  ): number | null => {
+    if (!spectralAvailable) return null;
+    const prov = p.provenance?.[key];
+    // No provenance record at all ⇒ we cannot vouch for the number ⇒ not
+    // clinically usable. Fail closed.
+    if (!prov || !mayInterpretClinically(prov)) return null;
+    const v = p[key];
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  };
+  const sLFa = (p: PhaseMetrics): number | null => clinicalSpectral(p, "LFa");
+  const sRFa = (p: PhaseMetrics): number | null => clinicalSpectral(p, "RFa");
+  const sSB = (p: PhaseMetrics): number | null => clinicalSpectral(p, "SB");
 
   // Classify patient-reported (or computed) Ewing ratios
   const age = data.age;
@@ -2441,8 +2650,13 @@ export function generateColomboReport(
   const POTS = resolvePattern(hrDelta != null, () => (hrDelta as number) >= 30);
   // FRF norm band is the single source of truth (Colombo 0.09–0.15 Hz). FRF is
   // a proprietary [P] framing — gate it on spectral availability too.
+  // FRF is now ESTIMATED from the ECG envelope for every phase. An estimate is
+  // fine to display, but the Colombo FRF norm band was defined on the vendor's
+  // own measurement, so a pattern (and any narrative derived from it) requires
+  // clinically-interpretable provenance for THIS phase — otherwise the pattern
+  // stays UNRESOLVED rather than becoming a finding.
   const highFRF = resolvePattern(
-    spectralAvailable && B.FRF != null,
+    spectralAvailable && B.FRF != null && !!B.provenance && mayInterpretClinically(B.provenance.FRF),
     () => (B.FRF as number) > COLOMBO_NORMS.FRF.hi,
   );
 
@@ -2548,8 +2762,8 @@ export function generateColomboReport(
   // phase actually carries it (non-null). The global spectralAvailable gate is
   // necessary but NOT sufficient — with baseline-only vendor metrics it is true
   // while phases B–F are still null.
-  const lfaA = classifyOrNull(A.LFa, LFa_n.lo, LFa_n.hi);
-  const rfaA = classifyOrNull(A.RFa, RFa_n.lo, RFa_n.hi);
+  const lfaA = classifyOrNull(sLFa(A), LFa_n.lo, LFa_n.hi);
+  const rfaA = classifyOrNull(sRFa(A), RFa_n.lo, RFa_n.hi);
   if (spectralAvailable && (lfaA || rfaA)) {
     if (lfaA) {
       if (lfaA.label === "Borderline Low") baselineFindings.push("Borderline low sympathetic modulation (LFa)");
@@ -2564,7 +2778,7 @@ export function generateColomboReport(
       // Describe the low ratio by its driver (generic) — reduced sympathetic
       // modulation vs genuine parasympathetic excess — WITHOUT asserting
       // unsupported daily-life symptoms (those require captured symptoms).
-      const driver = classifyLowSbDriver(A.LFa as number, A.RFa as number);
+      const driver = classifyLowSbDriver(sLFa(A) as number, sRFa(A) as number);
       baselineFindings.push(
         driver === "parasympathetic-excess" || driver === "mixed"
           ? "Low sympathovagal balance (SB = LFa/RFa) with elevated RFa — genuinely high parasympathetic (vagal) activity. Interpret with the patient's symptoms and history."
@@ -2581,9 +2795,9 @@ export function generateColomboReport(
   // usable spectral value, so neither the findings below nor the impression
   // counting can treat a missing value as "Abnormal". (Under baseline-only
   // vendor metrics these are null even though spectralAvailable is true.)
-  const lfaD = classifyOrNull(D.LFa, LFa_n.lo, LFa_n.hi);
-  const rfaD = classifyOrNull(D.RFa, RFa_n.lo, RFa_n.hi);
-  const lfaF = classifyOrNull(F.LFa, LFa_n.lo, LFa_n.hi);
+  const lfaD = classifyOrNull(sLFa(D), LFa_n.lo, LFa_n.hi);
+  const rfaD = classifyOrNull(sRFa(D), RFa_n.lo, RFa_n.hi);
+  const lfaF = classifyOrNull(sfLFa(F), LFa_n.lo, LFa_n.hi);
   // "DB RFa low" is only a real finding when B's RFa was actually captured.
   const dbSpectralAssessed = B_RFa != null;
   const valsalvaSpectralAssessed = lfaD != null || rfaD != null;
@@ -2827,10 +3041,11 @@ export function generateColomboReport(
   }
 
   // Wellness
-  // Wellness runs on the raw numeric snapshot (estimated spectral) so the
-  // composite index stays stable; it is an internal reserve score, not a
-  // spectral clinical claim. All spectral CLAIMS remain gated above.
-  const breakdown = computeWellness(data, phaseEventsRaw, patterns);
+  // Wellness runs on the CLINICALLY-GATED copy: a waveform-derived estimate must
+  // never contribute to (or unlock) the composite index. When spectral is only
+  // estimated the sympathovagal sub-domain stays `available: false`, its weight
+  // is NOT redistributed, and the composite is withheld as not-scorable.
+  const breakdown = computeWellness(data, phaseEventsClinical, patterns);
   // NO SCORE when the composite is not scorable. `Math.round(null)` used to be
   // impossible to reach because `final` was always a number; now the absence is
   // explicit and propagates to wellnessScore / wellnessTier as null.
@@ -2877,7 +3092,7 @@ export function generateColomboReport(
   // symptoms (those require captured symptoms).
   const balanceInterpretation = (): string => {
     if (parasympatheticDominance) {
-      const driver = classifyLowSbDriver(A.LFa as number, A.RFa as number);
+      const driver = classifyLowSbDriver(sLFa(A) as number, sRFa(A) as number);
       if (driver === "parasympathetic-excess" || driver === "mixed") {
         return "Relatively parasympathetic-leaning balance with genuinely elevated parasympathetic (vagal) activity. This is a measurement pattern — discuss its meaning with your clinician.";
       }
@@ -2911,7 +3126,13 @@ export function generateColomboReport(
   if (data.ectopicBeats > 0) clinicalFlags.push(`${data.ectopicBeats} possible ectopic beat(s) detected`);
   if (bradycardia === true) clinicalFlags.push(`Bradycardia: resting HR ${A.meanHR} bpm`);
   if (parasympatheticDominance === true) clinicalFlags.push(`Parasympathetic dominance: SB = ${A.SB}`);
-  if (!spectralAvailable) clinicalFlags.push("Spectral measures (LFa/RFa/SB) and continuous BP not assessed — not reproducible from this recording; clinician review of the vendor report required.");
+  if (!spectralAvailable) {
+    clinicalFlags.push(
+      spectralEstimated
+        ? "Spectral measures (LFa/RFa/SB) shown for this recording are HumanOS estimates computed from the raw waveform — they are NOT vendor-reported, have NOT been validated against PhysioPS output, and do not drive any clinical conclusion or score here. Continuous BP was not recorded. Clinician review of the signed vendor report is required for vendor values."
+        : "Spectral measures (LFa/RFa/SB) and continuous BP not assessed — not reproducible from this recording; clinician review of the vendor report required.",
+    );
+  }
 
   // --- Watch items — ONLY from abnormal MEASURED/verified fields --------------
   // Never watch a value that is already normal, a field that was not read, or
@@ -2941,7 +3162,7 @@ export function generateColomboReport(
   // No abnormal measured signal → nothing to watch (honest empty list; the UI
   // hides the section). We do NOT invent generic watch items or symptom claims.
 
-  const bodySystemImpact = computeBodyImpact(patterns, phaseEvents, { spectralAvailable, bpAvailable });
+  const bodySystemImpact = computeBodyImpact(patterns, phaseEventsClinical, { spectralAvailable, bpAvailable });
 
   // Multi-Parameter Graphical data for clinician view. Guarded in try/catch
   // because trend computation is the most expensive and newest code path
@@ -2955,7 +3176,7 @@ export function generateColomboReport(
   }
 
   // -- Path B: Colombo indication detection -----------------------------
-  const indications = detectIndicationsLocal(phaseEvents, multiParameter, {
+  const indications = detectIndicationsLocal(phaseEventsClinical, multiParameter, {
     standSpectralAvailable,
     standBpAvailable,
   });
@@ -2987,6 +3208,16 @@ export function generateColomboReport(
     overallImpression: overall,
     samplingRate,
     spectralAvailable,
+    spectralSource,
+    spectralEstimation: {
+      present: spectralEstimated,
+      method: spectralEstimated ? "morlet_cwt_bpm2" : null,
+      confidence: spectralEstimateConfidence,
+      warnings: spectralEstimateWarnings,
+      disclosure: spectralEstimated
+        ? ESTIMATED_SPECTRAL_NOTE
+        : "No waveform-derived spectral estimate was produced for this recording.",
+    },
     bpAvailable,
     // CONSISTENT with the per-phase values (previously null here while six
     // per-phase FRF numbers were populated) and explicitly marked ESTIMATED, so

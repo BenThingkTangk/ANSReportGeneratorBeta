@@ -34,6 +34,13 @@ export interface SyntheticAnsOptions {
   sampleCount?: number;
   /** Truncate the final buffer to this many bytes (simulate corrupt files). */
   truncateTo?: number;
+  /**
+   * Explicit int16 ECG samples. When supplied these replace the default
+   * sinusoid and `sampleCount` is taken from the array length. Used by the
+   * spectral-engine tests to inject a waveform with a KNOWN R-R modulation
+   * spectrum. Values are clamped to the int16 range.
+   */
+  ecgSamples?: number[] | Float64Array;
 }
 
 function writeLpString(s: string | null | undefined): Buffer {
@@ -62,9 +69,10 @@ export function buildSyntheticAns(opts: SyntheticAnsOptions = {}): Buffer {
     asciiBlock = "E/I Ratio = 1.45\r\nValsalva Ratio = 1.55\r\n30:15 Ratio = 1.20\r\n5 ft 6 in\r\n",
     studyDateIso = "2024-08-15",
     samplingInterval = 0.004,
-    sampleCount = 1000,
     truncateTo,
+    ecgSamples,
   } = opts;
+  const sampleCount = ecgSamples ? ecgSamples.length : (opts.sampleCount ?? 1000);
 
   const chunks: Buffer[] = [];
   chunks.push(writeLpString(lastName));
@@ -100,7 +108,8 @@ export function buildSyntheticAns(opts: SyntheticAnsOptions = {}): Buffer {
     // ECG samples — simple sinusoid centered around 0 with amplitude 500.
     const samples = Buffer.alloc(sampleCount * 2);
     for (let i = 0; i < sampleCount; i++) {
-      const v = Math.round(500 * Math.sin((i / 50) * Math.PI * 2));
+      const raw = ecgSamples ? ecgSamples[i] : 500 * Math.sin((i / 50) * Math.PI * 2);
+      const v = Math.max(-32768, Math.min(32767, Math.round(raw)));
       samples.writeInt16BE(v, i * 2);
     }
     chunks.push(samples);

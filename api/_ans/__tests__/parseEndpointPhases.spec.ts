@@ -128,17 +128,30 @@ describe("POST /api/parse — ECG-derived phase detection (FINAL-QA regression)"
     }
   });
 
-  it("does NOT fabricate proprietary spectral aggregates or per-phase BP", async () => {
+  it("labels waveform-derived spectral values as computed estimates and never fabricates per-phase BP", async () => {
     const { bytes, name } = pickDataFile();
     const { json } = await invokeHandler(bytes, name);
     const study = json.ansStudy;
 
-    // LFa/RFa/SB are undisclosed vendor aggregates — must stay unavailable,
-    // never substituted by identity/hash/estimate.
+    // LFa/RFa/SB may be ESTIMATED generically from the R-R series, but the
+    // vendor's own aggregates use an undisclosed method: a value here must
+    // therefore be `computed` with sub-unity confidence and an explicit
+    // "not vendor-reported" warning — never presented as vendor data, never
+    // substituted by identity/hash, never scaled by a patient-fitted constant.
     for (const block of ["baseline", "deepBreathing", "valsalva", "standOrTilt"]) {
-      expect(study[block].lfa.value, `${block} LFa`).toBeNull();
-      expect(study[block].rfa.value, `${block} RFa`).toBeNull();
-      expect(study[block].sb.value, `${block} SB`).toBeNull();
+      for (const key of ["lfa", "rfa", "sb"] as const) {
+        const field = study[block][key];
+        if (field.value === null) {
+          expect(field.provenance.source, `${block} ${key}`).toBe("missing");
+          continue;
+        }
+        expect(field.provenance.source, `${block} ${key}`).toBe("computed");
+        expect(field.provenance.confidence).toBeGreaterThan(0);
+        expect(field.provenance.confidence).toBeLessThan(1);
+        expect((field.provenance.warnings ?? []).join(" ")).toMatch(
+          /NOT a vendor-reported value|not validated against PhysioPS/i,
+        );
+      }
       // Per-phase BP is not stored in the .ans -> stays missing.
       expect(study[block].bp.sbp.value, `${block} SBP`).toBeNull();
       expect(study[block].bp.dbp.value, `${block} DBP`).toBeNull();

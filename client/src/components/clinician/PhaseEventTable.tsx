@@ -40,10 +40,29 @@ function spectralUnavailable(m: PhaseMetrics | undefined): boolean {
   return m?.provenance?.LFa?.method === "unavailable";
 }
 
+/**
+ * True when this phase's spectral values were COMPUTED by HumanOS from the raw
+ * waveform rather than supplied by the vendor. Such a value is displayable — it
+ * is a real measurement of the R-R series — but it is NOT the vendor's aggregate
+ * and has not been validated against PhysioPS output, so it must never be
+ * colour-coded against the Colombo norm bands (that would be an unvalidated
+ * normal/abnormal judgement). It is rendered plainly and marked "est.".
+ */
+function spectralEstimated(m: PhaseMetrics | undefined): boolean {
+  return (
+    m?.provenance?.LFa?.method === "computed" &&
+    m?.provenance?.LFa?.validation === "estimated"
+  );
+}
+
+const EST_TITLE =
+  "Estimated by HumanOS from the ECG-derived R-R series (Morlet wavelet band power, bpm²). NOT a vendor-reported value, not validated against PhysioPS output, and not colour-coded against the Colombo norms.";
+
 export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
   // Build a lookup map phase → metrics
   const phaseMap = new Map<string, PhaseMetrics>();
   phaseEvents.forEach(p => phaseMap.set(p.phase, p));
+  const anyEstimated = phaseEvents.some(spectralEstimated);
 
   return (
     <motion.div
@@ -83,6 +102,24 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
                     <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
                     <td className="py-2.5 pr-4 tabular-nums text-muted-foreground/60" title="Vendor spectral output not reproducible from this recording.">—</td>
                   </>
+                ) : spectralEstimated(m) ? (
+                  <>
+                    {(["FRF", "LFa", "RFa", "SB"] as const).map((k) => (
+                      <td
+                        key={k}
+                        className="py-2.5 pr-4 tabular-nums text-muted-foreground"
+                        title={EST_TITLE}
+                        data-testid={`phase-${pl.key}-${k}-estimated`}
+                      >
+                        {fmt(m?.[k])}
+                        {m?.[k] != null ? (
+                          <span className="ml-1 text-[9px] uppercase tracking-wider opacity-70">
+                            est.
+                          </span>
+                        ) : null}
+                      </td>
+                    ))}
+                  </>
                 ) : (
                   <>
                     <td className="py-2.5 pr-4 tabular-nums" style={{ color: m?.FRF != null ? cellColor(m.FRF, NORMS.FRF) : "inherit" }}>
@@ -114,6 +151,18 @@ export function PhaseEventTable({ phaseEvents }: PhaseEventTableProps) {
           <span className="font-medium text-foreground/60">Legend: </span>
           LFa = Sympathetic Activity (bpm²) · RFa = Parasympathetic Activity (bpm²) · FRF = Fundamental Respiratory Frequency (Hz) · SB = Sympathovagal Balance (LFa/RFa)
         </p>
+        {anyEstimated ? (
+          <p
+            className="text-[10px] text-muted-foreground leading-relaxed mt-1"
+            data-testid="phase-event-table-estimated-note"
+          >
+            <span className="font-medium text-foreground/60">est. = </span>
+            estimated by HumanOS from the ECG-derived R-R series (Morlet wavelet
+            band power, bpm²). Not a vendor-reported value, not validated against
+            PhysioPS output, and deliberately not colour-coded against the
+            Colombo norm bands.
+          </p>
+        ) : null}
         <p className="text-[10px] mt-1">
           <span style={{ color: "hsl(17 100% 60%)" }}>■ Below norm</span>
           <span className="mx-2 text-muted-foreground">·</span>

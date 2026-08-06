@@ -79,12 +79,26 @@ describe("Alex Pare — unknowns are null, never a zero sentinel", () => {
       expect(p.rangeHR).not.toBe(0);
       expect(p.hrvOverallVariabilityMs).not.toBe(0);
       expect(p.hrvBeatToBeatMs).not.toBe(0);
-      // Proprietary aggregates stay null — never coerced to 0.
-      expect(p.LFa).toBeNull();
-      expect(p.RFa).toBeNull();
-      expect(p.SB).toBeNull();
+      // Waveform-derived spectral values may now be PUBLISHED as HumanOS
+      // estimates, but they must never be a zero sentinel and never claim to be
+      // vendor values. Either the value is absent (null, with `unavailable`
+      // provenance) or it is a positive number tagged computed/estimated.
+      for (const key of ["LFa", "RFa", "SB"] as const) {
+        const v = p[key];
+        const prov = p.provenance?.[key];
+        if (v === null) {
+          expect(prov?.method === "unavailable" || prov?.method === "computed").toBe(true);
+        } else {
+          expect(v).toBeGreaterThanOrEqual(0);
+          expect(prov?.method).toBe("computed");
+          expect(prov?.validation).toBe("estimated");
+        }
+      }
       expect(p.FRF === null || p.FRF > 0).toBe(true);
     }
+    // The CLINICAL balance panel stays unavailable: an estimate must not fill it.
+    expect(report.spectralAvailable).toBe(false);
+    expect(report.autonomicBalance.available).toBe(false);
     expect(report.autonomicBalance.parasympathetic).toBeNull();
     expect(report.autonomicBalance.sympathetic).toBeNull();
     expect(report.autonomicBalance.balance).toBeNull();
@@ -244,14 +258,30 @@ describe("Alex Pare — interpretation is gated on signal usability", () => {
     expect(hrs[5]).toBe(72);
   });
 
-  it("invents no proprietary metric to fill the gap", () => {
+  it("publishes waveform-derived values only as labelled estimates, never as vendor data", () => {
     const { report } = alex();
+    // The CLINICAL gate stays shut without a paired vendor report...
     expect(report.spectralAvailable).toBe(false);
-    expect(report.respiratoryFrequency).toBeNull();
-    expect(report.respiratory.validation).toBe("unavailable");
-    expect(report.multiParameter?.lfaTrend.v).toEqual([]);
-    expect(report.multiParameter?.rfaTrend.v).toEqual([]);
-    for (const v of Object.values(report.multiParameter?.scatter ?? {})) expect(v).toBeNull();
+    // ...while the generically computable content is preserved and labelled.
+    expect(report.spectralSource).toBe("humanos_estimated");
+    expect(report.spectralEstimation.present).toBe(true);
+    expect(report.spectralEstimation.method).toBe("morlet_cwt_bpm2");
+    expect(report.spectralEstimation.disclosure).toMatch(/estimat/i);
+    expect(report.spectralEstimation.disclosure).toMatch(/not.{0,20}vendor|NOT a vendor/i);
+    expect(report.spectralEstimation.warnings.length).toBeGreaterThan(0);
+    expect(report.spectralEstimation.confidence).not.toBeNull();
+    // Confidence for an unvalidated approximation is capped well below 1.
+    expect(report.spectralEstimation.confidence!).toBeLessThanOrEqual(0.6);
+
+    // Respiratory frequency is ECG-derived and reported AS AN ESTIMATE.
+    expect(report.respiratoryFrequency).not.toBeNull();
+    expect(report.respiratory.validation).toBe("estimated");
+    expect(report.respiratory.frequencyHz).toBe(report.phaseEvents[0].FRF);
+
+    // Raw measurable trends survive even though the composite score is withheld.
+    expect(report.multiParameter?.lfaTrend.v.length).toBeGreaterThan(0);
+    expect(report.multiParameter?.rfaTrend.v.length).toBeGreaterThan(0);
+    expect(report.wellnessScore).toBeNull();
   });
 });
 

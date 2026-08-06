@@ -84,7 +84,13 @@ describe("POST /api/upload — vendor identity reconciliation (BLOCKER 2)", () =
     // Vendor values NOT applied → spectral/BP stay gated.
     expect(report.spectralAvailable).toBe(false);
     expect(report.bpAvailable).toBe(false);
-    expect(report.phaseEvents[0].LFa).toBeNull();
+    // No vendor number may reach any phase; a waveform estimate is allowed but
+    // must be tagged computed/estimated, never vendor-reported.
+    for (const ph of report.phaseEvents) {
+      expect(ph.provenance?.LFa.method).not.toBe("vendor_reported");
+      expect(ph.provenance?.LFa.method).not.toBe("derived_from_vendor");
+      expect(ph.LFa).not.toBe(VENDOR_VALUES.LFa);
+    }
     // Explicit warning surfaced, not silent.
     expect(Array.isArray(report.vendorReconciliationWarnings)).toBe(true);
     expect(report.vendorReconciliationWarnings.join(" ")).toMatch(/patient name/i);

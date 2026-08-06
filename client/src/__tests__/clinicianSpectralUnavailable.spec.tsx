@@ -30,7 +30,7 @@
  * Heavy WebGL/chart libs are stubbed (recharts via vitest.client.config alias)
  * so the tree renders under jsdom; the gating logic under test is untouched.
  */
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import path from "node:path";
@@ -150,6 +150,13 @@ describe("Clinician charts never fabricate spectral values (FOURTH FINAL-QA)", (
     expect(report.ratios.thirtyFifteenRatio.classification.severity).toBe("Normal");
   });
 
+  afterEach(async () => {
+    // Unmount between tests even when an assertion throws, so one failure
+    // cannot cascade into "found multiple elements" in every later test.
+    const { cleanup } = await import("@testing-library/react");
+    cleanup();
+  });
+
   async function renderClinician() {
     const { render } = await import("@testing-library/react");
     const { ClinicianPortalLive } = await import("../components/ClinicianPortalLive");
@@ -195,17 +202,36 @@ describe("Clinician charts never fabricate spectral values (FOURTH FINAL-QA)", (
     cleanup();
   });
 
-  it("phase-event table shows dashes for spectral cells (consistent with summary)", async () => {
+  it("phase-event table marks waveform-derived spectral cells as estimates", async () => {
     const { cleanup, screen } = await import("@testing-library/react");
     await renderClinician();
 
     const table = screen.getByTestId("phase-event-table");
     const body = table.textContent || "";
-    // No fabricated FRF numbers from the earlier defect.
-    expect(body).not.toContain("0.13");
-    expect(body).not.toContain("0.10");
     // The table still renders (has phase rows / HR data).
     expect(body.length).toBeGreaterThan(50);
+
+    if (report.phaseEvents.some((p: any) => p.provenance?.LFa?.method === "computed")) {
+      // Values ARE shown (they are real measurements of the R-R series) but every
+      // one of them is marked `est.` and the disclosure names the method and the
+      // absence of vendor validation.
+      expect(body).toContain("est.");
+      const note = screen.getByTestId("phase-event-table-estimated-note");
+      expect(note.textContent).toMatch(/estimated by HumanOS/i);
+      expect(note.textContent).toMatch(/[Nn]ot a vendor-reported value/);
+      expect(note.textContent).toMatch(/not validated against\s+PhysioPS/i);
+      // Estimates are NOT colour-coded against the Colombo norms — an
+      // unvalidated value must not be rendered as normal/abnormal.
+      for (const cell of Array.from(
+        table.querySelectorAll('[data-testid$="-estimated"]'),
+      ) as HTMLElement[]) {
+        expect(cell.getAttribute("style") || "").not.toMatch(/color:/);
+      }
+    } else {
+      // No usable waveform → dashes, never a fabricated number.
+      expect(body).not.toContain("0.13");
+      expect(body).not.toContain("0.10");
+    }
 
     cleanup();
   });

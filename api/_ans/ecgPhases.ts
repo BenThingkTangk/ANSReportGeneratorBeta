@@ -21,10 +21,16 @@
  * ------------------------------------------
  *   - Heart rate IS generically derivable from R-peaks -> emitted as
  *     `source: "computed"` (binary_int16-derived) with an honest confidence.
- *   - Proprietary vendor spectral aggregates (LFa / RFa / SB) are NOT
- *     reproducible from the `.ans` file alone (undisclosed wavelet method) ->
- *     they stay `missing` / unavailable here. NEVER fabricated, NEVER
- *     substituted by identity/hash.
+ *   - LFa / RFa / SB are ESTIMATED generically from the R-R series by
+ *     `./spectral.ts` (Morlet band power in bpm-squared over
+ *     respiration-adaptive bands) and emitted as `source: "computed"` with a
+ *     confidence < 1 and an explicit "HumanOS estimate, not vendor-reported"
+ *     warning on every field. The VENDOR's own aggregates use an undisclosed
+ *     wavelet + calibration, so these values are NOT claimed to reproduce them
+ *     and must never be presented as vendor-reported or PhysioPS-validated.
+ *     When the calculation is genuinely impossible the field stays `missing`.
+ *     NEVER fabricated, NEVER substituted by identity/hash, NEVER scaled by a
+ *     constant fitted to a particular patient's report.
  *   - Blood pressure is not stored per-phase in the `.ans` -> stays missing.
  *   - No patient/file/fingerprint-specific branching. Pure function of the
  *     buffer + protocol fractions.
@@ -37,6 +43,12 @@ import type {
 } from "../../shared/ansStudy.js";
 import { missingField } from "../../shared/ansStudy.js";
 import type { SamplingProbe } from "./parseBinary.js";
+import {
+  estimatePhaseSpectral,
+  estimateRespiratoryFrequencyFromPeaks,
+  ESTIMATED_SPECTRAL_NOTE,
+  ESTIMATED_SB_NOTE,
+} from "./spectral.js";
 
 // Canonical Colombo 6-phase protocol (durations in seconds). The recording is
 // scaled to these fractions since the raw file carries no phase markers.
@@ -221,15 +233,22 @@ export function buildEcgDerivedPhase(
   // "resting".
   const windows = block === "baseline" ? [mine[0]] : mine;
 
-  // Collect R-R intervals across every window that maps to this block.
+  // Collect R-R intervals (and the R-peak envelope, for the respiration
+  // estimate) across every window that maps to this block.
   const allRr: number[] = [];
+  const peakIdx: number[] = [];
+  const peakAmp: number[] = [];
   for (const seg of windows) {
     const i0 = Math.max(0, Math.floor(seg.startSec * fs));
     const i1 = Math.min(ecg.length, Math.floor(seg.endSec * fs));
     if (i1 - i0 < fs * 2) continue;
     const slice = ecg.subarray(i0, i1);
-    const { rrIntervalsMs } = detectRPeaks(slice, fs);
+    const { rrIntervalsMs, indices } = detectRPeaks(slice, fs);
     for (const rr of rrIntervalsMs) allRr.push(rr);
+    for (const idx of indices) {
+      peakIdx.push(i0 + idx);
+      peakAmp.push(ecg[i0 + idx]);
+    }
   }
 
   const startSecVal = Math.min(...windows.map((s) => s.startSec));
@@ -275,25 +294,58 @@ export function buildEcgDerivedPhase(
 
   const label = mine.map((s) => s.label).join(" + ");
 
+  // --- Generic waveform-derived spectral estimate ----------------------------
+  const frf = estimateRespiratoryFrequencyFromPeaks(peakIdx, peakAmp, fs);
+  const est = estimatePhaseSpectral({
+    rrIntervalsMs: allRr,
+    respFreqHz: frf,
+    pacedBreathing: block === "deep_breathing",
+  });
+  const estimateWarnings = [ESTIMATED_SPECTRAL_NOTE, ...est.warnings];
+  const estField = (
+    value: number | null,
+    name: "LFa" | "RFa" | "SB",
+    note: string,
+  ): ProvField<number> =>
+    value == null
+      ? missingField<number>(
+          `${name} could not be estimated from the raw ECG for this phase: ` +
+            (est.warnings[0] ?? "insufficient usable R-R data.") +
+            " A vendor-reported value, if any, exists only in the signed PDF.",
+        )
+      : {
+          value,
+          unit: name === "SB" ? "ratio" : "bpm^2",
+          provenance: {
+            source: "computed",
+            offset: sampling.dataStartOffset,
+            matchedLabel: `humanos_estimated_${name.toLowerCase()}`,
+            // Capped well below 1: an unvalidated approximation of a
+            // proprietary aggregate can never be a high-confidence field.
+            confidence: est.confidence,
+            warnings: [note, ...estimateWarnings.slice(1)],
+          },
+        };
+
   return {
     present: true,
     startSec,
     endSec,
     heartRate,
     bp: emptyBp(),
-    // Proprietary vendor spectral aggregates are NOT generically reproducible
-    // from the raw .ans (undisclosed wavelet). Left missing — never fabricated.
-    lfa: missingField<number>(
-      "LFa is a proprietary vendor aggregate; not reproducible from raw ECG. See PDF for vendor value.",
-    ),
-    rfa: missingField<number>(
-      "RFa is a proprietary vendor aggregate; not reproducible from raw ECG. See PDF for vendor value.",
-    ),
-    sb: missingField<number>(
-      "Sympathovagal balance (LFa/RFa) requires proprietary vendor aggregates; not reproducible from raw ECG.",
-    ),
+    // HumanOS ESTIMATES with explicit computed provenance — never presented as
+    // vendor-reported, never validated against PhysioPS output.
+    lfa: estField(est.lfa, "LFa", ESTIMATED_SPECTRAL_NOTE),
+    rfa: estField(est.rfa, "RFa", ESTIMATED_SPECTRAL_NOTE),
+    sb: estField(est.sb, "SB", ESTIMATED_SB_NOTE),
     notes: [
       `ECG-derived phase (${label}); HR computed from raw waveform.`,
+      est.lfa == null && est.rfa == null
+        ? "LFa/RFa could not be estimated from this phase's waveform; the vendor's own values exist only in the signed PDF."
+        : `LFa/RFa/SB are HumanOS estimates computed from ${est.beats} R-R intervals ` +
+          `(Morlet band power, bpm^2, ${est.bands.bandSource} bands ` +
+          `sympathetic ${est.bands.lfLo}-${est.bands.lfHi} Hz / respiratory ${est.bands.hfLo.toFixed(2)}-${est.bands.hfHi.toFixed(2)} Hz), ` +
+          "not vendor-reported values and not validated against PhysioPS output.",
     ],
   };
 }

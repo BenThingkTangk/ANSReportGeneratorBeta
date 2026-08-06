@@ -256,8 +256,12 @@ describe("POST /api/upload — spectral/BP unavailable safety contract (SECOND F
     const overall: string = json.report.overallImpression ?? "";
 
     expect(overall).toMatch(/not assessed|clinician review/i);
-    // FRF is a proprietary spectral measure — must be null when unavailable.
-    expect(json.report.respiratoryFrequency).toBeNull();
+    // Respiratory frequency IS derivable from the ECG envelope, so it is
+    // published — but only as an explicitly-labelled estimate, and the top-level
+    // value must agree with the per-phase value (the audit found the payload
+    // denying the measure at the top level while asserting six phase values).
+    expect(json.report.respiratory.validation).toBe("estimated");
+    expect(json.report.respiratoryFrequency).toBe(json.report.phaseEvents[0].FRF);
   });
 
   it("still reports the supported ECG-derived observations (HR + Ewing ratios)", async () => {
@@ -271,11 +275,17 @@ describe("POST /api/upload — spectral/BP unavailable safety contract (SECOND F
     for (const p of report.phaseEvents) {
       expect(p.meanHR).toBeGreaterThan(30);
       expect(p.meanHR).toBeLessThan(220);
-      // Spectral fields must be nulled on the report-facing phases.
-      expect(p.LFa).toBeNull();
-      expect(p.RFa).toBeNull();
-      expect(p.SB).toBeNull();
+      // Spectral fields may carry HumanOS ESTIMATES, but never with vendor
+      // provenance and never unlocking the clinical gate.
+      for (const key of ["LFa", "RFa", "SB"]) {
+        const prov = p.provenance?.[key];
+        expect(["computed", "unavailable"]).toContain(prov?.method);
+        if (p[key] !== null) expect(prov?.validation).toBe("estimated");
+      }
     }
+    expect(report.spectralAvailable).toBe(false);
+    expect(report.spectralSource).toBe("humanos_estimated");
+    expect(report.autonomicBalance.available).toBe(false);
 
     // Ewing ratios stay classified (supported observation).
     expect(report.ratios.eiRatio.value).toBeGreaterThan(0);
