@@ -81,13 +81,13 @@ describe("POST /api/upload — vendor identity reconciliation (BLOCKER 2)", () =
     const { status, json } = await invoke(readFileSync(PARE), "pare_deid.ans", header);
     expect(status).toBe(200);
     const report = json.report;
-    // Vendor values NOT applied → spectral/BP stay gated.
-    expect(report.spectralAvailable).toBe(false);
-    expect(report.bpAvailable).toBe(false);
-    // No vendor number may reach any phase; a waveform estimate is allowed but
-    // must be tagged computed/estimated, never vendor-reported.
+    // Mismatched PDF values are rejected, while independent values stored in
+    // the .ans remain available with their own provenance.
+    expect(report.spectralAvailable).toBe(true);
+    expect(report.spectralSource).toBe("ans_stored");
+    expect(report.bpAvailable).toBe(true);
     for (const ph of report.phaseEvents) {
-      expect(ph.provenance?.LFa.method).not.toBe("vendor_reported");
+      expect(ph.provenance?.LFa.method).toBe("ans_stored");
       expect(ph.provenance?.LFa.method).not.toBe("derived_from_vendor");
       expect(ph.LFa).not.toBe(VENDOR_VALUES.LFa);
     }
@@ -102,7 +102,8 @@ describe("POST /api/upload — vendor identity reconciliation (BLOCKER 2)", () =
       identity: { patientName: "John Faux", testDate: "1/2/2020", dob: "1/1/1975" },
     });
     const { json } = await invoke(readFileSync(PARE), "pare_deid.ans", header);
-    expect(json.report.spectralAvailable).toBe(false);
+    expect(json.report.spectralAvailable).toBe(true);
+    expect(json.report.spectralSource).toBe("ans_stored");
     expect(json.report.vendorReconciliationWarnings.join(" ")).toMatch(/study date/i);
   });
 
@@ -112,7 +113,8 @@ describe("POST /api/upload — vendor identity reconciliation (BLOCKER 2)", () =
       identity: { patientName: "John Faux", testDate: "7/11/2024", dob: "5/5/1990" },
     });
     const { json } = await invoke(readFileSync(PARE), "pare_deid.ans", header);
-    expect(json.report.spectralAvailable).toBe(false);
+    expect(json.report.spectralAvailable).toBe(true);
+    expect(json.report.spectralSource).toBe("ans_stored");
     expect(json.report.vendorReconciliationWarnings.join(" ")).toMatch(/date of birth/i);
   });
 
@@ -120,7 +122,8 @@ describe("POST /api/upload — vendor identity reconciliation (BLOCKER 2)", () =
     // Legacy payload with NO identity → cannot confirm → reject.
     const header = JSON.stringify({ ...VENDOR_VALUES });
     const { json } = await invoke(readFileSync(PARE), "pare_deid.ans", header);
-    expect(json.report.spectralAvailable).toBe(false);
+    expect(json.report.spectralAvailable).toBe(true);
+    expect(json.report.spectralSource).toBe("ans_stored");
     expect(Array.isArray(json.report.vendorReconciliationWarnings)).toBe(true);
   });
 });

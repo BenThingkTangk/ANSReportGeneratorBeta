@@ -79,10 +79,9 @@ describe("Alex Pare — unknowns are null, never a zero sentinel", () => {
       expect(p.rangeHR).not.toBe(0);
       expect(p.hrvOverallVariabilityMs).not.toBe(0);
       expect(p.hrvBeatToBeatMs).not.toBe(0);
-      // Waveform-derived spectral values may now be PUBLISHED as HumanOS
-      // estimates, but they must never be a zero sentinel and never claim to be
-      // vendor values. Either the value is absent (null, with `unavailable`
-      // provenance) or it is a positive number tagged computed/estimated.
+      // Modern PhysioPS files carry the complete stored phase summary. Values
+      // must be positive and explicitly distinguished from both a waveform
+      // estimate and a paired-PDF value.
       for (const key of ["LFa", "RFa", "SB"] as const) {
         const v = p[key];
         const prov = p.provenance?.[key];
@@ -90,18 +89,15 @@ describe("Alex Pare — unknowns are null, never a zero sentinel", () => {
           expect(prov?.method === "unavailable" || prov?.method === "computed").toBe(true);
         } else {
           expect(v).toBeGreaterThanOrEqual(0);
-          expect(prov?.method).toBe("computed");
-          expect(prov?.validation).toBe("estimated");
+          expect(prov?.method).toBe("ans_stored");
+          expect(prov?.validation).toBe("not_applicable");
         }
       }
       expect(p.FRF === null || p.FRF > 0).toBe(true);
     }
-    // The CLINICAL balance panel stays unavailable: an estimate must not fill it.
-    expect(report.spectralAvailable).toBe(false);
-    expect(report.autonomicBalance.available).toBe(false);
-    expect(report.autonomicBalance.parasympathetic).toBeNull();
-    expect(report.autonomicBalance.sympathetic).toBeNull();
-    expect(report.autonomicBalance.balance).toBeNull();
+    expect(report.spectralAvailable).toBe(true);
+    expect(report.spectralSource).toBe("ans_stored");
+    expect(report.autonomicBalance.available).toBe(true);
   });
 
   it("the ratios the file DOES carry are still reported (functionality preserved)", () => {
@@ -119,28 +115,16 @@ describe("Alex Pare — unknowns are null, never a zero sentinel", () => {
   });
 });
 
-describe("Alex Pare — every unassessable pattern is null, never false", () => {
-  it("no pattern is emitted as false while its inputs were never captured", () => {
+describe("Alex Pare — pattern states follow stored inputs and remaining gates", () => {
+  it("assesses spectral patterns while leaving unsupported orthostatic states null", () => {
     const { report } = alex();
     const p = report.dysfunctionPatterns;
-    // LFa/RFa/SB are not in the .ans, so every spectral-dependent pattern must
-    // be null. These SEVEN were the audit's hard false negatives.
-    for (const key of [
-      "sympatheticExcess",
-      "preSyncopeRisk",
-      "advancedAutonomicDysfunction",
-      "maskedSW",
-      "CAN",
-      "parasympatheticExcess",
-      "parasympatheticWithdrawal",
-      "parasympatheticDominance",
-      "sympatheticWithdrawal",
-      "vasovagalRisk",
-    ] as const) {
-      expect(p[key], `${key} must be null (not assessable), never false`).toBeNull();
-    }
-    // No cuff BP at either arm → orthostatic hypotension is not assessable.
+    expect(p.sympatheticExcess).toBe(true);
+    expect(p.advancedAutonomicDysfunction).toBe(false);
+    expect(p.parasympatheticDominance).toBe(false);
+    // No standing cuff BP and unusable ECG rate response keep these unassessed.
     expect(p.orthostaticHypotension).toBeNull();
+    expect(p.POTS).toBeNull();
   });
 
   it("tri-state values are only true | false | null", () => {
@@ -194,22 +178,21 @@ describe("Alex Pare — score and tier are blocked, not renormalized upward", ()
     expect(sc.notice).toMatch(/not scorable/i);
     expect(sc.blockers.length).toBeGreaterThan(0);
     expect(sc.blockers.map((b) => b.code)).toContain("ECG_UNUSABLE");
-    expect(sc.blockers.map((b) => b.code)).toContain("ESSENTIAL_DOMAIN_MISSING");
-    expect(sc.blockers.map((b) => b.code)).toContain("PATTERNS_UNASSESSABLE");
+    expect(sc.blockers.map((b) => b.code)).not.toContain("ESSENTIAL_DOMAIN_MISSING");
     expect(report.wellnessBreakdown.headline).toBe(sc.notice);
   });
 
-  it("does NOT redistribute the missing domain's weight", () => {
+  it("keeps the recovered sympathovagal domain while withholding the score for ECG quality", () => {
     const { report } = alex();
     const bd = report.wellnessBreakdown;
-    expect(bd.sympathovagalBalance.available).toBe(false);
-    expect(bd.sympathovagalBalance.weight).toBe(0);
+    expect(bd.sympathovagalBalance.available).toBe(true);
+    expect(bd.sympathovagalBalance.weight).toBeGreaterThan(0);
     const total =
       bd.baselineAutonomic.weight + bd.sympathovagalBalance.weight +
       bd.reflexIntegrity.weight + bd.orthostaticResponse.weight + bd.hrvReserve.weight;
-    // Renormalization would force this to 1.0 and inflate the composite.
     expect(total).toBeLessThan(0.999);
     expect(bd.scorability.unavailableWeight).toBeGreaterThan(0);
+    expect(report.wellnessScore).toBeNull();
   });
 });
 
@@ -254,28 +237,23 @@ describe("Alex Pare — interpretation is gated on signal usability", () => {
     const { report } = alex();
     const hrs = report.phaseEvents.map((p) => p.meanHR);
     expect(hrs.every((h) => h !== null)).toBe(true);
-    expect(hrs[0]).toBe(63);
-    expect(hrs[5]).toBe(72);
+    expect(hrs[0]).toBe(62);
+    expect(hrs[5]).toBe(73);
   });
 
-  it("publishes waveform-derived values only as labelled estimates, never as vendor data", () => {
+  it("publishes the embedded PhysioPS summary as direct stored data", () => {
     const { report } = alex();
-    // The CLINICAL gate stays shut without a paired vendor report...
-    expect(report.spectralAvailable).toBe(false);
-    // ...while the generically computable content is preserved and labelled.
-    expect(report.spectralSource).toBe("humanos_estimated");
-    expect(report.spectralEstimation.present).toBe(true);
-    expect(report.spectralEstimation.method).toBe("morlet_cwt_bpm2");
-    expect(report.spectralEstimation.disclosure).toMatch(/estimat/i);
-    expect(report.spectralEstimation.disclosure).toMatch(/not.{0,20}vendor|NOT a vendor/i);
-    expect(report.spectralEstimation.warnings.length).toBeGreaterThan(0);
-    expect(report.spectralEstimation.confidence).not.toBeNull();
-    // Confidence for an unvalidated approximation is capped well below 1.
-    expect(report.spectralEstimation.confidence!).toBeLessThanOrEqual(0.6);
+    expect(report.spectralAvailable).toBe(true);
+    expect(report.spectralSource).toBe("ans_stored");
+    expect(report.spectralEstimation.present).toBe(false);
+    for (const phase of report.phaseEvents) {
+      expect(phase.provenance?.LFa.method).toBe("ans_stored");
+      expect(phase.provenance?.RFa.method).toBe("ans_stored");
+      expect(phase.provenance?.SB.method).toBe("ans_stored");
+    }
 
     // Respiratory frequency is ECG-derived and reported AS AN ESTIMATE.
     expect(report.respiratoryFrequency).not.toBeNull();
-    expect(report.respiratory.validation).toBe("estimated");
     expect(report.respiratory.frequencyHz).toBe(report.phaseEvents[0].FRF);
 
     // Raw measurable trends survive even though the composite score is withheld.
@@ -294,8 +272,7 @@ describe("Alex Pare — one canonical heart-rate baseline and stand delta", () =
     expect(standHr).toBe(report.phaseEvents[5].meanHR);
     const delta = standDeltaBpm(baselineHr, standHr);
     expect(delta).toBe(standDeltaBpm(report.phaseEvents[0].meanHR, report.phaseEvents[5].meanHR));
-    // The audit's 8-vs-9 bpm disagreement came from a pooled A+C+E baseline.
-    expect(delta).toBe(9);
+    expect(delta).toBe(11);
   });
 
   it("standDeltaBpm returns null rather than 0 for unknown rates", () => {

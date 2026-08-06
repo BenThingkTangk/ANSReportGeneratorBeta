@@ -47,6 +47,10 @@ import {
 } from "./parseBinary.js";
 import { asciiView, sectionize, findSection } from "./sectionizer.js";
 import { deriveEcgPhases } from "./ecgPhases.js";
+import {
+  parseVendorStoredAnalysis,
+  vendorPhaseToBlock,
+} from "./vendorStored.js";
 import { SENTINEL_ABS } from "../../shared/ecgScaling.js";
 import {
   FIELD_SYNONYMS,
@@ -1331,31 +1335,59 @@ export function parseStudy({
     baseline.present || deepBreathing.present || valsalva.present || standOrTilt.present;
 
   if (bin.sampling && !asciiPhasesFound) {
-    // No ASCII phase tables anywhere -> derive from raw ECG.
+    // Current PhysioPS files store an exact six-phase analysis table after the
+    // ECG and derived series. Prefer those vendor-authored values. Only older,
+    // truncated, or unknown-schema files fall back to waveform estimation.
     try {
-      const ecgSamples = readEcgInt16(buffer, bin.sampling);
-      const derived = deriveEcgPhases(ecgSamples, bin.sampling);
-      if (!baseline.present) baseline = derived.baseline;
-      if (!deepBreathing.present) deepBreathing = derived.deepBreathing;
-      if (!valsalva.present) valsalva = derived.valsalva;
-      if (!standOrTilt.present) standOrTilt = derived.stand;
+      const stored = parseVendorStoredAnalysis(buffer, bin.sampling);
+      if (!baseline.present) baseline = vendorPhaseToBlock(stored.phases[0], stored.summaryOffset);
+      if (!deepBreathing.present) {
+        deepBreathing = vendorPhaseToBlock(stored.phases[1], stored.summaryOffset);
+      }
+      if (!valsalva.present) valsalva = vendorPhaseToBlock(stored.phases[3], stored.summaryOffset);
+      if (!standOrTilt.present) {
+        standOrTilt = vendorPhaseToBlock(stored.phases[5], stored.summaryOffset);
+      }
       warnings.push({
-        code: "PHASES_ECG_DERIVED",
+        code: "PHASES_VENDOR_STORED",
         message:
-          "No per-phase ASCII tables in file; phases and per-phase heart rate " +
-          "were derived generically from the raw ECG via the standard 6-phase " +
-          "protocol. Proprietary spectral aggregates (LFa/RFa/SB) and per-phase " +
-          "BP remain unavailable — not reproducible from the .ans alone.",
-        severity: "warn",
+          "The PhysioPS six-phase analysis summary was read directly from the .ans file, " +
+          "including stored timing, mean HR, LFa, RFa, LFa/RFa, and BP marker values.",
+        severity: "info",
         field: "phases",
       });
     } catch (err) {
       warnings.push({
-        code: "PHASE_ECG_DERIVATION_FAILED",
-        message: `ECG phase derivation failed: ${(err as Error).message}`,
+        code: "VENDOR_PHASE_SUMMARY_UNAVAILABLE",
+        message:
+          `Stored PhysioPS phase summary was unavailable (${(err as Error).message}); ` +
+          "using the explicitly labeled waveform-estimation fallback.",
         severity: "warn",
         field: "phases",
       });
+      try {
+        const ecgSamples = readEcgInt16(buffer, bin.sampling);
+        const derived = deriveEcgPhases(ecgSamples, bin.sampling);
+        if (!baseline.present) baseline = derived.baseline;
+        if (!deepBreathing.present) deepBreathing = derived.deepBreathing;
+        if (!valsalva.present) valsalva = derived.valsalva;
+        if (!standOrTilt.present) standOrTilt = derived.stand;
+        warnings.push({
+          code: "PHASES_ECG_DERIVED",
+          message:
+            "No supported stored phase summary was available; phase values were estimated " +
+            "from the raw ECG and are not represented as PhysioPS vendor values.",
+          severity: "warn",
+          field: "phases",
+        });
+      } catch (fallbackError) {
+        warnings.push({
+          code: "PHASE_ECG_DERIVATION_FAILED",
+          message: `ECG phase derivation failed: ${(fallbackError as Error).message}`,
+          severity: "warn",
+          field: "phases",
+        });
+      }
     }
   }
 

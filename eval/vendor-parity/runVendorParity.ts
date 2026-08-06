@@ -4,6 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseStudy } from "../../api/_ans/parseStudy.ts";
+import { parseBinaryHeader } from "../../api/_ans/parseBinary.ts";
+import {
+  parseVendorStoredAnalysis,
+  roundHalfEven,
+  type VendorPhaseMetrics,
+} from "../../api/_ans/vendorStored.ts";
 import type { AnsStudy, PhaseBlock, ProvField } from "../../shared/ansStudy.ts";
 
 type Status = "pass" | "mismatch" | "not_implemented" | "unavailable";
@@ -29,6 +35,9 @@ type OraclePhaseRow = {
   LFA: OracleField<number>;
   RFA: OracleField<number>;
   LFA_RFA: OracleField<number>;
+  BP: OracleField<string | null>;
+  PP: OracleField<number | null>;
+  MAP: OracleField<number | null>;
 };
 type OracleCase = {
   ans_binary_structure: {
@@ -216,6 +225,110 @@ function comparePhase(
   }, 0.02);
 }
 
+function formatDuration(durationSec: number): string {
+  const seconds = Math.floor(durationSec);
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function fixed2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function formatBp(phase: VendorPhaseMetrics): string | null {
+  return phase.systolic == null || phase.diastolic == null
+    ? null
+    : `${phase.systolic} / ${phase.diastolic}`;
+}
+
+function compareStoredPhase(
+  rows: Comparison[],
+  caseId: string,
+  deidentifiedFile: string,
+  expected: OraclePhaseRow,
+  actual: VendorPhaseMetrics,
+): void {
+  const code = expected.event_code.value;
+  const base = {
+    caseId,
+    deidentifiedFile,
+    category: `stored_vendor_summary_phase_${code}`,
+  };
+  const values: Array<{
+    metric: string;
+    expected: unknown;
+    actual: unknown;
+    tolerance?: number;
+  }> = [
+    {
+      metric: "duration_mm_ss",
+      expected: expected.duration.value,
+      actual: formatDuration(actual.durationSec),
+    },
+    {
+      metric: "mean_hr_bpm",
+      expected: expected.meanHR.value,
+      actual: roundHalfEven(actual.meanHr),
+    },
+    {
+      metric: "range_hr_bpm",
+      expected: expected.rangeHR.value,
+      actual: roundHalfEven(actual.rangeHr),
+    },
+    {
+      metric: "frf_hz",
+      expected: expected.FRF.value,
+      actual: fixed2(actual.frf),
+      tolerance: 0.01,
+    },
+    {
+      metric: "lfa_bpm2",
+      expected: expected.LFA.value,
+      actual: fixed2(actual.lfa),
+      tolerance: 0.01,
+    },
+    {
+      metric: "rfa_bpm2",
+      expected: expected.RFA.value,
+      actual: fixed2(actual.rfa),
+      tolerance: 0.01,
+    },
+    {
+      metric: "lfa_rfa_ratio",
+      expected: expected.LFA_RFA.value,
+      actual: fixed2(actual.ratio),
+      tolerance: 0.01,
+    },
+    {
+      metric: "bp_sys_dia",
+      expected: expected.BP.value,
+      actual: formatBp(actual),
+    },
+    {
+      metric: "pulse_pressure_mmhg",
+      expected: expected.PP.value,
+      actual: actual.pulsePressure,
+    },
+    {
+      metric: "map_mmhg",
+      expected: expected.MAP.value,
+      actual: actual.map,
+    },
+  ];
+  for (const value of values) {
+    compare(
+      rows,
+      {
+        ...base,
+        metric: value.metric,
+        expected: value.expected,
+        actual: value.actual,
+        note: "Read generically from the stored PhysioPS phase summary and BP marker arrays.",
+      },
+      value.tolerance,
+    );
+  }
+}
+
 function compareCase(
   caseId: string,
   oracleCase: OracleCase,
@@ -237,6 +350,9 @@ function compareCase(
   }
 
   const study = parseStudy({ buffer: source.buffer, fileName: deidentifiedFile });
+  const binaryHeader = parseBinaryHeader(source.buffer);
+  if (!binaryHeader.sampling) throw new Error(`Binary sampling block missing for ${caseId}`);
+  const stored = parseVendorStoredAnalysis(source.buffer, binaryHeader.sampling);
   const rows: Comparison[] = [];
   const binary = oracleCase.ans_binary_structure;
   const demo = oracleCase.demographics;
@@ -304,6 +420,15 @@ function compareCase(
   comparePhase(rows, caseId, deidentifiedFile, "B", "deep_breathing", getPhase(oracleCase, "B"), study.deepBreathing);
   comparePhase(rows, caseId, deidentifiedFile, "D", "valsalva", getPhase(oracleCase, "D"), study.valsalva);
   comparePhase(rows, caseId, deidentifiedFile, "F", "stand", getPhase(oracleCase, "F"), study.standOrTilt);
+  for (const phase of stored.phases) {
+    compareStoredPhase(
+      rows,
+      caseId,
+      deidentifiedFile,
+      getPhase(oracleCase, phase.code),
+      phase,
+    );
+  }
 
   const reasons = study.ecg.quality.unusableReasons;
   compare(rows, {
@@ -333,10 +458,6 @@ function compareCase(
   });
 
   for (const [metric, note] of [
-    ["vendor_phase_C", "Second baseline phase is not represented in canonical AnsStudy."],
-    ["vendor_phase_E", "Pre-stand baseline phase is not represented in canonical AnsStudy."],
-    ["vendor_frf", "Vendor FRF values are not reproduced by the canonical parser."],
-    ["vendor_bp_pp_map", "Per-phase BP, PP, and vendor MAP are not recoverable from .ans alone."],
     ["vendor_trend_array_mapping", "Exact LFa/RFa trend-array indices remain unresolved."],
     ["vendor_wavelet_spectrogram", "Vendor wavelet/spectrogram reproduction is not implemented."],
   ] as const) {
@@ -393,7 +514,7 @@ function markdownReport(oracle: Oracle, rows: Comparison[], sourcesFound: number
     `- Unavailable: **${summary.statuses.unavailable}**`,
     `- Raw parity ratio: **${summary.parityPercent}%**`,
     "",
-    "Core integrity, demographics, sampling metadata, Ewing ratios, height, and the no-invented-weight/BMI policy are measured separately from unresolved vendor spectral behavior. The remaining gaps are explicit instead of being hidden behind generic usability gates.",
+    "Core integrity, demographics, sampling metadata, Ewing ratios, height, the no-invented-weight/BMI policy, and all six stored PhysioPS numerical-summary rows are measured directly. Remaining visualization-array gaps are explicit and are not confused with the recovered vendor summary.",
     "",
     "## Case matrix",
     "",
@@ -407,13 +528,13 @@ function markdownReport(oracle: Oracle, rows: Comparison[], sourcesFound: number
     "|---|---|---|---|---|---|",
     ...gaps.map((row) => `| ${row.caseId} | ${row.category} | ${row.metric} | ${row.status} | ${formatCell(row.expected)} | ${formatCell(row.actual)} |`),
     "",
-    "## Phase 1 disposition",
+    "## Recovery disposition",
     "",
     "- The deidentified oracle is checksum-protected.",
     "- Source matching is hash-based; local filenames and paths are excluded from output.",
     "- The diagnostic command records current truth without blocking development.",
-    "- The strict command is expected to fail until Phase 2 closes the measured gaps.",
-    "- No production deployment is part of Phase 1.",
+    "- The strict command remains intentionally blocking while any measured gap remains.",
+    "- No production deployment is part of this recovery checkpoint.",
     "",
   ].join("\n");
 }

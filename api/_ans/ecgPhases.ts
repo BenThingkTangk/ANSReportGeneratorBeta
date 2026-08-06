@@ -3,19 +3,18 @@
  *
  * WHY THIS EXISTS
  * ---------------
- * Colombo / PhysioPS `.ans` files are **raw ECG waveform** exports. They do NOT
- * contain per-phase ASCII tables (no "Baseline HR = ...", no "Stand BP = ...").
+ * Older or truncated Colombo / PhysioPS `.ans` files may expose only the raw ECG
+ * waveform to this parser. Current complete files also carry a stored summary,
+ * which is decoded first by `vendorStored.ts`.
  * The only ASCII in the header is demographics + the three Ewing ratios + an
  * ectopy note. Consequently the ASCII sectionizer can only ever find headings
  * that happen to appear as prose (e.g. the word "Valsalva" inside
  * "Valsalva Ratio = 1.43"), which produced the FINAL-QA defect:
  *   SECTIONS DETECTED: 1, and only a spurious "valsalva" phase.
  *
- * The six protocol phases must therefore be **derived generically from the raw
- * ECG signal**, exactly the way the report path (`/api/upload`) already does.
- * This module provides that derivation for `parseStudy` so the parse-review UI
- * exposes all four clinical phase blocks (baseline / deep breathing / valsalva /
- * stand) with a generically-computed heart rate + timing.
+ * This module is the explicitly labeled safe fallback for files without a
+ * supported stored summary. It exposes all four clinical phase blocks with
+ * generically estimated heart rate, timing, and spectral values.
  *
  * PROVENANCE & SAFETY (hard rules preserved)
  * ------------------------------------------
@@ -31,7 +30,8 @@
  *     When the calculation is genuinely impossible the field stays `missing`.
  *     NEVER fabricated, NEVER substituted by identity/hash, NEVER scaled by a
  *     constant fitted to a particular patient's report.
- *   - Blood pressure is not stored per-phase in the `.ans` -> stays missing.
+ *   - Blood pressure stays missing in fallback mode because no supported marker
+ *     block was decoded.
  *   - No patient/file/fingerprint-specific branching. Pure function of the
  *     buffer + protocol fractions.
  */
@@ -50,8 +50,9 @@ import {
   ESTIMATED_SB_NOTE,
 } from "./spectral.js";
 
-// Canonical Colombo 6-phase protocol (durations in seconds). The recording is
-// scaled to these fractions since the raw file carries no phase markers.
+// Canonical Colombo 6-phase nominal protocol (durations in seconds). Complete
+// files store exact boundaries; fallback distributes recorder overhead equally
+// across phases instead of distorting every phase proportionally.
 export interface ProtocolPhase {
   /** Clinical phase block this maps onto in AnsStudy. */
   block: "baseline" | "deep_breathing" | "valsalva" | "stand";
@@ -64,8 +65,8 @@ export const PROTOCOL_PHASES: ProtocolPhase[] = [
   { block: "deep_breathing", label: "Deep Breathing (B)", durSec: 60 },
   { block: "baseline", label: "Baseline (C)", durSec: 60 },
   { block: "valsalva", label: "Valsalva (D)", durSec: 95 },
-  { block: "baseline", label: "Baseline (E)", durSec: 150 },
-  { block: "stand", label: "Stand (F)", durSec: 330 },
+  { block: "baseline", label: "Baseline (E)", durSec: 120 },
+  { block: "stand", label: "Stand (F)", durSec: 300 },
 ];
 
 export interface DerivedPhaseTiming {
@@ -75,14 +76,14 @@ export interface DerivedPhaseTiming {
   endSec: number;
 }
 
-/** Segment a recording of `totalSec` into the six protocol phases by fraction. */
+/** Segment a recording with nominal durations plus equal per-phase overhead. */
 export function segmentProtocol(totalSec: number): DerivedPhaseTiming[] {
   const protoTotal = PROTOCOL_PHASES.reduce((a, p) => a + p.durSec, 0);
-  const scale = totalSec > 0 ? totalSec / protoTotal : 0;
+  const overhead = totalSec > 0 ? (totalSec - protoTotal) / PROTOCOL_PHASES.length : 0;
   const out: DerivedPhaseTiming[] = [];
   let t = 0;
   for (const p of PROTOCOL_PHASES) {
-    const dur = p.durSec * scale;
+    const dur = Math.max(0, p.durSec + overhead);
     out.push({ block: p.block, label: p.label, startSec: t, endSec: t + dur });
     t += dur;
   }
@@ -258,9 +259,9 @@ export function buildEcgDerivedPhase(
     unit: "s",
     provenance: {
       source: "computed",
-      matchedLabel: "protocol_fraction",
+      matchedLabel: "protocol_equal_overhead_fallback",
       confidence: 0.6,
-      warnings: ["Phase timing derived from protocol fractions, not file markers."],
+      warnings: ["Phase timing uses nominal protocol duration plus equal recorder overhead; no stored summary was available."],
     },
   };
   const endSec: ProvField<number> = {
@@ -268,7 +269,7 @@ export function buildEcgDerivedPhase(
     unit: "s",
     provenance: {
       source: "computed",
-      matchedLabel: "protocol_fraction",
+      matchedLabel: "protocol_equal_overhead_fallback",
       confidence: 0.6,
     },
   };

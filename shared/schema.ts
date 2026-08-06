@@ -345,7 +345,7 @@ export interface ANSReport {
    * populated, while `spectralAvailable` stays false so no clinical conclusion
    * or composite score consumes them.
    */
-  spectralSource?: "vendor_reported" | "humanos_estimated" | "unavailable";
+  spectralSource?: "ans_stored" | "vendor_reported" | "humanos_estimated" | "unavailable";
   /** Uncertainty envelope + mandatory disclosure for waveform estimates. */
   spectralEstimation?: {
     present: boolean;

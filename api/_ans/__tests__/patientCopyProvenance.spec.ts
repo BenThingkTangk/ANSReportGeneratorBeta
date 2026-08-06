@@ -112,15 +112,19 @@ describe("patient copy — measured Ewing ratios + vendor-spectral provenance", 
   });
 
   // Extra assurance against the real Jill file when it is available locally.
-  it("real Jill patient copy (when present) matches the same contract", () => {
+  it("real Jill patient copy uses the embedded summary without a missing-spectral disclaimer", () => {
     if (!existsSync(REAL_JILL)) {
       return; // CI / clean checkout: covered by the de-identified fixture above.
     }
-    const jill = synopsisFor(reportFor(REAL_JILL));
+    const report = reportFor(REAL_JILL);
+    expect(report.spectralAvailable).toBe(true);
+    expect(report.spectralSource).toBe("ans_stored");
+    const jill = synopsisFor(report);
     expect(jill).toContain("1.21");
     expect(jill).toContain("1.43");
     expect(jill).toContain("1.40");
-    expect(jill.toLowerCase()).toContain("spectral");
+    expect(jill).toMatch(/rest-and-digest|fight-or-flight/i);
+    expect(jill).not.toMatch(/proprietary spectral|spectral (aggregates|analysis).*\.ans export/i);
     expect(jill.toLowerCase()).not.toContain("not enough heart-rhythm");
     expect(jill.toLowerCase()).not.toContain("not medical advice");
   });

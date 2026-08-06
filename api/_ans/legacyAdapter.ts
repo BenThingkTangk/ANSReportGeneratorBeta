@@ -17,6 +17,11 @@
  */
 
 import type { AnsStudy } from "../../shared/ansStudy.js";
+import { parseBinaryHeader } from "./parseBinary.js";
+import {
+  parseVendorStoredAnalysis,
+  type VendorPhaseMetrics,
+} from "./vendorStored.js";
 
 /** Mirror of ParsedANSData defined inline in api/upload.ts. */
 export interface LegacyEcgQuality {
@@ -53,6 +58,8 @@ export interface LegacyParsedANSData {
   otherMedicationsSymptoms?: string;
   baselineSystolicBP?: number;
   baselineDiastolicBP?: number;
+  /** Exact six-phase PhysioPS analysis summary embedded in supported .ans files. */
+  vendorStoredPhases?: VendorPhaseMetrics[];
   ecgQuality?: LegacyEcgQuality;
   /**
    * Seconds past midnight of the earliest real time-of-day stamp found in the
@@ -192,6 +199,16 @@ function extractEctopicBeats(study: AnsStudy): number {
 
 export function ansStudyToLegacy(study: AnsStudy, buffer: Buffer): LegacyParsedANSData {
   const baselineBp = study.baseline.bp;
+  let vendorStoredPhases: VendorPhaseMetrics[] | undefined;
+  try {
+    const binary = parseBinaryHeader(buffer);
+    if (binary.sampling) {
+      vendorStoredPhases = parseVendorStoredAnalysis(buffer, binary.sampling).phases;
+    }
+  } catch {
+    // Older, truncated, and unknown-schema files continue through the explicit
+    // waveform-derived fallback. Missing stays missing.
+  }
 
   return {
     lastName: val(study.patient.lastName.value, ""),
@@ -220,6 +237,7 @@ export function ansStudyToLegacy(study: AnsStudy, buffer: Buffer): LegacyParsedA
     otherMedicationsSymptoms: flattenSymptoms(study) || undefined,
     baselineSystolicBP: baselineBp.sbp.value ?? undefined,
     baselineDiastolicBP: baselineBp.dbp.value ?? undefined,
+    vendorStoredPhases,
     ecgQuality: {
       snrDb: study.ecg.quality.snrDb,
       motionFraction: study.ecg.quality.motionFraction,

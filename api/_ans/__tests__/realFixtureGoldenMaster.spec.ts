@@ -16,11 +16,9 @@
  *      identity and study date the vendor recorded (Pare: E/I 1.22, Valsalva
  *      1.49, 30:15 1.33, ectopy 1 — asserted verbatim per the task).
  *   2. Parsing is deterministic across repeated runs on the same bytes.
- *   3. Waveform-derived spectral values (LFa/RFa/SB) are published ONLY as
- *      HumanOS estimates with `computed`/`estimated` provenance: they never
- *      carry vendor provenance, never unlock the clinical gate, and never come
- *      from a patient-fitted calibration constant. Cuff BP is not in the file at
- *      all and stays unavailable unless a paired vendor PDF supplies it.
+ *   3. The embedded PhysioPS A–F summary is read directly with `ans_stored`
+ *      provenance, while legacy/truncated files retain the explicitly labelled
+ *      HumanOS waveform-estimation fallback.
  *   4. ANTI-ORACLE: no per-patient hardcode. Renaming the patient does not
  *      change any measured value; the removed `isJillShah` fabrication is gone;
  *      and no fabricated demographic defaults (weight=150 / BMI) leak in.
@@ -30,6 +28,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseANSFile, generateColomboReport, clinicalSnapshot } from "../../upload.js";
+import { withoutStoredSummary } from "./helpers/storedSummary.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string) => path.join(__dirname, "fixtures", name);
@@ -59,9 +58,9 @@ describe("real de-identified fixtures — golden master", () => {
     expect(data.height).toBe("6 ft 2 in");
     // Full waveform is materialized (not truncated to a preview).
     expect(data.ecgData.length).toBeGreaterThan(200_000);
-    // Proprietary spectral + BP are NOT reproducible from the .ans — gated.
-    expect(report.spectralAvailable).toBe(false);
-    expect(report.bpAvailable).toBe(false);
+    expect(report.spectralAvailable).toBe(true);
+    expect(report.spectralSource).toBe("ans_stored");
+    expect(report.bpAvailable).toBe(true);
     // Procedure is a bare binary marker in this .ans (no real value); it must
     // be MISSING, never the stray "n" the non-greedy pattern used to capture.
     expect(data.procedureType).not.toBe("n");
@@ -82,8 +81,9 @@ describe("real de-identified fixtures — golden master", () => {
     expect(data.thirtyFifteenRatio).toBeCloseTo(1.4, 2);
     expect(data.ectopicBeats).toBe(1);
     expect(data.height).toBe("5 ft 6 in");
-    expect(report.spectralAvailable).toBe(false);
-    expect(report.bpAvailable).toBe(false);
+    expect(report.spectralAvailable).toBe(true);
+    expect(report.spectralSource).toBe("ans_stored");
+    expect(report.bpAvailable).toBe(true);
   });
 
   it("parsing the SAME bytes is deterministic (byte-identical golden output)", () => {
@@ -114,13 +114,10 @@ describe("real de-identified fixtures — golden master", () => {
     }
   });
 
-  it("wellness score is SUPPRESSED (not renormalized upward) when a domain is unavailable", () => {
-    // CONTRACT CHANGE — this test previously asserted 91.2 / 84.8. Those numbers
-    // were produced by renormalizing the composite over the AVAILABLE domains,
-    // so the absence of the sympathovagal domain (the one the vendor clinician
-    // flagged as abnormal on the Pare recording) RAISED the score. Missing data
-    // must never inflate a score, and a composite that cannot cover its domains
-    // must not be published at all.
+  it("wellness score remains suppressed by independent ECG-quality gates after spectral-domain recovery", () => {
+    // The embedded vendor summary now recovers the sympathovagal domain. That
+    // must not bypass the separate ECG-quality gate or invent the HRV-reserve
+    // component that still depends on usable waveform coverage.
     for (const fn of ["pare_deid.ans", "jill_deid.ans"]) {
       const report = reportFor(fixture(fn), fn).report;
       const bd = report.wellnessBreakdown;
@@ -129,16 +126,18 @@ describe("real de-identified fixtures — golden master", () => {
       expect(bd.rawTotal).toBeNull();
       expect(report.wellnessScore).toBeNull();
       expect(report.wellnessTier).toBeNull();
-      // Sympathovagal sub-score is explicitly unavailable (spectral-only) and
-      // carries ZERO effective weight that is NOT handed to anyone else.
-      expect(bd.sympathovagalBalance.available).toBe(false);
-      expect(bd.sympathovagalBalance.weight).toBe(0);
-      expect(bd.sympathovagalBalance.score).toBeNull();
-      // The available weights sum to LESS than 1 — no redistribution happened.
+      expect(bd.sympathovagalBalance.available).toBe(true);
+      expect(bd.sympathovagalBalance.weight).toBeGreaterThan(0);
+      expect(bd.sympathovagalBalance.score).not.toBeNull();
+      // The recovered spectral domain keeps its configured weight. Any domain
+      // still unavailable for this recording remains missing rather than being
+      // redistributed across the available domains.
       const sum =
         bd.baselineAutonomic.weight + bd.sympathovagalBalance.weight +
         bd.reflexIntegrity.weight + bd.orthostaticResponse.weight + bd.hrvReserve.weight;
-      expect(sum).toBeLessThan(0.999);
+      expect(sum + bd.scorability.unavailableWeight).toBeCloseTo(1, 6);
+      expect(bd.scorability.blockers.map((b) => b.code)).toContain("ECG_UNUSABLE");
+      expect(bd.scorability.blockers.map((b) => b.code)).not.toContain("ESSENTIAL_DOMAIN_MISSING");
       // Reflex integrity (Ewing ratios) is still genuinely measured.
       expect(bd.reflexIntegrity.available).toBe(true);
     }
@@ -146,29 +145,24 @@ describe("real de-identified fixtures — golden master", () => {
 });
 
 describe("anti-oracle — no per-patient hardcode, no fabricated proprietary data", () => {
-  it("waveform-derived spectral values are published ONLY as computed estimates, never as vendor data", () => {
+  it("stored spectral values are direct .ans data, never identity-keyed substitutions", () => {
     for (const fn of ["pare_deid.ans", "jill_deid.ans"]) {
       const { report } = reportFor(fixture(fn), fn);
-      // Without a paired vendor report the values are HumanOS estimates.
-      expect(report.spectralSource).toBe("humanos_estimated");
+      expect(report.spectralSource).toBe("ans_stored");
       for (const ph of report.phaseEvents) {
         for (const key of ["LFa", "RFa", "SB"] as const) {
           const prov = ph.provenance?.[key];
-          // NEVER vendor-sourced, whatever the value.
+          // Embedded .ans provenance is distinct from paired-PDF provenance.
           expect(prov?.method).not.toBe("vendor_reported");
           expect(prov?.method).not.toBe("derived_from_vendor");
           if (ph[key] === null) continue;
-          expect(prov?.method).toBe("computed");
-          expect(prov?.validation).toBe("estimated");
+          expect(prov?.method).toBe("ans_stored");
+          expect(prov?.validation).toBe("not_applicable");
           expect(Number.isFinite(ph[key] as number)).toBe(true);
         }
       }
-      // The CLINICAL surfaces stay closed: the balance gauge shows nothing.
-      expect(report.spectralAvailable).toBe(false);
-      expect(report.autonomicBalance.available).toBe(false);
-      expect(report.autonomicBalance.parasympathetic).toBeNull();
-      expect(report.autonomicBalance.sympathetic).toBeNull();
-      // But the raw measurable trends are preserved for the clinician view.
+      expect(report.spectralAvailable).toBe(true);
+      expect(report.autonomicBalance.available).toBe(true);
       expect(report.multiParameter?.lfaTrend.t.length ?? 0).toBeGreaterThan(0);
       expect(report.multiParameter?.rfaTrend.t.length ?? 0).toBeGreaterThan(0);
     }
@@ -240,15 +234,15 @@ describe("anti-oracle — no per-patient hardcode, no fabricated proprietary dat
   });
 });
 
-describe("vendor-parity contract — unresolved values are explicit, never invented", () => {
-  it("without a paired vendor PDF, proprietary spectral/BP are marked unavailable", () => {
+describe("vendor-parity contract — embedded values outrank estimates", () => {
+  it("reads proprietary spectral/BP directly from a modern .ans summary", () => {
     const { report } = reportFor(fixture("pare_deid.ans"), "pare_deid.ans");
-    expect(report.spectralAvailable).toBe(false);
-    expect(report.bpAvailable).toBe(false);
-    // The report must SAY not-assessed rather than render a number.
-    expect(report.autonomicBalance.interpretation.toLowerCase()).toMatch(
-      /not assessed|not available|spectral/,
-    );
+    expect(report.spectralAvailable).toBe(true);
+    expect(report.spectralSource).toBe("ans_stored");
+    expect(report.bpAvailable).toBe(true);
+    expect(report.phaseEvents[0].LFa).toBe(1.62);
+    expect(report.phaseEvents[0].RFa).toBe(0.63);
+    expect(report.phaseEvents[0].SB).toBe(2.59);
   });
 
   it("a paired vendor PDF unlocks ONLY the values it actually supplies", () => {
@@ -265,16 +259,15 @@ describe("vendor-parity contract — unresolved values are explicit, never inven
     expect(report.phaseEvents[0].SB).toBe(0.6);
     expect(report.autonomicBalance.available).toBe(true);
     expect(report.phaseEvents[0].provenance?.LFa.method).toBe("vendor_reported");
-    // Phases the vendor did NOT supply (B–F) are NOT given vendor status. They
-    // may carry a HumanOS estimate, but it must be tagged computed/estimated so
-    // no surface can read it as a vendor measurement of that phase.
+    // B–F remain the exact values embedded in the .ans; the baseline-only PDF
+    // override does not erase or relabel them.
     for (const i of [1, 2, 3, 4, 5]) {
       const prov = report.phaseEvents[i].provenance;
       expect(prov?.LFa.method).not.toBe("vendor_reported");
       expect(prov?.RFa.method).not.toBe("vendor_reported");
       if (report.phaseEvents[i].LFa !== null) {
-        expect(prov?.LFa.method).toBe("computed");
-        expect(prov?.LFa.validation).toBe("estimated");
+        expect(prov?.LFa.method).toBe("ans_stored");
+        expect(prov?.LFa.validation).toBe("not_applicable");
       }
     }
   });
@@ -308,7 +301,8 @@ describe("BLOCKER 1 regression — baseline-only vendor never fabricates B–F f
 
   for (const fn of ["jill_deid.ans", "pare_deid.ans"]) {
     it(`${fn}: baseline-only vendor unlocks A but never fabricates Valsalva/stand/AAD`, () => {
-      const { data } = reportFor(fixture(fn), fn);
+      const raw = readFileSync(fixture(fn));
+      const data = parseANSFile(withoutStoredSummary(raw), fn);
       const report = generateColomboReport(data, baselineOnlyVendor);
 
       expect(report.spectralAvailable).toBe(true); // baseline A is vendor-reported

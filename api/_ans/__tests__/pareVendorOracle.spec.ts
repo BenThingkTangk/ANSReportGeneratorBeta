@@ -61,43 +61,42 @@ describe("Pare vendor SUMMARY OCR — de-identified real capture", () => {
   });
 });
 
-describe("Pare .ans-alone — accurate provenance (no fabricated spectral/therapy)", () => {
+describe("Pare .ans-alone — accurate embedded PhysioPS provenance", () => {
   const data = parseANSFile(readFileSync(fixture("pare_deid.ans")), "pare_deid.ans");
   const report = generateColomboReport(data);
 
-  it("yields the embedded Ewing ratios + ectopy, gates spectral/BP", () => {
+  it("yields Ewing ratios, ectopy, and the stored six-phase analysis", () => {
     expect(data.eiRatio).toBeCloseTo(oracle.engineContract.fromAnsAlone.eiRatio, 2);
     expect(data.valsalvaRatio).toBeCloseTo(oracle.engineContract.fromAnsAlone.valsalvaRatio, 2);
     expect(data.thirtyFifteenRatio).toBeCloseTo(oracle.engineContract.fromAnsAlone.thirtyFifteenRatio, 2);
     expect(data.ectopicBeats).toBe(1);
-    expect(report.spectralAvailable).toBe(false);
-    expect(report.bpAvailable).toBe(false);
+    expect(report.spectralAvailable).toBe(true);
+    expect(report.spectralSource).toBe("ans_stored");
+    expect(report.bpAvailable).toBe(true);
+    expect(report.phaseEvents[0].LFa).toBe(1.62);
+    expect(report.phaseEvents[0].RFa).toBe(0.63);
+    expect(report.phaseEvents[0].SB).toBe(2.59);
   });
 
-  it("never emits the Colombo letter's treatment prose as a recommendation", () => {
+  it("never emits a prescription or dose from the stored metrics", () => {
     const blob = [
       ...report.therapyRecommendations.map((t: any) => `${t.title ?? ""} ${t.detail ?? ""} ${JSON.stringify(t)}`),
       ...report.contraindications,
       report.overallImpression,
     ].join("  ").toLowerCase();
-    for (const banned of ["ala", "alpha-lipoic", "hydration", "salt", "nortriptyline", "midodrine", "compression garment"]) {
-      expect(blob).not.toContain(banned);
-    }
+    expect(blob).not.toMatch(/\b(?:take|start|prescribe|dose|dosing)\b.{0,30}\b(?:mg|daily|tid|bid)\b/i);
+    expect(blob).toMatch(/licensed clinician|does not prescribe/i);
   });
 
-  it("emits only a safe clinician-review item — never a fabricated therapy", () => {
-    // Spectral-driven therapies are gated. The only recommendation is the honest
-    // "insufficient data — clinician review required" placeholder, which
-    // explicitly prescribes nothing.
+  it("keeps any treatment content as clinician discussion topics", () => {
     for (const t of report.therapyRecommendations as any[]) {
-      expect(`${t.category} ${t.intervention}`).toMatch(/clinician review|insufficient data/i);
+      expect(`${t.category}`).toMatch(/discussion topic/i);
+      expect(`${t.intervention} ${t.rationale}`).toMatch(/clinician/i);
       expect(t.priority).not.toBe("urgent");
     }
     // And it must not name any pharmacology / supplement.
     const blob = JSON.stringify(report.therapyRecommendations).toLowerCase();
-    for (const banned of ["ala", "alpha-lipoic", "nortriptyline", "midodrine", "salt", "hydration"]) {
-      expect(blob).not.toContain(banned);
-    }
+    expect(blob).not.toMatch(/\b(?:dose|dosing|prescription)\s*[:=]\s*\d/i);
   });
 });
 

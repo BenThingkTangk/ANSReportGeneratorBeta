@@ -24,6 +24,7 @@ export type EvidenceTier = "C" | "X" | "P";
 /** How a scalar reached the report. */
 export type MetricMethod =
   | "computed" // derived generically from the raw .ans arrays by our pipeline
+  | "ans_stored" // read verbatim from the PhysioPS analysis summary embedded in the .ans
   | "vendor_reported" // parsed verbatim from an ingested vendor report/PDF
   | "derived_from_vendor" // arithmetic on vendor-reported inputs (e.g. SB = LFa/RFa)
   | "measured" // directly measured device field (e.g. cuff BP entered at test)
@@ -181,6 +182,20 @@ export function vendorReportedProvenance(
   };
 }
 
+/** Build provenance for a metric stored verbatim in the PhysioPS .ans summary. */
+export function ansStoredProvenance(
+  key: MetricKey,
+  note = "Value read verbatim from the PhysioPS analysis summary embedded in the .ans file; not recomputed.",
+): MetricProvenance {
+  return {
+    method: "ans_stored",
+    tier: METRIC_TIERS[key],
+    validation: "not_applicable",
+    note,
+    citations: METRIC_CITATIONS[key],
+  };
+}
+
 /**
  * Build provenance for a value we DERIVED arithmetically from vendor-reported
  * inputs (e.g. SB = vendor LFa / vendor RFa when the vendor printed LFa and RFa
@@ -220,7 +235,12 @@ export function mayClassify(p: MetricProvenance): boolean {
  */
 export function mayInterpretClinically(p: MetricProvenance): boolean {
   if (p.method === "unavailable") return false;
-  if (p.method === "vendor_reported" || p.method === "derived_from_vendor" || p.method === "measured") return true;
+  if (
+    p.method === "ans_stored" ||
+    p.method === "vendor_reported" ||
+    p.method === "derived_from_vendor" ||
+    p.method === "measured"
+  ) return true;
   // method === "computed": consensus metrics OK; proprietary/contested only if
   // explicitly validated against a reference.
   if (p.tier === "C") return true;

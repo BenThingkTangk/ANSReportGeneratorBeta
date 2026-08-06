@@ -126,11 +126,12 @@ describe("Visual acceptance — Pare .ans-only report (render invariants)", () =
     cleanup();
   });
 
-  it("input state: identity + Ewing correct, spectral/BP gated", () => {
+  it("input state: identity, Ewing, and stored PhysioPS summary are available", () => {
     expect(report.patientData.testDate).toBe("7/11/2024");
     expect(report.ratios.eiRatio.value).toBeCloseTo(1.22, 2);
-    expect(report.spectralAvailable).toBe(false);
-    expect(report.bpAvailable).toBe(false);
+    expect(report.spectralAvailable).toBe(true);
+    expect(report.spectralSource).toBe("ans_stored");
+    expect(report.bpAvailable).toBe(true);
   });
 
   it("upload screen exposes an accessible, automatable .ans file input", async () => {

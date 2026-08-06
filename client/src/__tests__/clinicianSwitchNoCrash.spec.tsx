@@ -25,6 +25,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { withoutStoredSummary } from "../../../api/_ans/__tests__/helpers/storedSummary.ts";
 
 // --- Stub WebGL / charting so jsdom can render the tree --------------------
 vi.mock("@react-three/fiber", async () => {
@@ -92,8 +93,11 @@ const REAL_JILL =
 
 function pickFile(): { bytes: Buffer; name: string } {
   if (existsSync(REAL_JILL))
-    return { bytes: readFileSync(REAL_JILL), name: "Shah-Jill.ans" };
-  return { bytes: readFileSync(FIXTURE), name: "deidentified_waveform.ans" };
+    return { bytes: withoutStoredSummary(readFileSync(REAL_JILL)), name: "Shah-Jill.ans" };
+  return {
+    bytes: withoutStoredSummary(readFileSync(FIXTURE)),
+    name: "deidentified_waveform.ans",
+  };
 }
 
 async function realUploadReport(): Promise<any> {

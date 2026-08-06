@@ -29,6 +29,7 @@ import {
   COMPARISON_DISCLOSURE,
   type VendorPhaseRow,
 } from "../spectralVendorComparison.js";
+import { withoutStoredSummary } from "./helpers/storedSummary.js";
 
 /**
  * Strip // and block comments so the anti-hardcode assertions below inspect
@@ -58,7 +59,9 @@ function vendorGrid(): Record<string, VendorPhaseRow> {
 let cached: ReturnType<typeof generateColomboReport> | null = null;
 function jill() {
   if (!cached) {
-    const buf = readFileSync(path.join(FIXTURES, "jill_deid.ans"));
+    // This suite deliberately exercises the waveform-derived fallback. The
+    // normal runtime path now reads the exact embedded PhysioPS summary.
+    const buf = withoutStoredSummary(readFileSync(path.join(FIXTURES, "jill_deid.ans")));
     cached = generateColomboReport(parseANSFile(buf, "jill_deid.ans"));
   }
   return cached;

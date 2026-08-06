@@ -37,6 +37,8 @@ function classLabel(c: Cls): string {
 /** Short human label + color for a metric-provenance method. */
 function provenanceBadge(method: string | undefined): { label: string; color: string } | null {
   switch (method) {
+    case "ans_stored":
+      return { label: "Stored in .ans", color: "hsl(160 60% 55%)" };
     case "vendor_reported":
       return { label: "Vendor-reported", color: "hsl(160 60% 55%)" };
     case "derived_from_vendor":

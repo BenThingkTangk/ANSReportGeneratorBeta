@@ -19,6 +19,9 @@ export type ExtractionSource =
   | "binary_labview_i64" // LabVIEW int64 seconds-since-1904 timestamp
   | "binary_double"      // raw double-precision number in the binary header
   | "binary_int16"       // signed int16 sample stream (ECG)
+  | "binary_float32"     // stored big-endian float32 analysis array
+  | "binary_float64"     // stored big-endian float64 timestamp/analysis array
+  | "binary_uint8"       // stored unsigned byte analysis/marker array
   | "ascii_section"      // ASCII text inside a recognized section
   | "ascii_global_regex" // ASCII text found by global regex with weak section
   | "filename"           // fallback parsed from the filename itself
@@ -376,4 +379,4 @@ export function provField<T>(
 }
 
 /** Constant — bumped whenever the parser changes deterministically. */
-export const PARSER_VERSION = "ans-parser/1.1.0";
+export const PARSER_VERSION = "ans-parser/1.2.0";

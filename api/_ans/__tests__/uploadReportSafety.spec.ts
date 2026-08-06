@@ -29,6 +29,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import handler from "../../upload.ts";
+import { withoutStoredSummary } from "./helpers/storedSummary.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(__dirname, "fixtures", "deidentified_waveform.ans");
@@ -93,13 +94,13 @@ function invokeHandler(fileBytes: Buffer, fileName: string): Promise<{
 function pickDataFile(): { bytes: Buffer; name: string; isReal: boolean } {
   if (existsSync(REAL_JILL)) {
     return {
-      bytes: readFileSync(REAL_JILL),
+      bytes: withoutStoredSummary(readFileSync(REAL_JILL)),
       name: "Shah-Jill-Fri-Sep-26-2025-2.ans",
       isReal: true,
     };
   }
   return {
-    bytes: readFileSync(FIXTURE),
+    bytes: withoutStoredSummary(readFileSync(FIXTURE)),
     name: "deidentified_waveform.ans",
     isReal: false,
   };
