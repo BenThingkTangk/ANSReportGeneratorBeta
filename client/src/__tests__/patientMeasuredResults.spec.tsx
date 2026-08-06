@@ -115,4 +115,17 @@ describe("Patient report — measured Ewing ratio cards + honest provenance", ()
     expect(text).not.toContain("not enough heart-rhythm");
     expect(text).not.toContain("not medical advice");
   });
+
+  it("distinguishes an attached vendor report whose spectral values were not recovered", async () => {
+    const { render } = await import("@testing-library/react");
+    const { MeasuredResultsCards } = await import("../components/patient/MeasuredResultsCards");
+    const { container } = render(
+      <MeasuredResultsCards report={report} vendorReportAttached />,
+    );
+    const text = container.textContent || "";
+
+    expect(text).toMatch(/attached vendor report was processed/i);
+    expect(text).toMatch(/readable LFa\/RFa values were not recovered/i);
+    expect(text).not.toMatch(/Supplying the paired vendor|unlocks? the full branch-balance/i);
+  });
 });

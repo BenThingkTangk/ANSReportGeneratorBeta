@@ -4,6 +4,7 @@ import { Activity, Heart, AlertCircle, ShieldCheck } from "lucide-react";
 
 interface DiagnosisExplainerProps {
   report: ANSReport;
+  vendorReportAttached?: boolean;
 }
 
 // Patient-friendly explainers per indication code
@@ -190,7 +191,10 @@ const SEVERITY_STYLES: Record<string, { color: string; bg: string; ring: string;
   high:     { color: "hsl(0 75% 62%)",    bg: "hsl(0 75% 55% / 0.1)",   ring: "hsl(0 75% 55% / 0.3)",   label: "Severe" },
 };
 
-export function DiagnosisExplainer({ report }: DiagnosisExplainerProps) {
+export function DiagnosisExplainer({
+  report,
+  vendorReportAttached = false,
+}: DiagnosisExplainerProps) {
   const indications: Indication[] = (report.indications ?? []);
   const notScorable =
     report.wellnessScore == null ||
@@ -218,7 +222,9 @@ export function DiagnosisExplainer({ report }: DiagnosisExplainerProps) {
         <p className="text-xs text-muted-foreground max-w-sm mx-auto">
           {notScorable
             ? "Some traceable measurements may be shown as observations, but the study did not meet the requirements for an overall autonomic interpretation. Missing or unusable domains remain “Not assessed,” never normal."
-            : "Your ECG/time-domain metrics and cardiovagal (Ewing) reflex ratios were measured and fell within normal limits. The sympathovagal branch-balance (vendor spectral aggregates) is not contained in the raw .ans export and is shown separately as “Not assessed”; supplying the paired vendor PDF completes that view."}
+            : vendorReportAttached
+              ? "Your ECG/time-domain metrics and cardiovagal (Ewing) reflex ratios were measured and fell within normal limits. Branch balance remains “Not assessed” because readable LFa/RFa values were not recovered from the attached vendor report; your clinician can verify the signed report."
+              : "Your ECG/time-domain metrics and cardiovagal (Ewing) reflex ratios were measured and fell within normal limits. Branch balance is shown separately as “Not assessed” because the raw .ans export does not contain the vendor spectral aggregates; a paired vendor report with readable LFa/RFa values is required."}
         </p>
       </motion.div>
     );

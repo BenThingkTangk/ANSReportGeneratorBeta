@@ -35,7 +35,13 @@ function severityStyle(sev: "Abnormal" | "Warning" | "Normal"): { text: string; 
   }
 }
 
-export function MeasuredResultsCards({ report }: { report: ANSReport }) {
+export function MeasuredResultsCards({
+  report,
+  vendorReportAttached = false,
+}: {
+  report: ANSReport;
+  vendorReportAttached?: boolean;
+}) {
   const ewing = ewingRatioReadings(report);
   if (ewing.length === 0) return null;
 
@@ -100,8 +106,10 @@ export function MeasuredResultsCards({ report }: { report: ANSReport }) {
             The sympathetic-vs-parasympathetic <strong>branch-balance</strong> split
             (the vendor's proprietary LFa/RFa spectral aggregates) is <strong>not
             contained in the raw .ans export</strong>, so it is shown as
-            “Not assessed.” Supplying the paired vendor PDF adds those vendor-reported
-            values and unlocks the full branch-balance interpretation.
+            “Not assessed.”{" "}
+            {vendorReportAttached
+              ? "The attached vendor report was processed, but readable LFa/RFa values were not recovered; your clinician can verify them against the signed report."
+              : "A paired vendor report with readable LFa/RFa values is required to populate the branch-balance interpretation."}
           </span>
         </div>
       )}

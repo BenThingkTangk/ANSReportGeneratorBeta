@@ -80,6 +80,9 @@ describe("vendor findings threaded into summaries (BLOCKER B)", () => {
       expect(withVendor).toMatch(/reviewed with your clinician|review/i);
       // Honest about the raw recording's limits.
       expect(withVendor).toMatch(/blood-pressure|spectral/i);
+      expect(withVendor).toMatch(/attached vendor report was processed/i);
+      expect(withVendor).toMatch(/readable LFa\/RFa values were not recovered/i);
+      expect(withVendor).not.toMatch(/supply the paired vendor|unless the paired vendor/i);
     });
 
     it("does not turn an incomplete tri-state screen into a negative finding", () => {
@@ -128,6 +131,9 @@ describe("vendor findings threaded into summaries (BLOCKER B)", () => {
   describe("clinician synopsis", () => {
     it("appends a verbatim vendor-reported block, never 'nothing flagged'", () => {
       const withVendor = buildClinicianSynopsis(cleanReport(), vendor);
+      expect(withVendor).toMatch(/attached vendor report was processed/i);
+      expect(withVendor).toMatch(/readable LFa\/RFa\/SB values were not recovered/i);
+      expect(withVendor).not.toMatch(/supply the paired vendor/i);
       expect(withVendor).toMatch(/Vendor-reported findings/i);
       expect(withVendor).toMatch(/High sympathetic response to stand/i);
       expect(withVendor).toMatch(/NOT deterministic engine measurements/i);

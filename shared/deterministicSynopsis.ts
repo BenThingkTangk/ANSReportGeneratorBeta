@@ -341,9 +341,12 @@ export function buildPatientSynopsis(report: Partial<ANSReport>, vendor?: Vendor
       }.`,
     );
   } else {
+    const vendorAttached = vendor !== undefined;
     sentences.push(
       ecgUsable
-        ? `${name}, this upload contains measured ECG results and cardiovagal (Ewing) reflex ratios, shown below. The sympathetic-vs-parasympathetic "branch balance" split comes from the device vendor's proprietary spectral analysis (LFa/RFa), which is not contained in the raw .ans export. It shows as "Not assessed" unless the paired vendor PDF values are supplied.`
+        ? vendorAttached
+          ? `${name}, this upload contains measured ECG results and cardiovagal (Ewing) reflex ratios, shown below. The attached vendor report was processed, but readable LFa/RFa values were not recovered, so sympathetic-vs-parasympathetic branch balance remains "Not assessed." Your clinician can verify those values against the signed report.`
+          : `${name}, this upload contains measured ECG results and cardiovagal (Ewing) reflex ratios, shown below. The sympathetic-vs-parasympathetic "branch balance" split comes from the device vendor's proprietary spectral analysis (LFa/RFa), which is not contained in the raw .ans export, so it remains "Not assessed." A paired vendor report with readable LFa/RFa values is required to populate it.`
         : `${name}, a composite wellness score is not available for this study because the ECG quality gate did not pass and the vendor's proprietary spectral analysis values for sympathetic-vs-parasympathetic balance (LFa/RFa) are not contained in the raw .ans export. Measured values that remain traceable to the file are shown below as observations, not as an overall autonomic assessment.`,
     );
   }
@@ -440,8 +443,11 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>, vendor?: Vend
   // pipeline emits LFa/RFa/HRV = 0; surface that explicitly so zeroed spectral
   // metrics are never read as real findings.
   if (!balanceAssessed) {
+    const vendorAttached = vendor !== undefined;
     parts.push(
-      "Sympathovagal branch-balance not assessed — the proprietary spectral aggregates (LFa/RFa/SB) are not contained in the raw .ans export; supply the paired vendor PDF to populate them. ECG/time-domain metrics and Ewing ratios below are measured.",
+      vendorAttached
+        ? "Sympathovagal branch-balance not assessed — the attached vendor report was processed, but readable LFa/RFa/SB values were not recovered. Verify against the signed vendor report. ECG/time-domain metrics and Ewing ratios below are measured."
+        : "Sympathovagal branch-balance not assessed — the proprietary spectral aggregates (LFa/RFa/SB) are not contained in the raw .ans export. A paired vendor report with readable values is required to populate them. ECG/time-domain metrics and Ewing ratios below are measured.",
     );
   }
 

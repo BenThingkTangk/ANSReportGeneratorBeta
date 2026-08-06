@@ -23,6 +23,8 @@ interface AutonomicBalanceGaugeProps {
   balanceLabel?: string;       // tier label
   /** When false, spectral split is not available — render "Not assessed". */
   available?: boolean;
+  /** Distinguishes an absent vendor report from an attached report whose values were unreadable. */
+  vendorReportAttached?: boolean;
   /**
    * AUTHORIZED PhysioPS OUTPUT PROTOCOL. Defaults to "patient" (fail-safe).
    *
@@ -60,6 +62,7 @@ export function AutonomicBalanceGauge({
   lfHfRatio,
   balanceLabel,
   available = true,
+  vendorReportAttached = false,
   audience = "patient",
 }: AutonomicBalanceGaugeProps) {
   // Instrument-derived HRV readouts are clinician-only (output protocol).
@@ -420,7 +423,9 @@ export function AutonomicBalanceGauge({
               Not assessed
             </div>
             <div className="mt-1 text-muted-foreground" style={{ fontSize: fs(10, 9) }}>
-              requires the vendor spectral report
+              {vendorReportAttached
+                ? "attached report: LFa/RFa not read"
+                : "requires readable vendor LFa/RFa values"}
             </div>
           </div>
         ) : (

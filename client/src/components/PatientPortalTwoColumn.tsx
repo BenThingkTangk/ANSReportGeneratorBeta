@@ -35,6 +35,7 @@ interface PatientPortalProps {
 }
 
 export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPortalProps) {
+  const vendorReportAttached = !!vendorExtraction;
   const vendorFindings = vendorExtraction?.narrative
     ? { findings: vendorExtraction.narrative.findings, printedNumbers: vendorExtraction.narrative.printedNumbers }
     : undefined;
@@ -219,6 +220,7 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
                 lfHfRatio={lfHf}
                 balanceLabel={spectralAvailable ? (tier ?? "Not scorable") : "Not assessed"}
                 available={spectralAvailable}
+                vendorReportAttached={vendorReportAttached}
                 // AUTHORIZED PhysioPS OUTPUT PROTOCOL: this is the PATIENT
                 // portal, so the gauge renders P&S readouts only (sympathetic %,
                 // parasympathetic %, sympathovagal balance LFa/RFa). rmsSD and
@@ -240,8 +242,10 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
                   The sympathetic-vs-parasympathetic branch balance comes from the vendor's
                   proprietary spectral aggregates (LFa/RFa), which are not contained in the raw
                   .ans export — so it shows as “Not assessed.” Your measured ECG results and
-                  cardiovagal (Ewing) reflex ratios are shown below. Supplying the paired vendor
-                  PDF unlocks the branch-balance split.
+                  cardiovagal (Ewing) reflex ratios are shown below.{" "}
+                  {vendorReportAttached
+                    ? "The attached vendor report was processed, but readable LFa/RFa values were not recovered; your clinician can verify them against the signed report."
+                    : "A paired vendor report with readable LFa/RFa values is required to populate the branch-balance split."}
                 </p>
               )}
             </div>
@@ -275,10 +279,10 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
       </motion.div>
 
       {/* Measured cardiovagal (Ewing) ratios — always-measured ECG results */}
-      <MeasuredResultsCards report={report} />
+      <MeasuredResultsCards report={report} vendorReportAttached={vendorReportAttached} />
 
       {/* What we found — diagnosis cards */}
-      <DiagnosisExplainer report={report} />
+      <DiagnosisExplainer report={report} vendorReportAttached={vendorReportAttached} />
 
       {/* Body heatmap */}
       <motion.div

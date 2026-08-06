@@ -139,6 +139,8 @@ describe("PatientPortalTwoColumn — vendor findings survive in the rendered cop
     expect(text).toMatch(/sympathetic|pre-syncope|light-headed/i);
     expect(text).toMatch(/blood-pressure|spectral/i); // honest about .ans limits
     expect(text).toMatch(/clinician|review/i);
+    expect(text).toMatch(/attached vendor report was processed|attached report: LFa\/RFa not read/i);
+    expect(text).not.toMatch(/Supplying the paired vendor|supply the paired vendor|unlocks? the branch-balance|completes that view/i);
 
     // Path Forward empty-state uses the vendor-aware copy, not "nothing flagged".
     const treatmentsEmpty = screen.getByTestId("treatments-empty");
