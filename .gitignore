@@ -25,3 +25,7 @@ api/parse.ts.full
 
 # dev-only scratch probes (not part of the build)
 scratch/
+
+# Local vendor-parity output and private source staging
+eval/vendor-parity/runs/
+eval/vendor-parity/local/

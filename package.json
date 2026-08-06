@@ -25,6 +25,9 @@
     "smoke:coldstart": "node scripts/coldstart-smoke.mjs",
     "qa:visual": "node qa/visual-acceptance.mjs",
     "qa:vendor-multifile": "node qa/vendor-multifile-e2e.mjs",
+    "parity:vendor": "tsx eval/vendor-parity/runVendorParity.ts",
+    "parity:vendor:check": "tsc --noEmit -p eval/vendor-parity/tsconfig.json",
+    "parity:vendor:strict": "tsx eval/vendor-parity/runVendorParity.ts --require-parity",
     "test:client": "vitest run --config vitest.client.config.ts"
   },
   "dependencies": {
