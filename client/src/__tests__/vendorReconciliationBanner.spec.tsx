@@ -62,6 +62,23 @@ describe("VendorReconciliationBanner", () => {
     expect(container.textContent).toContain("No vendor PDF attached");
   });
 
+  it("renders the server's explicit no-vendor state as no vendor, not a mismatch", () => {
+    const { container } = render(
+      <VendorReconciliationBanner
+        report={baseReport({
+          vendorReconciliation: {
+            status: "no_vendor_pdf",
+            reason: "No vendor PDF was supplied with this upload.",
+          },
+        })}
+      />,
+    );
+    expect(container.querySelector('[data-vendor-status="no_vendor_pdf"]')).not.toBeNull();
+    expect(container.querySelector('[data-vendor-status="mismatch"]')).toBeNull();
+    expect(container.textContent).toContain("No vendor PDF attached");
+    expect(container.textContent).not.toMatch(/identity did not match/i);
+  });
+
   it("distinguishes attached-but-unreadable from no vendor PDF, with a plain count", () => {
     const { container } = render(
       <VendorReconciliationBanner

@@ -41,6 +41,7 @@ import { PATTERN_KEYS, mayClaimNoAbnormalPatterns } from "../../../shared/clinic
 import { findBannedHrvKeys, findBannedHrvTerms } from "../../../shared/physiopsTerminology.js";
 import { ratioReferenceLabel, ratioBandForAge } from "../../../shared/colomboNorms.js";
 import { detectVendorConflicts, extractRetestMonths } from "../../../shared/vendorConflicts.js";
+import { buildClinicianSynopsis } from "../../../shared/deterministicSynopsis.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PARE = path.join(__dirname, "fixtures", "pare_deid.ans");
@@ -161,6 +162,9 @@ describe("Alex Pare — score and tier are blocked, not renormalized upward", ()
     expect(report.followUp.retestInterval).toBe("Clinician-directed");
     expect(report.followUp.rationale).toMatch(/cannot be determined from an unscorable study/i);
     expect(report.followUp.rationale).toMatch(/treating clinician/i);
+    const synopsis = buildClinicianSynopsis(report as any);
+    expect(synopsis).toMatch(/discuss retest timing with the treating clinician/i);
+    expect(synopsis).not.toMatch(/re-test in clinician-directed/i);
   });
 
   it("never outputs 91 or the word Optimal anywhere", () => {

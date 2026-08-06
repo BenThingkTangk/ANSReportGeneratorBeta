@@ -518,8 +518,13 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>, vendor?: Vend
 
   // 7. Next steps.
   const nextSteps: string[] = [];
-  if (report.followUp?.retestInterval)
-    nextSteps.push(`re-test in ${report.followUp.retestInterval}`);
+  if (report.followUp?.retestInterval) {
+    nextSteps.push(
+      report.followUp.retestInterval.toLowerCase() === "clinician-directed"
+        ? "discuss retest timing with the treating clinician"
+        : `re-test in ${report.followUp.retestInterval}`,
+    );
+  }
   if (Array.isArray(report.therapyRecommendations)) {
     const primary = report.therapyRecommendations.find(
       (t) => t?.priority === "primary",

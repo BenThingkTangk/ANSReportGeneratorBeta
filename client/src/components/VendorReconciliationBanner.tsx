@@ -24,7 +24,7 @@ export function VendorReconciliationBanner({ report }: { report: ANSReport }) {
   // No vendor PDF at all — state this explicitly rather than rendering nothing,
   // so a clinician can tell "no vendor document" apart from "one was attached
   // but unreadable".
-  if (!recon && warnings.length === 0) {
+  if ((!recon && warnings.length === 0) || recon?.status === "no_vendor_pdf") {
     return (
       <div
         className="flex items-start gap-2.5 rounded-xl border px-4 py-2.5"
