@@ -63,4 +63,19 @@ describe("patient language for an unscorable study", () => {
     expect(text).not.toMatch(/No signal detected/i);
     cleanup();
   });
+
+  it("does not imply that an unscorable study cleared lifestyle interventions", async () => {
+    const { render, cleanup } = await import("@testing-library/react");
+    const { TreatmentsPanel } = await import("../components/patient/TreatmentsPanel");
+    const { container } = render(
+      <TreatmentsPanel recommendations={[]} notScorable />,
+    );
+
+    const text = container.textContent ?? "";
+    expect(text).toMatch(/No automated intervention recommendation/i);
+    expect(text).toMatch(/incomplete study/i);
+    expect(text).toMatch(/clinician/i);
+    expect(text).not.toMatch(/No specific lifestyle interventions flagged/i);
+    cleanup();
+  });
 });

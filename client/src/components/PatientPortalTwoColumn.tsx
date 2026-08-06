@@ -305,6 +305,7 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
           <TreatmentsPanel
             recommendations={report.therapyRecommendations}
             vendorHasNotableFindings={vendorHasNotableFindings}
+            notScorable={notScorable}
           />
           <NextTestCard followUp={report.followUp} />
         </div>

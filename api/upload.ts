@@ -2836,6 +2836,24 @@ export function generateColomboReport(
   // explicit and propagates to wellnessScore / wellnessTier as null.
   const score = breakdown.final == null ? null : Math.round(breakdown.final);
   const tier = tierFromScore(score);
+  if (breakdown.scorability.scorable === false) {
+    const hasSupportedDiscussionTopic = therapies.some(
+      (recommendation) => recommendation.category === "Discussion topic",
+    );
+    if (!hasSupportedDiscussionTopic) {
+      therapies.splice(0, therapies.length, {
+        category: "Monitoring",
+        intervention: "Insufficient data for automated intervention recommendation — clinician review required",
+        rationale:
+          "The study is not scorable because essential inputs are missing or unusable. Review the measurable observations, missing domains, acquisition quality, and any attached vendor findings with the treating clinician before deciding care or retest timing. " +
+          CLINICIAN_ONLY,
+        priority: "optional",
+      });
+    }
+    retestInterval = "Clinician-directed";
+    followUpRationale =
+      "Retest timing cannot be determined from an unscorable study. The treating clinician should choose whether and when to repeat testing after reviewing acquisition quality, symptoms, history, and any attached vendor report.";
+  }
 
   let riskLevel = spectralAvailable ? "Normal" : "Not assessed — spectral/BP data unavailable";
   if (advancedAutonomicDysfunction) riskLevel = "High — Advanced Autonomic Dysfunction";

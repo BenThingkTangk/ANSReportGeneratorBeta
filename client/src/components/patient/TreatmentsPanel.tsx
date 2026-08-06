@@ -4,12 +4,15 @@ import { Activity } from "lucide-react";
 
 interface TreatmentsPanelProps {
   recommendations: TherapyRecommendation[];
+  /** True when the composite could not be scored. Prevents an empty treatment
+   * list from being mistaken for a normal or reassuring study. */
+  notScorable?: boolean;
   /** True when an attached vendor report flagged notable findings. Changes the
    *  empty-state copy so we don't imply "nothing to do" on incomplete evidence. */
   vendorHasNotableFindings?: boolean;
 }
 
-export function TreatmentsPanel({ recommendations, vendorHasNotableFindings }: TreatmentsPanelProps) {
+export function TreatmentsPanel({ recommendations, vendorHasNotableFindings, notScorable }: TreatmentsPanelProps) {
   const treatments = recommendations.filter(r =>
     r.category === "Lifestyle" || r.category === "Exercise" || r.category === "Pharmacological"
   );
@@ -33,7 +36,9 @@ export function TreatmentsPanel({ recommendations, vendorHasNotableFindings }: T
         <p className="text-sm text-muted-foreground" data-testid="treatments-empty">
           {vendorHasNotableFindings
             ? "No automated intervention recommendation; review vendor findings with clinician."
-            : "No specific lifestyle interventions flagged."}
+            : notScorable
+              ? "No automated intervention recommendation; review the incomplete study with your clinician."
+              : "No specific lifestyle interventions flagged."}
         </p>
       ) : (
         <div className="space-y-4">

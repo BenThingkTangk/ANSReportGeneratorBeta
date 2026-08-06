@@ -254,7 +254,13 @@ export function PatientPortal({ report }: PatientPortalProps) {
         </h2>
         <div className="space-y-4">
           <SupplementsPanel recommendations={report.therapyRecommendations} />
-          <TreatmentsPanel recommendations={report.therapyRecommendations} />
+          <TreatmentsPanel
+            recommendations={report.therapyRecommendations}
+            notScorable={
+              report.wellnessScore == null ||
+              report.wellnessBreakdown?.scorability?.scorable === false
+            }
+          />
           <NextTestCard followUp={report.followUp} />
         </div>
       </motion.div>

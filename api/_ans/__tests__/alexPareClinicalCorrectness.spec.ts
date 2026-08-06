@@ -156,6 +156,13 @@ describe("Alex Pare — score and tier are blocked, not renormalized upward", ()
     expect(report.wellnessBreakdown.ageAdjusted).toBeNull();
   });
 
+  it("leaves retest timing to the clinician when the study is unscorable", () => {
+    const { report } = alex();
+    expect(report.followUp.retestInterval).toBe("Clinician-directed");
+    expect(report.followUp.rationale).toMatch(/cannot be determined from an unscorable study/i);
+    expect(report.followUp.rationale).toMatch(/treating clinician/i);
+  });
+
   it("never outputs 91 or the word Optimal anywhere", () => {
     const { report } = alex();
     expect(report.wellnessScore).not.toBe(91);
