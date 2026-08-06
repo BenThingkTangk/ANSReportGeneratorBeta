@@ -1,4 +1,5 @@
 import type { ANSReport } from "@shared/schema";
+import { spectralMode } from "@/lib/spectralProvenance";
 
 /**
  * Vendor-PDF reconciliation banner.
@@ -20,6 +21,7 @@ import type { ANSReport } from "@shared/schema";
 export function VendorReconciliationBanner({ report }: { report: ANSReport }) {
   const recon = report.vendorReconciliation;
   const warnings = report.vendorReconciliationWarnings ?? [];
+  const mode = spectralMode(report);
 
   // No vendor PDF at all — state this explicitly rather than rendering nothing,
   // so a clinician can tell "no vendor document" apart from "one was attached
@@ -36,9 +38,9 @@ export function VendorReconciliationBanner({ report }: { report: ANSReport }) {
         <div className="min-w-0">
           <div className="text-[12px] font-semibold text-foreground/80">No vendor PDF attached</div>
           <p className="text-[11px] text-muted-foreground leading-relaxed">
-            Nothing was compared against a signed vendor report. The proprietary spectral
-            aggregates (LFa/RFa/SB) and cuff blood pressure are not reproducible from the .ans
-            waveform, so they remain not assessed.
+            {mode === "estimated"
+              ? "Nothing was compared against a signed vendor report. HumanOS waveform estimates of LFa, RFa and SB are available below for visual trend review and are labeled as estimates. They are not PhysioPS-validated, are not interpreted against Colombo norms, and do not affect scoring. Cuff blood pressure remains not assessed."
+              : "Nothing was compared against a signed vendor report. Vendor-equivalent LFa, RFa and SB values and cuff blood pressure are unavailable, so those clinical domains remain not assessed."}
           </p>
         </div>
       </div>

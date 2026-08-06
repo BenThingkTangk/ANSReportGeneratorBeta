@@ -62,6 +62,31 @@ describe("VendorReconciliationBanner", () => {
     expect(container.textContent).toContain("No vendor PDF attached");
   });
 
+  it("describes waveform estimates without claiming they are unavailable", () => {
+    const { container } = render(
+      <VendorReconciliationBanner
+        report={baseReport({
+          spectralAvailable: false,
+          spectralSource: "humanos_estimated",
+          phaseEvents: [
+            {
+              phase: "Baseline-A",
+              LFa: 3.8,
+              RFa: 8.57,
+              SB: 0.44,
+              provenance: {
+                LFa: { method: "computed", validation: "estimated" },
+              },
+            } as any,
+          ],
+        })}
+      />,
+    );
+    expect(container.textContent).toContain("HumanOS waveform estimates");
+    expect(container.textContent).toContain("not PhysioPS-validated");
+    expect(container.textContent).not.toMatch(/not reproducible/i);
+  });
+
   it("renders the server's explicit no-vendor state as no vendor, not a mismatch", () => {
     const { container } = render(
       <VendorReconciliationBanner

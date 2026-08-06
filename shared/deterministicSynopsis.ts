@@ -437,6 +437,16 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>, vendor?: Vend
   const stand = findPhase(report, "Stand-F");
   const patterns = activePatterns(report).clinician;
   const balanceAssessed = hasAutonomicBalance(report);
+  const spectralEstimated =
+    report.spectralSource === "humanos_estimated" &&
+    (report.phaseEvents ?? []).some(
+      (phase) =>
+        phase.provenance?.LFa?.method === "computed" &&
+        phase.provenance?.LFa?.validation === "estimated" &&
+        [phase.LFa, phase.RFa, phase.SB, phase.FRF].some(
+          (value) => typeof value === "number" && Number.isFinite(value),
+        ),
+    );
   const parts: string[] = [];
 
   // 0. Data-sufficiency gate. When the upload lacked usable beat-to-beat data the
@@ -447,7 +457,9 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>, vendor?: Vend
     parts.push(
       vendorAttached
         ? "Sympathovagal branch-balance not assessed — the attached vendor report was processed, but readable LFa/RFa/SB values were not recovered. Verify against the signed vendor report. ECG/time-domain metrics and Ewing ratios below are measured."
-        : "Sympathovagal branch-balance not assessed — the proprietary spectral aggregates (LFa/RFa/SB) are not contained in the raw .ans export. A paired vendor report with readable values is required to populate them. ECG/time-domain metrics and Ewing ratios below are measured.",
+        : spectralEstimated
+          ? "Vendor-equivalent sympathovagal branch balance is not assessed. HumanOS waveform estimates of LFa, RFa and SB are displayed for visual trend review, explicitly labeled as estimates, and are not PhysioPS-validated or interpreted against Colombo norms. ECG/time-domain metrics and Ewing ratios below are measured."
+          : "Vendor-equivalent sympathovagal branch balance is not assessed because no usable vendor spectral values were supplied. ECG/time-domain metrics and Ewing ratios below are measured.",
     );
   }
 
@@ -459,9 +471,15 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>, vendor?: Vend
       num(baseline.SBP) !== null && num(baseline.DBP) !== null
         ? `BP ${fmt(num(baseline.SBP), 0)}/${fmt(num(baseline.DBP), 0)} mmHg`
         : null,
-      pos(baseline.LFa) !== null ? `LFa ${fmt(baseline.LFa, 2)}` : null,
-      pos(baseline.RFa) !== null ? `RFa ${fmt(baseline.RFa, 2)}` : null,
-      pos(baseline.SB) !== null ? `SB ${fmt(baseline.SB, 2)}` : null,
+      pos(baseline.LFa) !== null
+        ? `LFa ${fmt(baseline.LFa, 2)}${spectralEstimated ? " (HumanOS est.)" : ""}`
+        : null,
+      pos(baseline.RFa) !== null
+        ? `RFa ${fmt(baseline.RFa, 2)}${spectralEstimated ? " (HumanOS est.)" : ""}`
+        : null,
+      pos(baseline.SB) !== null
+        ? `SB ${fmt(baseline.SB, 2)}${spectralEstimated ? " (HumanOS est.)" : ""}`
+        : null,
     ].filter(Boolean);
     if (bits.length > 0)
       parts.push(`Resting baseline: ${bits.join(", ")}.`);
@@ -482,7 +500,9 @@ export function buildClinicianSynopsis(report: Partial<ANSReport>, vendor?: Vend
       const d = Math.round(stand.SBP! - baseline.SBP!);
       bits.push(`ΔSBP ${d >= 0 ? "+" : ""}${d} mmHg`);
     }
-    if (pos(stand.SB) !== null) bits.push(`stand SB ${fmt(stand.SB, 2)}`);
+    if (pos(stand.SB) !== null) {
+      bits.push(`stand SB ${fmt(stand.SB, 2)}${spectralEstimated ? " (HumanOS est.)" : ""}`);
+    }
     if (bits.length > 0) parts.push(`Orthostatic (Stand-F): ${bits.join(", ")}.`);
   }
 
