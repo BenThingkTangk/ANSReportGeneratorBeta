@@ -9,6 +9,7 @@ import type { SamplingProbe } from "./parseBinary.js";
 
 const PHASE_COUNT = 6;
 const TREND_COUNT = 11;
+const EMPTY_F32 = new Float32Array(0);
 export const VENDOR_SUMMARY_SIGNATURE =
   "S8NddaaaaaaadaaaaaaaaNddaa0aaaadaa0aaaaa";
 
@@ -40,6 +41,69 @@ export interface VendorPhaseMetrics {
   bpReadingCount: number;
 }
 
+/** One stored, uniformly sampled series read verbatim from the .ans file. */
+export interface StoredUniformSeries {
+  /** Byte offset of the first stored value. */
+  offset: number;
+  /** Absolute LabVIEW seconds of the first sample. */
+  t0Abs: number;
+  /** Sample spacing in seconds. */
+  dtSec: number;
+  values: number[];
+}
+
+/** The stored PhysioPS wavelet spectrogram, read verbatim. */
+export interface StoredSpectrogram {
+  /** Byte offset of the spectrogram block header (t0). */
+  headerOffset: number;
+  /** Byte offset of the first float32 value. */
+  valuesOffset: number;
+  t0Abs: number;
+  dtSec: number;
+  freqStartHz: number;
+  freqStepHz: number;
+  /** Number of stored time slices. */
+  rows: number;
+  /** Number of frequency bins per time slice. */
+  cols: number;
+  /**
+   * Row-major `rows x cols` matrix: value(timeIndex, freqIndex) lives at
+   * `values[timeIndex * cols + freqIndex]`. The layout is fixed by the stored
+   * row/column counts and was validated across the private corpus by the
+   * continuity of each stored 150-bin slice.
+   */
+  values: Float32Array;
+}
+
+/**
+ * Every stored series that sits between the ECG block and the six-phase
+ * summary. Collected only when `parseVendorStoredAnalysis` is called with
+ * `{ collectSeries: true }` so the default (scalar) path stays allocation-free.
+ */
+export interface VendorStoredSeries {
+  /** Beat-to-beat interval series (seconds), non-uniform in time. */
+  rrIntervalsSec: { offset: number; t0Abs: number; values: number[] };
+  /** 4 Hz heart-rate series (bpm). */
+  heartRate: StoredUniformSeries;
+  /** 4 Hz breathing series (unitless sensor units). */
+  breathing: StoredUniformSeries;
+  /** Cuff blood-pressure markers. */
+  bpMarkers: {
+    offset: number;
+    timesAbs: number[];
+    systolic: number[];
+    diastolic: number[];
+    map: number[];
+  };
+  /** The eleven 4-second spectral trend arrays, in stored order. */
+  trends: {
+    t0Abs: number;
+    dtSec: number;
+    channels: Array<{ index: number; offset: number; values: number[] }>;
+  };
+  spectrogram: StoredSpectrogram;
+}
+
 export interface VendorStoredAnalysis {
   phases: VendorPhaseMetrics[];
   signature: string;
@@ -47,6 +111,17 @@ export interface VendorStoredAnalysis {
   waveletName: string;
   markerCount: number;
   warnings: ExtractionWarning[];
+  /** Present only when parsed with `{ collectSeries: true }`. */
+  series?: VendorStoredSeries;
+}
+
+export interface VendorStoredOptions {
+  /**
+   * Materialize the stored visualization series (4 Hz HR/breathing, the eleven
+   * 4-second trend arrays and the wavelet spectrogram). Off by default: the
+   * scalar summary path must not pay for ~150 K extra numbers.
+   */
+  collectSeries?: boolean;
 }
 
 class Cursor {
@@ -86,6 +161,17 @@ class Cursor {
     this.offset += bytes;
   }
 
+  f32Array(count: number, label: string): number[] {
+    if (count < 0 || count > 5_000_000) throw new RangeError(`${label} count ${count}`);
+    this.need(count * 4, label);
+    const values = new Array<number>(count);
+    for (let index = 0; index < count; index += 1) {
+      values[index] = this.buffer.readFloatBE(this.offset + index * 4);
+    }
+    this.offset += count * 4;
+    return values;
+  }
+
   f64Array(count: number, label: string): number[] {
     if (count < 0 || count > 1_000_000) throw new RangeError(`${label} count ${count}`);
     return Array.from({ length: count }, (_, index) => this.f64(`${label}[${index}]`));
@@ -107,12 +193,6 @@ function checkedArrayBytes(count: number, width: number, label: string): number 
   const bytes = count * width;
   if (!Number.isSafeInteger(bytes)) throw new RangeError(`${label} byte count overflow`);
   return bytes;
-}
-
-function skipCountedArray(cursor: Cursor, width: number, label: string): number {
-  const count = cursor.u32(`${label}.count`);
-  cursor.skip(checkedArrayBytes(count, width, label), label);
-  return count;
 }
 
 function readPrintableLpStrings(
@@ -367,7 +447,9 @@ export function vendorPhaseToBlock(
 export function parseVendorStoredAnalysis(
   buffer: Buffer,
   sampling: SamplingProbe,
+  options: VendorStoredOptions = {},
 ): VendorStoredAnalysis {
+  const collect = options.collectSeries === true;
   if (sampling.truncated) throw new RangeError("ECG block is truncated");
   const cursor = new Cursor(
     buffer,
@@ -375,14 +457,30 @@ export function parseVendorStoredAnalysis(
   );
 
   const rrT0 = cursor.f64("rr.t0");
-  skipCountedArray(cursor, 4, "rr.values");
+  const rrCount = cursor.u32("rr.values.count");
+  const rrOffset = cursor.offset;
+  const rrValues = collect
+    ? cursor.f32Array(rrCount, "rr.values")
+    : (cursor.skip(checkedArrayBytes(rrCount, 4, "rr.values"), "rr.values"), []);
 
   const hrT0 = cursor.f64("hr4.t0");
   const hrDt = cursor.f64("hr4.dt");
   if (Math.abs(hrDt - 0.25) > 1e-9) throw new RangeError(`unexpected hr4 dt ${hrDt}`);
-  skipCountedArray(cursor, 4, "hr4.values");
-  skipCountedArray(cursor, 4, "breathing4.values");
+  const hrCount = cursor.u32("hr4.values.count");
+  const hrOffset = cursor.offset;
+  const hrValues = collect
+    ? cursor.f32Array(hrCount, "hr4.values")
+    : (cursor.skip(checkedArrayBytes(hrCount, 4, "hr4.values"), "hr4.values"), []);
+  const breathingCount = cursor.u32("breathing4.values.count");
+  const breathingOffset = cursor.offset;
+  const breathingValues = collect
+    ? cursor.f32Array(breathingCount, "breathing4.values")
+    : (cursor.skip(
+        checkedArrayBytes(breathingCount, 4, "breathing4.values"),
+        "breathing4.values",
+      ), []);
 
+  const markerBlockOffset = cursor.offset;
   const markerCount = cursor.u32("bp.markers.count");
   if (markerCount < 1 || markerCount > 64) {
     throw new RangeError(`unexpected BP marker count ${markerCount}`);
@@ -402,23 +500,39 @@ export function parseVendorStoredAnalysis(
   const trendT0 = cursor.f64("trends.t0");
   const trendDt = cursor.f64("trends.dt");
   if (Math.abs(trendDt - 4) > 1e-9) throw new RangeError(`unexpected trend dt ${trendDt}`);
+  const trendChannels: Array<{ index: number; offset: number; values: number[] }> = [];
   for (let index = 0; index < TREND_COUNT; index += 1) {
-    skipCountedArray(cursor, 4, `trends[${index}]`);
+    const count = cursor.u32(`trends[${index}].count`);
+    const offset = cursor.offset;
+    if (collect) {
+      trendChannels.push({ index, offset, values: cursor.f32Array(count, `trends[${index}]`) });
+    } else {
+      cursor.skip(checkedArrayBytes(count, 4, `trends[${index}]`), `trends[${index}]`);
+    }
   }
 
+  const spectrogramHeaderOffset = cursor.offset;
   const spectrogramT0 = cursor.f64("spectrogram.t0");
   const spectrogramDt = cursor.f64("spectrogram.dt");
-  cursor.f64("spectrogram.frequencyStart");
-  cursor.f64("spectrogram.frequencyStep");
+  const spectrogramFreqStart = cursor.f64("spectrogram.frequencyStart");
+  const spectrogramFreqStep = cursor.f64("spectrogram.frequencyStep");
   const rows = cursor.u32("spectrogram.rows");
   const columns = cursor.u32("spectrogram.columns");
   if (rows < 1 || rows > 100_000 || columns < 1 || columns > 10_000) {
     throw new RangeError(`unexpected spectrogram shape ${rows}x${columns}`);
   }
-  cursor.skip(
-    checkedArrayBytes(rows * columns, 4, "spectrogram.values"),
-    "spectrogram.values",
-  );
+  const spectrogramValuesOffset = cursor.offset;
+  const spectrogramBytes = checkedArrayBytes(rows * columns, 4, "spectrogram.values");
+  let spectrogramValues: Float32Array = EMPTY_F32;
+  if (collect) {
+    cursor.skip(spectrogramBytes, "spectrogram.values");
+    spectrogramValues = new Float32Array(rows * columns);
+    for (let index = 0; index < spectrogramValues.length; index += 1) {
+      spectrogramValues[index] = buffer.readFloatBE(spectrogramValuesOffset + index * 4);
+    }
+  } else {
+    cursor.skip(spectrogramBytes, "spectrogram.values");
+  }
 
   if (
     Math.abs(rrT0 - hrT0) > 1e-6 ||
@@ -516,6 +630,38 @@ export function parseVendorStoredAnalysis(
     };
   });
 
+  const series: VendorStoredSeries | undefined = collect
+    ? {
+        rrIntervalsSec: { offset: rrOffset, t0Abs: rrT0, values: rrValues },
+        heartRate: { offset: hrOffset, t0Abs: hrT0, dtSec: hrDt, values: hrValues },
+        breathing: {
+          offset: breathingOffset,
+          t0Abs: hrT0,
+          dtSec: hrDt,
+          values: breathingValues,
+        },
+        bpMarkers: {
+          offset: markerBlockOffset,
+          timesAbs: markerTimes,
+          systolic,
+          diastolic,
+          map: maps,
+        },
+        trends: { t0Abs: trendT0, dtSec: trendDt, channels: trendChannels },
+        spectrogram: {
+          headerOffset: spectrogramHeaderOffset,
+          valuesOffset: spectrogramValuesOffset,
+          t0Abs: spectrogramT0,
+          dtSec: spectrogramDt,
+          freqStartHz: spectrogramFreqStart,
+          freqStepHz: spectrogramFreqStep,
+          rows,
+          cols: columns,
+          values: spectrogramValues,
+        },
+      }
+    : undefined;
+
   return {
     phases,
     signature: summary.signature,
@@ -523,5 +669,6 @@ export function parseVendorStoredAnalysis(
     waveletName: summary.waveletName,
     markerCount,
     warnings: [],
+    series,
   };
 }
