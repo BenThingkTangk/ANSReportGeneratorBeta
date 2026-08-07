@@ -1,0 +1,18 @@
+node_modules/
+.git/
+.vercel/
+.vercel_output/
+dist/
+build_output/
+coverage/
+scratch/
+*.traineddata
+*.tar.gz
+
+# Development and validation artifacts are not required by the production build.
+qa/
+eval/runs/
+eval/vendor-parity/runs/
+eval/vendor-parity/local/
+api/**/__tests__/
+client/src/__tests__/
