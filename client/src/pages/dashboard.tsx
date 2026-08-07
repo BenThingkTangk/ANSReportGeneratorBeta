@@ -9,7 +9,6 @@ import { AnalyzingScreen } from "@/components/AnalyzingScreen";
 import { ReportDashboard } from "@/components/ReportDashboard";
 import { AtomAttribution } from "@/components/AtomAttribution";
 import { ParsedDataReview } from "@/components/parsed/ParsedDataReview";
-import { apiRequest } from "@/lib/queryClient";
 import { resilientUpload } from "@/lib/resilientUpload";
 
 type AppState = "upload" | "parsing" | "review" | "analyzing" | "report";
@@ -36,19 +35,25 @@ export default function Dashboard() {
   // is their identity-reconciled MERGE (letter + signed report coexist).
   const vendorDocsRef = useRef<NamedExtraction[]>([]);
 
-  /** Step 1: parse-only — give the user a chance to review extraction. */
+  /**
+   * Primary upload journey: one full-report request, then open the Patient
+   * dashboard automatically. The Clinician toggle is available in that
+   * dashboard, so users never have to stop at Quick Load or click Generate.
+   */
   const parseFile = useCallback(async (file: File) => {
     setPendingFile(file);
-    setAppState("parsing");
+    setAppState("analyzing");
     setAnalysisProgress(0);
-    setAnalysisStage("Parsing .ans file...");
+    setAnalysisStage("Reading .ans file...");
 
-    // Lightweight progress animation while /api/parse runs.
+    // Honest stage animation while the deterministic /api/upload pipeline runs.
     const lightStages = [
-      { progress: 20, label: "Reading .ans binary file..." },
-      { progress: 45, label: "Parsing patient demographics..." },
-      { progress: 70, label: "Extracting phase blocks..." },
-      { progress: 90, label: "Building normalized AnsStudy..." },
+      { progress: 12, label: "Reading .ans binary file..." },
+      { progress: 28, label: "Recovering patient and phase data..." },
+      { progress: 48, label: "Loading stored PhysioPS trends..." },
+      { progress: 66, label: "Loading stored wavelet analysis..." },
+      { progress: 82, label: "Building patient and clinician views..." },
+      { progress: 94, label: "Verifying report provenance..." },
     ];
     let cancelled = false;
     (async () => {
@@ -61,24 +66,24 @@ export default function Dashboard() {
     })();
 
     try {
-      // Resilient upload: 60s timeout, retry-once on 5xx/network, captures
+      // Resilient upload: 90s timeout, retry-once on 5xx/network, captures
       // x-vercel-id, and surfaces server {error, stage} JSON without throwing.
       const result = await resilientUpload<{
         success: boolean;
+        report?: ANSReport;
         ansStudy?: AnsStudy;
-        diagnosticSummary?: DiagnosticSummary;
         error?: string;
         stage?: string;
-      }>("/api/parse", file);
+      }>("/api/upload", file, { timeoutMs: 90_000 });
       cancelled = true;
 
-      if (result.ok && result.data?.success && result.data.ansStudy) {
-        setAnsStudy(result.data.ansStudy);
-        setDiagnosticSummary(result.data.diagnosticSummary ?? null);
+      if (result.ok && result.data?.success && result.data.report) {
+        setReport(result.data.report);
+        setAnsStudy(result.data.ansStudy ?? null);
         setAnalysisProgress(100);
-        setAnalysisStage("Parse complete.");
-        await new Promise(r => setTimeout(r, 250));
-        setAppState("review");
+        setAnalysisStage("Report ready.");
+        await new Promise(r => setTimeout(r, 300));
+        setAppState("report");
       } else {
         const reqId = result.vercelId ? ` [req:${result.vercelId.slice(-12)}]` : "";
         const stageTag = result.stage ? ` (stage: ${result.stage})` : "";
@@ -87,8 +92,8 @@ export default function Dashboard() {
       }
     } catch (error: any) {
       cancelled = true;
-      console.error("Parse error:", error);
-      setAnalysisStage("Error: " + (error.message || "Parse failed"));
+      console.error("Upload error:", error);
+      setAnalysisStage("Error: " + (error.message || "Report generation failed"));
       await new Promise(r => setTimeout(r, 3500));
       setAppState("upload");
       setPendingFile(null);
