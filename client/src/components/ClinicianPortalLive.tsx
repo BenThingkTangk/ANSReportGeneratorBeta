@@ -86,6 +86,25 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
   // When a paired vendor report was ingested, default to the familiar vendor
   // view (what Dr. Colombo reads from); otherwise only the HumanOS view exists.
   const hasVendor = !!vendorExtraction && vendorExtraction.fieldCount > 0;
+  // Valid reports produced by older upload paths can omit optional narrative
+  // collections. Normalize only at the presentation boundary so the clinician
+  // portal remains usable without altering any parsed measurement or score.
+  const phaseEvents = Array.isArray(report.phaseEvents) ? report.phaseEvents : [];
+  const phaseFindings = Array.isArray(report.phaseFindings) ? report.phaseFindings : [];
+  const therapyRecommendations = Array.isArray(report.therapyRecommendations)
+    ? report.therapyRecommendations
+    : [];
+  const contraindications = Array.isArray(report.contraindications)
+    ? report.contraindications
+    : [];
+  const followUp = report.followUp
+    ? {
+        ...report.followUp,
+        monitorParameters: Array.isArray(report.followUp.monitorParameters)
+          ? report.followUp.monitorParameters
+          : [],
+      }
+    : null;
   const [view, setView] = useState<ClinicianView>(hasVendor ? "vendor" : "humanos");
   // Vendor-reported findings threaded as a SEPARATE evidence class (verbatim,
   // with provenance) so the summary can never say "nothing flagged" when an
@@ -204,7 +223,7 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
       </ErrorBoundary>
 
       <ErrorBoundary label="Phase event data">
-        <PhaseEventTable phaseEvents={report.phaseEvents} />
+        <PhaseEventTable phaseEvents={phaseEvents} />
       </ErrorBoundary>
 
       <CollapsibleSection
@@ -218,17 +237,31 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
         />
       </CollapsibleSection>
 
-      <PhaseFindings phaseFindings={report.phaseFindings} />
+      <PhaseFindings phaseFindings={phaseFindings} />
 
       <OverallImpression impression={report.overallImpression} />
 
-      <TherapyOptions recommendations={report.therapyRecommendations} />
+      <TherapyOptions recommendations={therapyRecommendations} />
 
-      {report.contraindications.length > 0 && (
-        <ContraindicationsPanel contraindications={report.contraindications} />
+      {contraindications.length > 0 && (
+        <ContraindicationsPanel contraindications={contraindications} />
       )}
 
-      <FollowUpPanel followUp={report.followUp} />
+      {followUp ? (
+        <FollowUpPanel followUp={followUp} />
+      ) : (
+        <section
+          className="rounded-2xl bg-card/50 border border-border/30 p-5"
+          data-testid="follow-up-unavailable"
+        >
+          <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium">
+            Follow-Up
+          </h3>
+          <p className="mt-2 text-sm text-muted-foreground">
+            No follow-up plan was recorded in this report.
+          </p>
+        </section>
+      )}
 
       <ColomboReferences />
       </>

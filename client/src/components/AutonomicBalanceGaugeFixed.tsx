@@ -101,6 +101,24 @@ export function AutonomicBalanceGauge({
   const activeRight = balanceAssessed
     ? Math.round((pPct / 100) * arcTicksRight.length)
     : 0;
+  const leftIndicator =
+    activeLeft > 0
+      ? arcTicksLeft[
+          Math.min(
+            arcTicksLeft.length - 1,
+            Math.max(0, arcTicksLeft.length - activeLeft),
+          )
+        ]
+      : null;
+  const rightIndicator =
+    activeRight > 0
+      ? arcTicksRight[
+          Math.min(
+            arcTicksRight.length - 1,
+            Math.max(0, activeRight - 1),
+          )
+        ]
+      : null;
 
   // A pipeline zero (or non-finite) reading means the metric was not captured,
   // so render an em dash rather than a misleading "0".
@@ -233,27 +251,29 @@ export function AutonomicBalanceGauge({
 
         {/* Indicator dots at the active tip of each arc — hidden when the
             balance was not assessed (no arc is lit in that state). */}
-        {balanceAssessed && (
-          <>
+        {balanceAssessed && leftIndicator && (
             <motion.circle
-              cx={arcTicksLeft[Math.max(0, arcTicksLeft.length - activeLeft)]?.x}
-              cy={arcTicksLeft[Math.max(0, arcTicksLeft.length - activeLeft)]?.y}
+              cx={leftIndicator.x}
+              cy={leftIndicator.y}
               r="3.5"
               fill="hsl(18 100% 70%)"
               filter="url(#abg-glowDot)"
+              data-testid="abg-symp-indicator"
               animate={reduce ? {} : { scale: [1, 1.35, 1], opacity: [0.85, 1, 0.85] }}
               transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
             />
+        )}
+        {balanceAssessed && rightIndicator && (
             <motion.circle
-              cx={arcTicksRight[Math.max(0, activeRight - 1)]?.x}
-              cy={arcTicksRight[Math.max(0, activeRight - 1)]?.y}
+              cx={rightIndicator.x}
+              cy={rightIndicator.y}
               r="3.5"
               fill="hsl(187 100% 72%)"
               filter="url(#abg-glowDot)"
+              data-testid="abg-parasym-indicator"
               animate={reduce ? {} : { scale: [1, 1.35, 1], opacity: [0.85, 1, 0.85] }}
               transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut", delay: 0.4 }}
             />
-          </>
         )}
 
         {/* Ambient halos */}

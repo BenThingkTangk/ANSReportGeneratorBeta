@@ -83,4 +83,38 @@ describe("autonomic balance gauge — not-assessed shows ONE consolidated label"
     expect(screen.getByTestId("abg-symp")).toBeTruthy();
     expect(screen.getByTestId("abg-parasym")).toBeTruthy();
   });
+
+  it("omits the zero-side marker for a 0/100 split without undefined SVG coordinates", () => {
+    const { container } = render(
+      <AutonomicBalanceGauge
+        sympathetic={0}
+        parasympathetic={100}
+        hrvRmssdMs={45}
+        hrvSdnnMs={50}
+        lfHfRatio={0}
+        available={true}
+        balanceLabel={"Parasympathetic dominant"}
+      />,
+    );
+    expect(screen.queryByTestId("abg-symp-indicator")).toBeNull();
+    expect(screen.getByTestId("abg-parasym-indicator")).toBeTruthy();
+    expect(container.innerHTML).not.toContain("undefined");
+  });
+
+  it("omits the zero-side marker for a 100/0 split without undefined SVG coordinates", () => {
+    const { container } = render(
+      <AutonomicBalanceGauge
+        sympathetic={100}
+        parasympathetic={0}
+        hrvRmssdMs={45}
+        hrvSdnnMs={50}
+        lfHfRatio={10}
+        available={true}
+        balanceLabel={"Sympathetic dominant"}
+      />,
+    );
+    expect(screen.getByTestId("abg-symp-indicator")).toBeTruthy();
+    expect(screen.queryByTestId("abg-parasym-indicator")).toBeNull();
+    expect(container.innerHTML).not.toContain("undefined");
+  });
 });

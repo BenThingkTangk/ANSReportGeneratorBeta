@@ -64,6 +64,17 @@ describe("patient language for an unscorable study", () => {
     cleanup();
   });
 
+  it("renders an honest empty state when body-system impact is absent", async () => {
+    const { render, cleanup } = await import("@testing-library/react");
+    const { BodyHeatmap } = await import("../components/patient/BodyHeatmap");
+    const { container } = render(<BodyHeatmap />);
+
+    expect(container.textContent ?? "").toMatch(
+      /No body-system impacts were recorded for this study/i,
+    );
+    cleanup();
+  });
+
   it("does not imply that an unscorable study cleared lifestyle interventions", async () => {
     const { render, cleanup } = await import("@testing-library/react");
     const { TreatmentsPanel } = await import("../components/patient/TreatmentsPanel");

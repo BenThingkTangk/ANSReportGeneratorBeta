@@ -4,7 +4,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import type { BodySystemImpact } from "@shared/schema";
 
 interface BodyHeatmapProps {
-  bodySystemImpact: BodySystemImpact[];
+  bodySystemImpact?: BodySystemImpact[];
   scorable?: boolean;
 }
 
@@ -173,7 +173,7 @@ const RENDER_ORDER: SystemKey[] = [
   "nervous",
 ];
 
-export function BodyHeatmap({ bodySystemImpact, scorable = true }: BodyHeatmapProps) {
+export function BodyHeatmap({ bodySystemImpact = [], scorable = true }: BodyHeatmapProps) {
   const [selected, setSelected] = useState<SystemKey | null>(null);
   const [active, setActive] = useState<SystemKey | null>(null); // hover or keyboard focus
   const prefersReducedMotion = useReducedMotion();

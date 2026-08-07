@@ -222,4 +222,28 @@ describe("Patient -> Clinician switch does not blank the app (THIRD FINAL-QA)", 
     ).not.toThrow();
     cleanup();
   });
+
+  it("keeps the clinician portal usable when optional narrative sections are absent", async () => {
+    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { ClinicianPortalLive } = await import(
+      "../components/ClinicianPortalLive"
+    );
+    const sparseReport = {
+      ...report,
+      phaseFindings: undefined,
+      therapyRecommendations: undefined,
+      contraindications: undefined,
+      followUp: undefined,
+    };
+
+    expect(() =>
+      render(<ClinicianPortalLive report={sparseReport} ansStudy={ansStudy} />),
+    ).not.toThrow();
+    expect(screen.getByTestId("clinician-portal")).toBeTruthy();
+    expect(screen.getByTestId("follow-up-unavailable").textContent).toMatch(
+      /No follow-up plan was recorded/,
+    );
+    expect(screen.queryByTestId("error-boundary-fallback")).toBeNull();
+    cleanup();
+  });
 });
