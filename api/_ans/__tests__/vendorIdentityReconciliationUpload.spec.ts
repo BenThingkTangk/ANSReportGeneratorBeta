@@ -58,7 +58,7 @@ function invoke(fileBytes: Buffer, fileName: string, vendorHeader?: string): Pro
 const VENDOR_VALUES = { LFa: 1.5, RFa: 2.5, SB: 0.6, SBP: 120, DBP: 78 };
 
 describe("POST /api/upload — vendor identity reconciliation (BLOCKER 2)", () => {
-  it("applies vendor metrics when identity matches the .ans", async () => {
+  it("keeps stored .ans measurements authoritative when a matching PDF disagrees", async () => {
     const header = JSON.stringify({
       ...VENDOR_VALUES,
       identity: { patientName: "John Faux", testDate: "7/11/2024", dob: "1/1/1975" },
@@ -69,7 +69,13 @@ describe("POST /api/upload — vendor identity reconciliation (BLOCKER 2)", () =
     const report = json.report;
     expect(report.spectralAvailable).toBe(true);
     expect(report.bpAvailable).toBe(true);
-    expect(report.phaseEvents[0].LFa).toBe(1.5);
+    expect(report.spectralSource).toBe("ans_stored");
+    expect(report.phaseEvents[0].LFa).not.toBe(VENDOR_VALUES.LFa);
+    expect(report.phaseEvents[0].RFa).not.toBe(VENDOR_VALUES.RFa);
+    expect(report.phaseEvents[0].SB).not.toBe(VENDOR_VALUES.SB);
+    expect(report.phaseEvents[0].provenance.LFa.method).toBe("ans_stored");
+    expect(report.phaseEvents[0].provenance.RFa.method).toBe("ans_stored");
+    expect(report.phaseEvents[0].provenance.SB.method).toBe("ans_stored");
     expect(report.vendorReconciliationWarnings).toBeUndefined();
   });
 

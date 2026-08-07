@@ -75,11 +75,10 @@ import {
 
 /**
  * Vendor-reported metrics parsed verbatim from the paired signed PDF
- * (api/_ans/vendorReport.ts). When present, these populate the proprietary
- * spectral aggregates (LFa/RFa/SB) and cuff BP that the raw .ans export cannot
- * carry, tagged `vendor_reported` so the spectral-availability gate opens and
- * the full Colombo interpretation/treatment pathway runs. Values are injected
- * verbatim — never computed or inferred here.
+ * (api/_ans/vendorReport.ts). These supplement fields absent from the uploaded
+ * .ans and never overwrite a PhysioPS value already stored in that file.
+ * Supplemental values are tagged `vendor_reported`; stored values retain
+ * `ans_stored` provenance.
  */
 export interface VendorReportedMetrics {
   LFa?: number;
@@ -302,10 +301,10 @@ interface PhaseMetrics {
    */
   hrvRatioPhysiologicNote?: string | null;
   /**
-   * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF). The raw
-   * .ans is never used to synthesize LFa/RFa/SB: those are `unavailable` unless
-   * a paired vendor PDF supplied them (baseline A only), in which case they are
-   * `vendor_reported` (or `derived_from_vendor` for a computed SB = LFa/RFa).
+   * Per-metric provenance for the spectral aggregates (LFa/RFa/SB/FRF).
+   * Supported PhysioPS exports may carry exact stored values (`ans_stored`);
+   * older or unknown schemas may instead expose HumanOS waveform estimates or
+   * require a paired PDF to supplement absent fields.
    * FRF is `computed` from the RR/peak envelope (a genuine time-domain measure).
    */
   provenance?: {
@@ -1166,9 +1165,10 @@ function computeWellness(
   const B = phases[1]; // DB
   const F = phases[5]; // Stand
 
-  // Spectral aggregates (LFa/RFa/SB) are only present when the paired vendor PDF
-  // supplied them (vendor_reported). For raw ECG-only .ans files they are null
-  // and every sub-score component that depends on them is UNAVAILABLE.
+  // Spectral aggregates (LFa/RFa/SB) follow strict source precedence:
+  // exact values stored in a supported PhysioPS .ans, then an identity-matched
+  // vendor PDF, then explicitly labelled HumanOS estimates. Only exact stored
+  // or vendor-reported values may contribute to the clinical composite.
   //
   // CRITICAL CHANGE: unavailable components/domains are NO LONGER renormalized
   // away. They contribute ZERO out of their full nominal weight, so missing data
@@ -2584,19 +2584,27 @@ export function generateColomboReport(
     A.MAP = Math.round((A.SBP + 2 * A.DBP) / 3);
   }
 
-  // --- Paired vendor-PDF override (vendor_reported provenance) ----------------
-  // When the clinician supplies the signed vendor report, its verbatim spectral
-  // aggregates (LFa/RFa/SB) and cuff BP are injected onto the baseline with
-  // `vendor_reported` provenance. `mayInterpretClinically(vendor_reported)` is
-  // true, so the spectral gate below opens and the FULL Colombo interpretation +
-  // treatment pathway runs — instead of the honest "Not assessed" fallback.
-  // Nothing is computed or inferred here; only vendor-printed numbers pass through.
+  // --- Paired vendor-PDF supplementation (vendor_reported provenance) ---------
+  // Source precedence is strict:
+  //   1. Exact values stored in the uploaded PhysioPS .ans (`ans_stored`)
+  //   2. Identity-matched values printed in the paired PDF (`vendor_reported`)
+  //   3. HumanOS waveform estimates (`computed` / `estimated`)
+  //
+  // The PDF is corroborating/supplemental evidence. It may fill an absent or
+  // estimated baseline field, but it must never replace an exact stored value.
+  // This prevents OCR errors from changing the measurement that generated the
+  // vendor report in the first place.
   if (vendorMetrics) {
-    if (typeof vendorMetrics.LFa === "number") {
+    const maySupplement = (key: "LFa" | "RFa" | "SB"): boolean =>
+      A[key] == null ||
+      A.provenance?.[key]?.method === "unavailable" ||
+      A.provenance?.[key]?.method === "computed";
+
+    if (typeof vendorMetrics.LFa === "number" && maySupplement("LFa")) {
       A.LFa = vendorMetrics.LFa;
       if (A.provenance) A.provenance.LFa = vendorReportedProvenance("LFa");
     }
-    if (typeof vendorMetrics.RFa === "number") {
+    if (typeof vendorMetrics.RFa === "number" && maySupplement("RFa")) {
       A.RFa = vendorMetrics.RFa;
       if (A.provenance) A.provenance.RFa = vendorReportedProvenance("RFa");
     }
@@ -2612,7 +2620,7 @@ export function generateColomboReport(
           vendorMetrics.RFa !== 0
         ? vendorMetrics.LFa / vendorMetrics.RFa
         : undefined;
-    if (typeof vendorSB === "number") {
+    if (typeof vendorSB === "number" && maySupplement("SB")) {
       A.SB = vendorSB;
       if (A.provenance) {
         A.provenance.SB = vendorPrintedSB
@@ -2620,7 +2628,11 @@ export function generateColomboReport(
           : derivedFromVendorProvenance("SB", "Computed here as vendor LFa ÷ vendor RFa; the vendor report printed LFa and RFa but not the ratio.");
       }
     }
-    if (typeof vendorMetrics.SBP === "number" && typeof vendorMetrics.DBP === "number") {
+    if (
+      typeof vendorMetrics.SBP === "number" &&
+      typeof vendorMetrics.DBP === "number" &&
+      (A.SBP == null || A.DBP == null)
+    ) {
       A.SBP = vendorMetrics.SBP;
       A.DBP = vendorMetrics.DBP;
       A.PP = A.SBP - A.DBP;
@@ -2632,8 +2644,8 @@ export function generateColomboReport(
   // TWO DIFFERENT QUESTIONS, TWO DIFFERENT FLAGS:
   //
   //  * `spectralAvailable` = may a spectral value DRIVE A CLINICAL CONCLUSION?
-  //    True only when baseline A carries a vendor_reported / derived_from_vendor
-  //    value from the paired signed PDF. A HumanOS waveform estimate is
+  //    True when baseline A carries an exact `ans_stored`, `vendor_reported` or
+  //    `derived_from_vendor` value. A HumanOS waveform estimate is
   //    `computed` + `estimated`, for which `mayInterpretClinically()` is false,
   //    so an estimate can never be read as "sympathetic 0%" or trigger an
   //    autonomic-neuropathy / parasympathetic / treatment finding, and can never
@@ -3296,7 +3308,10 @@ export function generateColomboReport(
     if (parasympatheticExcess) {
       return "Parasympathetic activity rose on standing when it would normally step down. This is a measurement pattern — discuss its meaning with your clinician.";
     }
-    return "Balanced sympathovagal tone.";
+    if (sympatheticExcess || (A.SB != null && A.SB > SB_n.hi)) {
+      return "The recorded resting balance is sympathetic-leaning. This describes the measured LFa/RFa relationship for this test — discuss its clinical meaning with your clinician.";
+    }
+    return "The recorded sympathovagal balance is within the PhysioPS reference range for this test.";
   };
   const autonomicBalance = spectralAvailable
     ? {
@@ -3619,11 +3634,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else {
       // NO VENDOR PDF is an explicit state, not the absence of information: the
       // UI must be able to distinguish it from "attached but unreadable".
+      const storedSpectralAvailable = report.spectralSource === "ans_stored";
       (report as { vendorReconciliation?: VendorReconciliationStatus }).vendorReconciliation = {
         status: "no_vendor_pdf",
-        reason:
-          "No vendor PDF was supplied with this upload, so no vendor-reported value was available " +
-          "to compare against. The proprietary spectral aggregates remain not assessed.",
+        reason: storedSpectralAvailable
+          ? "No vendor PDF was supplied for document-level reconciliation. Exact PhysioPS measurements stored in the .ans remain available and clinically interpretable."
+          : report.spectralSource === "humanos_estimated"
+            ? "No vendor PDF was supplied for document-level reconciliation. Waveform-derived HumanOS estimates remain visible with estimated provenance and are not substituted for vendor measurements."
+            : "No vendor PDF was supplied for document-level reconciliation, and this .ans schema did not expose stored PhysioPS spectral measurements.",
       };
     }
     // Send only a preview of the raw ECG to the client — the full waveform

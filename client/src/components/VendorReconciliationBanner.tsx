@@ -38,9 +38,11 @@ export function VendorReconciliationBanner({ report }: { report: ANSReport }) {
         <div className="min-w-0">
           <div className="text-[12px] font-semibold text-foreground/80">No vendor PDF attached</div>
           <p className="text-[11px] text-muted-foreground leading-relaxed">
-            {mode === "estimated"
+            {mode === "stored"
+              ? "Stored PhysioPS measurements were read directly from the .ans and remain clinically available. No PDF was attached for document-level reconciliation; a PDF is not required to populate measurements already stored in this file."
+              : mode === "estimated"
               ? "Nothing was compared against a signed vendor report. HumanOS waveform estimates of LFa, RFa and SB are available below for visual trend review and are labeled as estimates. They are not PhysioPS-validated, are not interpreted against Colombo norms, and do not affect scoring. Cuff blood pressure remains not assessed."
-              : "Nothing was compared against a signed vendor report. Vendor-equivalent LFa, RFa and SB values and cuff blood pressure are unavailable, so those clinical domains remain not assessed."}
+              : "Nothing was compared against a signed vendor report. This upload did not provide clinically usable LFa, RFa and SB values; absent domains remain not assessed and no value is guessed."}
           </p>
         </div>
       </div>

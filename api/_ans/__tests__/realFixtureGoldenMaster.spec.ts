@@ -253,12 +253,13 @@ describe("vendor-parity contract — embedded values outrank estimates", () => {
     const report = generateColomboReport(data, vendor);
     expect(report.spectralAvailable).toBe(true);
     expect(report.bpAvailable).toBe(true);
-    // Baseline A carries the vendor's verbatim values.
-    expect(report.phaseEvents[0].LFa).toBe(1.5);
-    expect(report.phaseEvents[0].RFa).toBe(2.5);
-    expect(report.phaseEvents[0].SB).toBe(0.6);
+    // Baseline A preserves the exact values embedded in the .ans. A paired PDF
+    // supplements missing fields but never overwrites stored measurements.
+    expect(report.phaseEvents[0].LFa).toBe(0.91);
+    expect(report.phaseEvents[0].RFa).toBe(5.13);
+    expect(report.phaseEvents[0].SB).toBe(0.18);
     expect(report.autonomicBalance.available).toBe(true);
-    expect(report.phaseEvents[0].provenance?.LFa.method).toBe("vendor_reported");
+    expect(report.phaseEvents[0].provenance?.LFa.method).toBe("ans_stored");
     // B–F remain the exact values embedded in the .ans; the baseline-only PDF
     // override does not erase or relabel them.
     for (const i of [1, 2, 3, 4, 5]) {

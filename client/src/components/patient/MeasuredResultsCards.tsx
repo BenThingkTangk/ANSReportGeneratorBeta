@@ -1,17 +1,16 @@
 /**
  * MeasuredResultsCards — patient-facing "what we actually measured" block.
  *
- * The raw .ans export always contains the ECG, so the three Ewing cardiovagal
- * ratios (E/I, Valsalva, 30:15) are always MEASURED — independent of whether
- * the vendor's proprietary spectral branch-balance (LFa/RFa/SB) was included.
+ * Supported .ans exports may contain stored PhysioPS analysis values, ECG
+ * samples, or both. The cards surface only values actually present in the
+ * decoded report.
  * Historically the patient view buried these behind a misleading
  * "not enough heart-rhythm data" message. This block surfaces each ratio with
  * its value, normal range, status, and a plain-language meaning that keeps the
  * scientific substance (named reflex, what it probes) intact.
  *
- * It also states the real limitation once, concisely: the vendor spectral
- * branch-balance aggregates are not in the raw .ans export and need the paired
- * vendor PDF — not a repeated disclaimer wall.
+ * It also states any upload-specific limitation once, without claiming that all
+ * .ans files share the same schema.
  */
 import { motion } from "framer-motion";
 import { Activity, HeartPulse, MoveVertical, Info } from "lucide-react";
@@ -89,7 +88,7 @@ export function MeasuredResultsCards({
               <div className="ps-text-mono text-2xl font-bold leading-none" style={{ color: s.text }}>
                 {e.value.toFixed(2)}
               </div>
-              <div className="text-[10px] text-muted-foreground">normal {e.normal}</div>
+              <div className="text-[10px] text-muted-foreground">{e.normal}</div>
               <p className="text-xs text-foreground/70 leading-relaxed mt-1">{e.plain}</p>
             </div>
           );
@@ -103,13 +102,12 @@ export function MeasuredResultsCards({
         >
           <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "hsl(185 70% 60%)" }} />
           <span>
-            The sympathetic-vs-parasympathetic <strong>branch-balance</strong> split
-            (the vendor's proprietary LFa/RFa spectral aggregates) is <strong>not
-            contained in the raw .ans export</strong>, so it is shown as
-            “Not assessed.”{" "}
+            The sympathetic-vs-parasympathetic <strong>spectral branch-balance</strong> split
+            was not available at a clinically usable provenance tier in this
+            upload, so it is shown as “Not assessed.”{" "}
             {vendorReportAttached
               ? "The attached vendor report was processed, but readable LFa/RFa values were not recovered; your clinician can verify them against the signed report."
-              : "A paired vendor report with readable LFa/RFa values is required to populate the branch-balance interpretation."}
+              : "Some PhysioPS .ans files include stored LFa/RFa/SB values; when this file does not, a matched vendor report may supplement them. No value is guessed."}
           </span>
         </div>
       )}

@@ -406,10 +406,12 @@ describe("Alex Pare — patient-facing payload exposes no HRV-only labels or key
 describe("Alex Pare — one authoritative age-specific ratio reference", () => {
   it("every reference-range string in the payload comes from the one table", () => {
     const { report } = alex();
+    const age = report.patientData.age;
+    expect(age).toBe(49);
     const expected = {
-      eiRatio: ratioReferenceLabel("eiRatio", 48),
-      valsalvaRatio: ratioReferenceLabel("valsalvaRatio", 48),
-      thirtyFifteenRatio: ratioReferenceLabel("thirtyFifteenRatio", 48),
+      eiRatio: ratioReferenceLabel("eiRatio", age),
+      valsalvaRatio: ratioReferenceLabel("valsalvaRatio", age),
+      thirtyFifteenRatio: ratioReferenceLabel("thirtyFifteenRatio", age),
     };
     expect(report.ratios.eiRatio.normal).toBe(expected.eiRatio);
     expect(report.ratios.valsalvaRatio.normal).toBe(expected.valsalvaRatio);
@@ -426,11 +428,11 @@ describe("Alex Pare — one authoritative age-specific ratio reference", () => {
     expect(annots).toContain(expected.thirtyFifteenRatio);
   });
 
-  it("age 48 resolves the 40–49 band", () => {
+  it("age 48 resolves the PhysioPS-calibrated interpolated limit", () => {
     const b = ratioBandForAge("eiRatio", 48);
-    expect(b.ageMin).toBe(40);
-    expect(b.ageMax).toBe(50);
-    expect(b.normalAtOrAbove).toBeCloseTo(1.12, 3);
+    expect(b.ageMin).toBe(48);
+    expect(b.ageMax).toBe(49);
+    expect(b.normalAtOrAbove).toBeCloseTo(1.098, 3);
   });
 });
 

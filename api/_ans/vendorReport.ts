@@ -1,13 +1,11 @@
 /**
  * api/_ans/vendorReport.ts
  *
- * Optional paired vendor-PDF ingestion. The raw .ans recording cannot
- * reproduce the vendor's proprietary spectral aggregates (LFa/RFa/SB/FRF) or
- * the per-phase cuff blood pressures — those exist only in the signed vendor
- * report. This module lets a clinician attach that PDF so its VERBATIM values
- * enter the report tagged `vendor_reported` (an interpretable provenance tier,
- * per shared/metricProvenance.ts) instead of being permanently gated as
- * "not assessed".
+ * Optional paired vendor-PDF ingestion. Supported PhysioPS .ans exports may
+ * already contain stored spectral aggregates and per-phase blood pressures.
+ * This module lets a clinician attach the signed PDF for reconciliation and to
+ * supplement fields absent from the file. PDF values enter tagged
+ * `vendor_reported` and must never overwrite `ans_stored` measurements.
  *
  * SAFETY CONTRACT:
  *   • Values are parsed VERBATIM from the vendor's own text — never computed,

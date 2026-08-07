@@ -78,13 +78,12 @@ function scorableReport(): ANSReport {
 }
 
 describe("WellnessMeter — not-scorable state", () => {
-  it("renders an explicit Not scorable card with no number and no tier", () => {
+  it("renders an explicit measurements-available card with no number and no tier", () => {
     const { container } = render(<WellnessMeter report={notScorableReport()} />);
     expect(screen.getByTestId("wellness-not-scorable")).toBeTruthy();
-    expect(screen.getByTestId("wellness-not-scorable-title").textContent).toBe("Not scorable");
+    expect(screen.getByTestId("wellness-not-scorable-title").textContent).toBe("Measurements available");
     // The old gauge (and therefore any number/tier pill) must not be rendered.
     expect(container.querySelector('[data-testid="wellness-meter"]')).toBeNull();
-    expect(container.querySelector("svg")).toBeNull();
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/\bOptimal\b/);
     expect(text).not.toMatch(/no abnormal patterns/i);
@@ -93,12 +92,13 @@ describe("WellnessMeter — not-scorable state", () => {
     expect(text).not.toMatch(/\b91\b/);
   });
 
-  it("explains the blockers and separates observation from interpretation", () => {
+  it("keeps the technical blocker behind progressive disclosure", () => {
     const { container } = render(<WellnessMeter report={notScorableReport()} />);
     const text = container.textContent ?? "";
+    expect(text).toMatch(/Why no composite score/i);
     expect(text).toMatch(/signal-usability gate/i);
-    expect(text).toMatch(/observations/i);
-    expect(text).toMatch(/not an assessment of/i);
+    expect(text).toMatch(/recorded observations/i);
+    expect(text).toMatch(/No overall tier or grade/i);
   });
 
   it("still renders the normal gauge when the study IS scorable", () => {

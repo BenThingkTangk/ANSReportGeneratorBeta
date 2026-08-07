@@ -23,6 +23,7 @@ interface RatioEval {
   value: number | null;
   abnormalBelow: number;
   severeBelow: number;
+  binaryLow?: boolean;
   fieldConfidence: number; // 0..1 from ProvField provenance
 }
 
@@ -34,7 +35,7 @@ function evaluateRatio(r: RatioEval): {
   if (r.value == null) {
     return { severity: "not_assessed", abnormal: false, finding: null };
   }
-  if (r.value < r.severeBelow) {
+  if (!r.binaryLow && r.value < r.severeBelow) {
     return {
       severity: "severe",
       abnormal: true,
@@ -49,13 +50,18 @@ function evaluateRatio(r: RatioEval): {
       },
     };
   }
-  if (r.value < r.abnormalBelow) {
+  const isLow = r.binaryLow
+    ? r.value <= r.abnormalBelow
+    : r.value < r.abnormalBelow;
+  if (isLow) {
     return {
       severity: "mild",
       abnormal: true,
       finding: {
         code: `${r.label.replace(/[: ]/g, "_").toUpperCase()}_LOW`,
-        message: `${r.label} ${r.value.toFixed(2)} is below age-banded normal (< ${r.abnormalBelow}).`,
+        message: r.binaryLow
+          ? `${r.label} ${r.value.toFixed(2)} is Low by the PhysioPS age-specific criterion (normal > ${r.abnormalBelow}).`
+          : `${r.label} ${r.value.toFixed(2)} is below age-banded normal (< ${r.abnormalBelow}).`,
         domain: "cardiovagal",
         severity: "mild",
         sourceFields: [r.field],
@@ -104,6 +110,7 @@ export function scoreCardiovagal(
       value: study.ratios.eiRatio.value,
       abnormalBelow: eiBand.abnormalBelow,
       severeBelow: eiBand.severeBelow,
+      binaryLow: eiBand.binaryLow,
       fieldConfidence: study.ratios.eiRatio.provenance.confidence ?? 0,
     },
     {
@@ -112,6 +119,7 @@ export function scoreCardiovagal(
       value: study.ratios.valsalvaRatio.value,
       abnormalBelow: valBand.abnormalBelow,
       severeBelow: valBand.severeBelow,
+      binaryLow: valBand.binaryLow,
       fieldConfidence: study.ratios.valsalvaRatio.provenance.confidence ?? 0,
     },
     {
@@ -120,6 +128,7 @@ export function scoreCardiovagal(
       value: study.ratios.thirtyFifteenRatio.value,
       abnormalBelow: ttfBand.abnormalBelow,
       severeBelow: ttfBand.severeBelow,
+      binaryLow: ttfBand.binaryLow,
       fieldConfidence: study.ratios.thirtyFifteenRatio.provenance.confidence ?? 0,
     },
   ];
@@ -182,8 +191,11 @@ export function scoreCardiovagal(
       rationaleParts.push(`${e.r.label}: not present.`);
     } else {
       rationaleParts.push(
-        `${e.r.label}=${e.r.value.toFixed(2)} → ${e.severity} ` +
-        `(age-band <${e.r.abnormalBelow} abnormal, <${e.r.severeBelow} severe).`,
+        e.r.binaryLow
+          ? `${e.r.label}=${e.r.value.toFixed(2)} → ${e.severity} ` +
+            `(PhysioPS age-specific normal >${e.r.abnormalBelow}; otherwise Low).`
+          : `${e.r.label}=${e.r.value.toFixed(2)} → ${e.severity} ` +
+            `(age-band <${e.r.abnormalBelow} abnormal, <${e.r.severeBelow} severe).`,
       );
     }
   }

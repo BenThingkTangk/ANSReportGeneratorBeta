@@ -1,6 +1,6 @@
 {
   "id": "mixed-001-pots-and-cardiovagal",
-  "description": "Mixed phenotype: POTS-like HR rise without OH AND severe cardiovagal impairment",
+  "description": "Mixed phenotype: POTS-like HR rise without OH and low cardiovagal ratios",
   "scenario": "abnormal",
   "source": "synthetic",
   "clinicianNotes": "Tests detector composition: pots_like and cardiovagal_impairment should both flag present=true; possible_can_risk should remain false (adrenergic still normal).",
@@ -24,7 +24,7 @@
   "expectedScores": {
     "cardiovagal": {
       "assessable": true,
-      "severity": "severe"
+      "severity": "mild"
     },
     "adrenergic": {
       "assessable": true,
@@ -54,5 +54,5 @@
       }
     ]
   },
-  "createdAt": "2026-06-03T06:57:08.825Z"
+  "createdAt": "2026-08-07T09:15:36.439Z"
 }

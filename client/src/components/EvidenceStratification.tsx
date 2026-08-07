@@ -246,10 +246,10 @@ function VendorReportedTier({
       {notable.length > 0 && (
         <p className="text-[11px] text-sky-200/80 mt-3 leading-snug" data-testid="vendor-reported-note">
           The signed vendor report flagged {notable.length} notable finding
-          {notable.length === 1 ? "" : "s"}. Because the raw .ans export does not
-          contain the vendor's proprietary blood-pressure and spectral values,
-          these categories cannot be independently reproduced by HumanOS and must
-          be reviewed clinically.
+          {notable.length === 1 ? "" : "s"}. These document-level findings remain
+          a separate evidence class: they may corroborate stored .ans measurements
+          or supplement absent fields, but never silently overwrite them. Review
+          the vendor categories clinically alongside the stored measurements.
         </p>
       )}
       {sourceFiles && sourceFiles.length > 0 && (

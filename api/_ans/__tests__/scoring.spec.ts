@@ -200,8 +200,8 @@ describe("computeDiagnosticSummary — deterministic scoring", () => {
   describe("Scenario 2: abnormal — cardiovagal impairment + orthostatic hypotension", () => {
     const study = baseStudy({
       ratios: {
-        eiRatio: prov<number>(1.04),         // < severe band 1.06 for 40-50
-        valsalvaRatio: prov<number>(1.10),   // < severe band 1.21 for 40-50
+        eiRatio: prov<number>(1.04),         // Low by the PhysioPS age-specific limit
+        valsalvaRatio: prov<number>(1.10),   // Low by the PhysioPS age-specific limit
         thirtyFifteenRatio: prov<number>(0.99),
       },
       baseline: phase({ hr: 70, sbp: 130, dbp: 82 }),
@@ -209,9 +209,9 @@ describe("computeDiagnosticSummary — deterministic scoring", () => {
     });
     const summary = computeDiagnosticSummary(study);
 
-    it("grades cardiovagal as severe", () => {
-      expect(summary.cardiovagalScore.severity).toBe("severe");
-      expect(summary.cardiovagalScore.value).toBe(3);
+    it("grades cardiovagal as low without inventing a vendor-absent severe tier", () => {
+      expect(summary.cardiovagalScore.severity).toBe("mild");
+      expect(summary.cardiovagalScore.value).toBe(1);
     });
 
     it("grades adrenergic at least moderate (SBP drop ≥20)", () => {

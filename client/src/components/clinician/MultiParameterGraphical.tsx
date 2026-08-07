@@ -17,7 +17,7 @@ interface MultiParameterGraphicalProps {
 
 /**
  * Supercharged replica of Dr. Colombo's PhysioPS "Multi-Parameter Graphical"
- * report — derived entirely from the uploaded .ans file.
+ * report — decoded from the uploaded .ans file.
  *
  * Layout (top to bottom):
  *   1) Header banner with patient metadata
@@ -35,7 +35,8 @@ interface MultiParameterGraphicalProps {
  */
 export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps) {
   const mpg = report.multiParameter;
-  // THREE-WAY spectral mode (see client/src/lib/spectralProvenance.ts):
+  // FOUR-WAY spectral mode (see client/src/lib/spectralProvenance.ts):
+  //   stored      → exact PhysioPS values embedded in the .ans
   //   vendor      → plot with Colombo norm bands and normal/abnormal colouring
   //   estimated   → plot the HumanOS waveform estimates, prominently labelled,
   //                 with NO norm bands and NO normal/abnormal colouring
@@ -43,7 +44,7 @@ export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps
   // The old two-state gate hid genuine measurements behind a "not reproducible"
   // card even when the payload carried them, which is a self-contradiction.
   const mode = spectralMode(report);
-  const spectralAvailable = mode === "vendor";
+  const spectralAvailable = mode === "stored" || mode === "vendor";
   const spectralEstimated = mode === "estimated";
 
   return (
@@ -73,7 +74,7 @@ export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps
               report={report}
             />
           ) : (
-            <EcgUnavailableNotice />
+            <EcgUnavailableNotice report={report} />
           )}
 
           {/* Stored PhysioPS wavelet spectrogram. Rendered whenever the file
@@ -128,7 +129,7 @@ function Header({ report }: { report: ANSReport }) {
           </div>
           <h2 className="ps-text-display text-2xl mt-1">Multi-Parameter Graphical</h2>
           <p className="text-[12px] text-muted-foreground mt-1.5 max-w-2xl leading-relaxed">
-            Full-resolution reproduction of the six-phase Colombo autonomic report, derived directly from the uploaded .ans waveform. Every chart below includes Dr. Colombo's own plain-English explanation and analogy.
+            Six-phase Colombo autonomic report decoded from the uploaded .ans, using stored PhysioPS channels when present and waveform-derived values only where explicitly labeled. Every chart below includes Dr. Colombo's plain-English explanation and analogy.
           </p>
         </div>
         <div className="text-right text-[11px] text-muted-foreground space-y-0.5 ps-text-mono">
@@ -141,7 +142,8 @@ function Header({ report }: { report: ANSReport }) {
   );
 }
 
-function EcgUnavailableNotice() {
+function EcgUnavailableNotice({ report }: { report: ANSReport }) {
+  const storedSummary = spectralMode(report) === "stored";
   return (
     <div
       className="rounded-2xl border border-amber-400/25 bg-amber-400/5 p-5"
@@ -154,7 +156,9 @@ function EcgUnavailableNotice() {
             Raw ECG waveform not present in this .ans file
           </div>
           <p className="text-[11px] text-amber-200/80 leading-relaxed max-w-2xl">
-            The uploaded file contains the time-domain cardiovagal ratios (E/I, Valsalva and 30:15) but does not include the beat-to-beat ECG samples needed for the HR, Breathing, LFa/RFa trend, and Cardio-Respiratory Coupling charts. Vendor spectral output (LFa/RFa/sympathovagal balance) is only present in the signed vendor PDF and is shown as “not assessed” where it cannot be reproduced from this recording.
+            {storedSummary
+              ? "This file does not expose usable beat-to-beat ECG samples, but its stored PhysioPS six-phase measurements and supported visualization channels remain available below. Only waveform-dependent overlays such as raw ECG coupling are omitted."
+              : "This file does not expose usable beat-to-beat ECG samples. Stored or paired-report measurements that are present remain visible below; waveform-dependent trend and coupling overlays are omitted, and absent values remain not assessed."}
           </p>
           <p className="text-[12px] text-amber-100/90 leading-relaxed">
             To generate the trend charts, re-export the test from the PhysioPS system with the raw ECG waveform included.

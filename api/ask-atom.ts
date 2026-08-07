@@ -299,7 +299,7 @@ Audience mode (the PATIENT CONTEXT block states the viewer role — "clinician v
   • Do NOT diagnose OR exclude conditions. Never say a result "argues against"/"rules out"/"is consistent with" cardiovascular autonomic neuropathy (CAN/AAN), POTS, or any named disease. Say what was measured and that interpretation is for their clinician.
   • Do NOT give prognosis, risk levels, sensitivity/specificity, or survival/morbidity statements.
   • Plain terms only: "rest-and-digest" (parasympathetic), "fight-or-flight" (sympathetic), "calming reflex" (cardiovagal). You may still name a ratio and its number, but explain it.
-  • State the limitations plainly: the sympathetic/parasympathetic spectral split (LFa/RFa/SB) and blood pressure were NOT captured in this recording, so you cannot speak to them.
+  • State limitations for THIS upload only. Never claim that .ans files categorically lack LFa/RFa/SB or blood pressure. If PATIENT CONTEXT contains stored or vendor-reported values, explain them with their source; if absent, say they were not available in this upload.
   • Do NOT include bracketed reference markers ([1], [2], …) or a citations/sources list. Patient answers are grounded in the patient's own report, not literature.
 
 - CLINICIAN VIEW: be scientifically deep. Use the full Colombo methodology — specific phase responses, LFa/RFa/SB values and bpm² units, Ewing battery ratios and thresholds, phenotype classifications (PE, SE, SW, OD, POTS, VVS, AAN, CAN) with defining criteria, and the graded treatment protocol with doses/titration WHEN the underlying metrics are assessed. Additionally you MUST clearly separate three grounding tiers:
@@ -543,9 +543,9 @@ ${blockedStr}`;
  *
  * The signed P&S vendor documents carry categorical conclusions (e.g. "High
  * sympathetic response to stand", "Abnormal changes in HR baseline→DB") and
- * prose-printed numbers (e.g. SB = 2.59) that the raw .ans export cannot
- * reproduce — the vendor's proprietary BP/spectral aggregates are not in the
- * binary. Without this block the model only saw the deterministic engine's
+ * prose-printed numbers (e.g. SB = 2.59) that may corroborate stored .ans
+ * measurements or supplement fields absent from that export. Without this
+ * block the model only saw the deterministic engine's
  * "Domains assessed: cardiovagal" and answered questions about the attached
  * vendor reports by saying only cardiovagal was assessed, omitting the vendor's
  * own findings.
@@ -617,7 +617,8 @@ Rules for this block (HIGHEST PRIORITY, alongside the assessability rules):
 - Attribute every item here to the attached vendor report ("the attached vendor report found…"), never to this device's own recording or to the deterministic engine.
 - Keep them SEPARATE from the raw .ans measurements: the deterministic domain scores and the "Domains NOT assessed" list describe only what HumanOS measured from the .ans, and do NOT include these vendor findings.
 - Do NOT convert a vendor category into a HumanOS severity, score, phenotype, or threshold classification, and do NOT infer any value the vendor did not print.
-- State plainly that the raw .ans export does not contain the vendor's blood-pressure/spectral values, so HumanOS cannot independently reproduce or verify these findings and they must be reviewed with the clinician.
+- Do not claim that .ans files categorically lack blood-pressure or spectral values. State whether THIS upload provided stored values, compare them with the document when both exist, and surface discrepancies for clinician review.
+- HumanOS may compare printed numbers with measurements stored in this .ans, but it cannot independently reproduce or verify unprinted vendor categorical conclusions; those conclusions must remain attributed to the document and reviewed with the clinician.
 - In PATIENT view describe them in plain language (e.g. "a high fight-or-flight response when you stood up", "a possible risk of light-headedness on standing"), still attributed to the vendor report, without diagnosing or excluding any condition.`;
 }
 

@@ -158,6 +158,6 @@ describe("PatientPortalTwoColumn — vendor findings survive in the rendered cop
     // when no vendor document is attached.
     const text = container.textContent || "";
     expect(text).not.toMatch(/None of the specific autonomic dysfunction patterns|reassuring/i);
-    expect(text).toMatch(/Not scorable/i);
+    expect(text).toMatch(/composite wellness score was not calculated/i);
   });
 });

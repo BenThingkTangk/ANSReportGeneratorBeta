@@ -68,7 +68,8 @@ describe("SYSTEM_PROMPT — patient/clinician tone isolation rules", () => {
     expect(SYSTEM_PROMPT).toMatch(/Do NOT give prognosis/i);
   });
   it("patient view: state BP/spectral limitations + no bracketed citations", () => {
-    expect(SYSTEM_PROMPT).toMatch(/spectral split \(LFa\/RFa\/SB\) and blood pressure were NOT captured/i);
+    expect(SYSTEM_PROMPT).toMatch(/State limitations for THIS upload only/i);
+    expect(SYSTEM_PROMPT).toMatch(/Never claim that \.ans files categorically lack LFa\/RFa\/SB or blood pressure/i);
     expect(SYSTEM_PROMPT).toMatch(/Do NOT include bracketed reference markers/i);
   });
   it("clinician view: distinguishes measured / external(URL) / private-corpus", () => {

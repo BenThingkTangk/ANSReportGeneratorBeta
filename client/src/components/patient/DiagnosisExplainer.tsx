@@ -224,7 +224,7 @@ export function DiagnosisExplainer({
             ? "Some traceable measurements may be shown as observations, but the study did not meet the requirements for an overall autonomic interpretation. Missing or unusable domains remain “Not assessed,” never normal."
             : vendorReportAttached
               ? "Your ECG/time-domain metrics and cardiovagal (Ewing) reflex ratios were measured and fell within normal limits. Branch balance remains “Not assessed” because readable LFa/RFa values were not recovered from the attached vendor report; your clinician can verify the signed report."
-              : "Your ECG/time-domain metrics and cardiovagal (Ewing) reflex ratios were measured and fell within normal limits. Branch balance is shown separately as “Not assessed” because the raw .ans export does not contain the vendor spectral aggregates; a paired vendor report with readable LFa/RFa values is required."}
+              : "Your available ECG/time-domain metrics and cardiovagal reflex ratios fell within their listed ranges. Branch balance is shown separately as “Not assessed” because this upload did not provide clinically usable LFa/RFa/SB values; no value was guessed."}
         </p>
       </motion.div>
     );

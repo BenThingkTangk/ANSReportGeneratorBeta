@@ -49,9 +49,10 @@ export function ColomboReferences() {
       <p className="text-xs text-muted-foreground leading-relaxed mb-3">
         Reference ranges for the three cardiovagal ratios come from one
         authoritative age-specific table used by every surface in this report. The proprietary
-        P&amp;S aggregates (LFa / RFa / sympathovagal balance) are vendor outputs and are not
-        independently validated — they are only ever displayed when a signed vendor report supplies
-        them.
+        P&amp;S aggregates (LFa / RFa / sympathovagal balance) are proprietary PhysioPS outputs and
+        are not independently validated. They are displayed only when read directly from the
+        uploaded .ans file or reconciled from an attached vendor report, with source provenance
+        shown beside the result.
       </p>
 
       <h4 className="text-[11px] font-semibold text-foreground/80 mb-1.5">

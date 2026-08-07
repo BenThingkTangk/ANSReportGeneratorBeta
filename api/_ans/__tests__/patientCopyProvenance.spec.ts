@@ -63,10 +63,11 @@ describe("patient copy — measured Ewing ratios + vendor-spectral provenance", 
 
   it("patient copy explains the vendor spectral-aggregate limitation", () => {
     expect(patient.toLowerCase()).toContain("spectral");
-    // The precise distinction: proprietary vendor spectral branch-balance, not
-    // present in the raw .ans export.
-    expect(patient).toMatch(/proprietary spectral|spectral (aggregates|analysis)/i);
-    expect(patient).toMatch(/\.ans export/i);
+    // This fixture also fails signal usability, so the copy explains the
+    // recording-specific reason without claiming all .ans files lack data.
+    expect(patient).toMatch(/ECG signal-quality check did not pass/i);
+    expect(patient).toMatch(/absent spectral or other domains/i);
+    expect(patient).not.toMatch(/\.ans files (do not|don't|never) (contain|include|store)/i);
   });
 
   it("patient copy does NOT use the old misleading / disclaimer-wall phrasing", () => {

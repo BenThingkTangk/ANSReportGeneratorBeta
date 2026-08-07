@@ -181,12 +181,12 @@ const FIXTURES: FixtureSpec[] = [
     },
   },
 
-  // 3. ABNORMAL — severe cardiovagal impairment, no orthostatic hypotension.
+  // 3. ABNORMAL — PhysioPS-low cardiovagal ratios, no orthostatic hypotension.
   {
     id: "abnormal-001-cardiovagal-severe",
-    description: "Severe cardiovagal impairment, BP stable on stand",
+    description: "Low cardiovagal ratios, BP stable on stand",
     scenario: "abnormal",
-    clinicianNotes: "All three ratios below age-banded severe threshold. CAN risk likely false here because adrenergic is normal.",
+    clinicianNotes: "All three ratios are Low by the PhysioPS age-specific limits. The vendor report does not publish a separate severe ratio cutoff.",
     fileName: "abnormal-001-cardiovagal-severe.ans",
     provenance: "synthetic",
     ans: {
@@ -208,7 +208,7 @@ const FIXTURES: FixtureSpec[] = [
       valsalvaRatio: { value: 1.10, tolerance: 0.02 },
     },
     expectedScores: {
-      cardiovagal: { assessable: true, severity: "severe", expectedValue: 3 },
+      cardiovagal: { assessable: true, severity: "mild", expectedValue: 1 },
       adrenergic: { assessable: true, severity: "normal" },
       sudomotor: { assessable: false },
     },
@@ -218,7 +218,7 @@ const FIXTURES: FixtureSpec[] = [
         { id: "orthostatic_hypotension", present: false },
         { id: "possible_can_risk", present: false },
       ],
-      expectedFindingCodes: ["E_I_RATIO_SEVERE", "VALSALVA_RATIO_SEVERE"],
+      expectedFindingCodes: ["E_I_RATIO_LOW", "VALSALVA_RATIO_LOW"],
     },
   },
 
@@ -239,7 +239,7 @@ const FIXTURES: FixtureSpec[] = [
       asciiBlock: buildAsciiBlock(
         { hr: 70, sbp: 132, dbp: 82 },
         { hr: 85, sbp: 105, dbp: 72 },
-        { eiRatio: 1.15, valsalvaRatio: 1.40, thirtyFifteenRatio: 1.08 },
+        { eiRatio: 1.15, valsalvaRatio: 1.40, thirtyFifteenRatio: 1.10 },
       ),
     },
     expectedFields: {
@@ -411,7 +411,7 @@ const FIXTURES: FixtureSpec[] = [
       asciiBlock: buildAsciiBlock(
         { hr: 70, sbp: 118, dbp: 76 },
         { hr: 115, sbp: 116, dbp: 78 },
-        { eiRatio: 1.30, valsalvaRatio: 1.60, thirtyFifteenRatio: 1.10 },
+        { eiRatio: 1.30, valsalvaRatio: 1.60, thirtyFifteenRatio: 1.11 },
       ),
     },
     expectedFields: {
@@ -447,8 +447,10 @@ const FIXTURES: FixtureSpec[] = [
       asciiBlock: buildAsciiBlock(
         { hr: 72, sbp: 130, dbp: 82 },
         { hr: 80, sbp: 120, dbp: 76 },
-        // E/I right at 50-60 band abnormal cutoff (1.10) — should not trigger severe.
-        { eiRatio: 1.10, valsalvaRatio: 1.35, thirtyFifteenRatio: 1.01 },
+        // 30:15 is exactly at the calibrated limit. PhysioPS prints a strict
+        // greater-than operator, so equality is Low (without an invented
+        // severe subdivision).
+        { eiRatio: 1.10, valsalvaRatio: 1.35, thirtyFifteenRatio: 1.092 },
       ),
     },
     expectedFields: {
@@ -461,6 +463,7 @@ const FIXTURES: FixtureSpec[] = [
     expectedFlags: {
       phenotypes: [
         { id: "orthostatic_hypotension", present: false },
+        { id: "cardiovagal_impairment", present: true },
       ],
     },
   },
@@ -654,10 +657,10 @@ const FIXTURES: FixtureSpec[] = [
     },
   },
 
-  // 15. MIXED-PHENOTYPE — POTS-like HR rise PLUS cardiovagal impairment (rare combo).
+  // 15. MIXED-PHENOTYPE — POTS-like HR rise PLUS low cardiovagal ratios.
   {
     id: "mixed-001-pots-and-cardiovagal",
-    description: "Mixed phenotype: POTS-like HR rise without OH AND severe cardiovagal impairment",
+    description: "Mixed phenotype: POTS-like HR rise without OH and low cardiovagal ratios",
     scenario: "abnormal",
     clinicianNotes: "Tests detector composition: pots_like and cardiovagal_impairment should both flag present=true; possible_can_risk should remain false (adrenergic still normal).",
     fileName: "mixed-001-pots-and-cardiovagal.ans",
@@ -681,7 +684,7 @@ const FIXTURES: FixtureSpec[] = [
       valsalvaRatio: { value: 1.18, tolerance: 0.02 },
     },
     expectedScores: {
-      cardiovagal: { assessable: true, severity: "severe" },
+      cardiovagal: { assessable: true, severity: "mild" },
       adrenergic: { assessable: true, severity: "normal" },
       sudomotor: { assessable: false },
     },

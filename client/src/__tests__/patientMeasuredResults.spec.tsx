@@ -111,7 +111,9 @@ describe("Patient report — measured Ewing ratio cards + honest provenance", ()
     const text = (container.textContent || "").toLowerCase();
 
     expect(text).toContain("spectral");
-    expect(text).toContain(".ans export");
+    expect(text).toContain("this file");
+    expect(text).toContain("some physiops .ans files include stored");
+    expect(text).not.toMatch(/\.ans files (do not|don't|never) (contain|include|store)/i);
     expect(text).not.toContain("not enough heart-rhythm");
     expect(text).not.toContain("not medical advice");
   });

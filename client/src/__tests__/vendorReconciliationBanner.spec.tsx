@@ -87,6 +87,32 @@ describe("VendorReconciliationBanner", () => {
     expect(container.textContent).not.toMatch(/not reproducible/i);
   });
 
+  it("keeps stored PhysioPS measurements available without requiring a PDF", () => {
+    const { container } = render(
+      <VendorReconciliationBanner
+        report={baseReport({
+          spectralAvailable: true,
+          spectralSource: "ans_stored",
+          phaseEvents: [
+            {
+              phase: "Baseline-A",
+              LFa: 1.2,
+              RFa: 0.8,
+              SB: 1.5,
+              provenance: {
+                LFa: { method: "ans_stored", validation: "not_applicable" },
+                RFa: { method: "ans_stored", validation: "not_applicable" },
+              },
+            } as any,
+          ],
+        })}
+      />,
+    );
+    expect(container.textContent).toContain("Stored PhysioPS measurements");
+    expect(container.textContent).toContain("clinically available");
+    expect(container.textContent).not.toMatch(/values.*unavailable/i);
+  });
+
   it("renders the server's explicit no-vendor state as no vendor, not a mismatch", () => {
     const { container } = render(
       <VendorReconciliationBanner

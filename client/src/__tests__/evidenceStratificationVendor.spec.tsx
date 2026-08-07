@@ -6,7 +6,7 @@
  * tier is verbatim + provenance and is kept apart from the deterministic
  * measured/hypothesis tiers.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { VendorReportExtraction } from "@shared/vendorExtraction";
 
 vi.mock("framer-motion", async () => {
@@ -57,8 +57,13 @@ const cleanReport: any = {
 };
 
 describe("EvidenceStratification — vendor-reported findings tier", () => {
+  afterEach(async () => {
+    const { cleanup } = await import("@testing-library/react");
+    cleanup();
+  });
+
   it("renders a separate vendor tier with the flagged findings + provenance", async () => {
-    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { render, screen } = await import("@testing-library/react");
     const { EvidenceStratification } = await import("../components/EvidenceStratification");
     render(<EvidenceStratification report={cleanReport} vendorExtraction={vendorExtraction()} />);
 
@@ -72,14 +77,12 @@ describe("EvidenceStratification — vendor-reported findings tier", () => {
     expect(txt).toMatch(/summary\.pdf/);
     // The note about clinical review of vendor categories.
     expect(screen.getByTestId("vendor-reported-note").textContent ?? "").toMatch(/reviewed clinically|review/i);
-    cleanup();
   });
 
   it("omits the vendor tier entirely when no vendor extraction is attached", async () => {
-    const { render, screen, cleanup } = await import("@testing-library/react");
+    const { render, screen } = await import("@testing-library/react");
     const { EvidenceStratification } = await import("../components/EvidenceStratification");
     render(<EvidenceStratification report={cleanReport} />);
     expect(screen.queryByTestId("tier-vendor-reported")).toBeNull();
-    cleanup();
   });
 });

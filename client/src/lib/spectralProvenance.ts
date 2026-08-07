@@ -3,8 +3,11 @@ import type { ANSReport, PhaseMetrics } from "@shared/schema";
 /**
  * Single source of truth for how the clinician surfaces treat spectral numbers.
  *
- * THREE MODES — they are NOT interchangeable:
+ * FOUR MODES — they are NOT interchangeable:
  *
+ *  - "stored"      LFa/RFa/SB were read verbatim from the PhysioPS analysis
+ *                  summary embedded in the uploaded .ans. Clinically usable;
+ *                  no paired PDF is required to display or interpret them.
  *  - "vendor"      LFa/RFa/SB came from the paired signed PhysioPS report at a
  *                  clinically-usable provenance tier. Norm colour-coding, normal
  *                  /abnormal judgements and clinical interpretation are allowed.
@@ -23,7 +26,7 @@ import type { ANSReport, PhaseMetrics } from "@shared/schema";
  *  - "unavailable" No usable waveform and no vendor value: show the honest
  *                  unavailable state with no numbers at all.
  */
-export type SpectralMode = "vendor" | "estimated" | "unavailable";
+export type SpectralMode = "stored" | "vendor" | "estimated" | "unavailable";
 
 /** Wording used everywhere an estimate is shown. Kept identical across surfaces. */
 export const ESTIMATE_BADGE = "HumanOS estimate — not PhysioPS-validated";
@@ -75,11 +78,23 @@ function hasAnyTrendPoint(report: ANSReport): boolean {
 }
 
 /**
- * Decide the mode for a report. `spectralAvailable === true` is the ONLY route
- * to "vendor". An estimate is recognised from provenance + the presence of at
- * least one real number, so we never label an empty payload "estimated".
+ * Decide the mode for a report. Source and per-phase provenance distinguish
+ * stored .ans values from paired-PDF values. An estimate is recognised from
+ * provenance + a real number, so an empty payload is never labelled estimated.
  */
 export function spectralMode(report: ANSReport): SpectralMode {
+  if (
+    report.spectralSource === "ans_stored" ||
+    (report.phaseEvents ?? []).some(
+      (phase) =>
+        phase.provenance?.LFa?.method === "ans_stored" ||
+        phase.provenance?.RFa?.method === "ans_stored",
+    )
+  ) {
+    return "stored";
+  }
+  if (report.spectralSource === "vendor_reported") return "vendor";
+  // Backward-compatible payloads may predate spectralSource.
   if (report.spectralAvailable === true) return "vendor";
   if (
     report.spectralSource === "humanos_estimated" &&

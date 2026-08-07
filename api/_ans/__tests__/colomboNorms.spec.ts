@@ -82,19 +82,13 @@ describe("ageContinuousNorm — consolidated wellness curves (was upload.ts norm
 });
 
 describe("Ewing ratios — one-sided (greater-than) classification (S1-3)", () => {
-  // CONTRACT CHANGE (documented, not a weakening): there is now ONE
-  // authoritative age-specific ratio reference table (AGE_RATIO_REFERENCE).
-  // `EWING_THRESHOLDS` is the age-UNKNOWN fallback derived from that table's
-  // widest band, and the vendor's age-independent printed floor is retained as
-  // `vendorPublishedFloor` for traceability. Three competing threshold sets can
-  // no longer coexist in one report.
-  it("age-unknown thresholds derive from the widest band of the authoritative table", () => {
+  it("age-unknown thresholds use the vendor-published floor", () => {
     expect(EWING_THRESHOLDS.eiRatio.normalAbove).toBeCloseTo(
-      ratioBandForAge("eiRatio", null).normalAtOrAbove, 5);
+      AGE_RATIO_REFERENCE.eiRatio.vendorPublishedFloor, 5);
     expect(EWING_THRESHOLDS.valsalvaRatio.normalAbove).toBeCloseTo(
-      ratioBandForAge("valsalvaRatio", null).normalAtOrAbove, 5);
+      AGE_RATIO_REFERENCE.valsalvaRatio.vendorPublishedFloor, 5);
     expect(EWING_THRESHOLDS.thirtyFifteenRatio.normalAbove).toBeCloseTo(
-      ratioBandForAge("thirtyFifteenRatio", null).normalAtOrAbove, 5);
+      AGE_RATIO_REFERENCE.thirtyFifteenRatio.vendorPublishedFloor, 5);
   });
 
   it("retains the vendor's printed age-independent floors for traceability", () => {
@@ -111,6 +105,29 @@ describe("Ewing ratios — one-sided (greater-than) classification (S1-3)", () =
         ratioBandForAge("valsalvaRatio", age).normalAtOrAbove, 5);
       expect(ageContinuousNorm("ThirtyFifteen", age).lo).toBeCloseTo(
         ratioBandForAge("thirtyFifteenRatio", age).normalAtOrAbove, 5);
+    }
+  });
+
+  it("reproduces all 11 paired PhysioPS page-5 limits and classifications", () => {
+    const cases = [
+      { age: 80, values: [1.03, 1.13, 1.18], limits: [1.089, 1.150, 1.089], labels: ["Low", "Low", "Normal"] },
+      { age: 30, values: [1.44, 1.49, 1.19], limits: [1.107, 1.370, 1.099], labels: ["Normal", "Normal", "Normal"] },
+      { age: 79, values: [1.05, 1.06, 1.13], limits: [1.089, 1.150, 1.089], labels: ["Low", "Low", "Normal"] },
+      { age: 24, values: [1.41, 1.60, 1.48], limits: [1.110, 1.370, 1.101], labels: ["Normal", "Normal", "Normal"] },
+      { age: 18, values: [1.42, 1.79, 1.38], limits: [1.113, 1.600, 1.102], labels: ["Normal", "Normal", "Normal"] },
+      { age: 39, values: [1.15, 1.21, 1.09], limits: [1.102, 1.360, 1.096], labels: ["Normal", "Low", "Low"] },
+      { age: 40, values: [1.25, 1.00, 1.52], limits: [1.102, 1.360, 1.096], labels: ["Normal", "Low", "Normal"] },
+      { age: 17, values: [1.41, 1.39, 1.39], limits: [1.117, 1.650, 1.104], labels: ["Normal", "Low", "Normal"] },
+      { age: 63, values: [1.05, 1.16, 1.14], limits: [1.089, 1.180, 1.089], labels: ["Low", "Low", "Normal"] },
+      { age: 47, values: [1.15, 1.10, 1.16], limits: [1.099, 1.240, 1.095], labels: ["Normal", "Low", "Normal"] },
+      { age: 26, values: [1.29, 1.31, 1.61], limits: [1.110, 1.370, 1.101], labels: ["Normal", "Low", "Normal"] },
+    ] as const;
+    const keys = ["eiRatio", "valsalvaRatio", "thirtyFifteenRatio"] as const;
+    for (const c of cases) {
+      keys.forEach((key, index) => {
+        expect(ratioBandForAge(key, c.age).normalAtOrAbove).toBeCloseTo(c.limits[index], 3);
+        expect(classifyRatioForAge(c.values[index], key, c.age)?.label).toBe(c.labels[index]);
+      });
     }
   });
 
@@ -140,10 +157,10 @@ describe("Ewing ratios — one-sided (greater-than) classification (S1-3)", () =
     expect(c.label).toBe("Normal");
   });
 
-  it("a value just below threshold is Borderline Low, not Normal", () => {
+  it("a value below threshold is Low, matching the PhysioPS ratio panel", () => {
     const c = classifyEwing(1.05, EWING_THRESHOLDS.eiRatio);
-    expect(c.label).toBe("Borderline Low");
-    expect(c.severity).toBe("Warning");
+    expect(c.label).toBe("Low");
+    expect(c.severity).toBe("Abnormal");
   });
 
   it("a frankly low value is Abnormal", () => {
@@ -152,10 +169,10 @@ describe("Ewing ratios — one-sided (greater-than) classification (S1-3)", () =
     expect(c.severity).toBe("Abnormal");
   });
 
-  it("a value at exactly the threshold is Normal (inclusive)", () => {
+  it("a value at exactly the threshold is Low because the printed operator is strict >", () => {
     expect(
       classifyEwing(EWING_THRESHOLDS.eiRatio.normalAbove, EWING_THRESHOLDS.eiRatio).label,
-    ).toBe("Normal");
+    ).toBe("Low");
   });
 
   it("never produces a 'Borderline High' or 'High' label for one-sided norms", () => {
@@ -165,15 +182,17 @@ describe("Ewing ratios — one-sided (greater-than) classification (S1-3)", () =
     }
   });
 
-  it("normal-range label renders as '\u2265 X' from the authoritative table", () => {
+  it("normal-range label renders as '> X' from the authoritative table", () => {
     expect(ewingNormalRangeLabel(EWING_THRESHOLDS.eiRatio)).toBe(
-      `\u2265 ${ratioBandForAge("eiRatio", null).normalAtOrAbove.toFixed(3)}`,
+      `> ${ratioBandForAge("eiRatio", null).normalAtOrAbove.toFixed(3)}`,
     );
   });
 
-  it("ratioReferenceLabel is age-specific and states the band it used", () => {
-    expect(ratioReferenceLabel("eiRatio", 48)).toBe("normal \u2265 1.12 (age 40\u201349)");
-    expect(ratioReferenceLabel("eiRatio", null)).toContain("age unknown");
+  it("ratioReferenceLabel is age-specific and states its calibration status", () => {
+    expect(ratioReferenceLabel("eiRatio", 48)).toBe(
+      "normal > 1.098 (age 48; PhysioPS-calibrated)",
+    );
+    expect(ratioReferenceLabel("eiRatio", null)).toContain("vendor-published floor");
   });
 });
 

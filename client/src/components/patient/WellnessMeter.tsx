@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { ChevronDown, CircleCheck } from "lucide-react";
 import type { ANSReport, WellnessTier } from "@shared/schema";
 
 interface WellnessMeterProps {
@@ -42,30 +43,54 @@ export function WellnessMeter({ report }: WellnessMeterProps) {
   if (notScorable) {
     return (
       <div
-        className="rounded-2xl border border-border/30 p-6"
+        className="rounded-2xl border border-border/30 bg-card/40 p-5"
         data-testid="wellness-not-scorable"
       >
-        <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-          Wellness score
+        <div className="flex items-start gap-3">
+          <CircleCheck
+            className="mt-0.5 h-5 w-5 shrink-0 text-cyan-400"
+            aria-hidden="true"
+          />
+          <div className="min-w-0">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              Test results
+            </div>
+            <div className="mt-1 text-lg font-semibold" data-testid="wellness-not-scorable-title">
+              Measurements available
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+              Your recorded PhysioPS values and reflex results are ready below. A single
+              composite wellness score was not calculated for this recording.
+            </p>
+          </div>
         </div>
-        <div className="mt-2 text-2xl font-semibold" data-testid="wellness-not-scorable-title">
-          Not scorable
-        </div>
-        <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-          {scorability?.notice ??
-            "A composite wellness score is withheld because essential inputs are missing or unusable."}
-        </p>
-        {scorability?.blockers?.length ? (
-          <ul className="mt-3 space-y-1.5 text-xs text-muted-foreground list-disc pl-4">
-            {scorability.blockers.map((b) => (
-              <li key={b.code}>{b.message}</li>
-            ))}
-          </ul>
-        ) : null}
-        <p className="mt-3 text-xs text-muted-foreground/80">
-          Your measured values are still shown below as observations. They are not an assessment of
-          your overall autonomic function, and no tier or grade is assigned.
-        </p>
+        <details className="group mt-4 border-t border-border/20 pt-3">
+          <summary
+            className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-foreground/80"
+            data-testid="wellness-not-scorable-details"
+          >
+            Why no composite score?
+            <ChevronDown
+              className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
+          </summary>
+          <div className="pb-1 pt-2 text-xs leading-relaxed text-muted-foreground">
+            {scorability?.blockers?.length ? (
+              <ul className="space-y-1.5 list-disc pl-4">
+                {scorability.blockers.map((b) => (
+                  <li key={b.code}>{b.message}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>One or more inputs needed for a reliable composite were unavailable.</p>
+            )}
+            <p className="mt-2">
+              The values below remain valid recorded observations. No overall tier or grade is
+              assigned from an incomplete composite.
+            </p>
+          </div>
+        </details>
       </div>
     );
   }

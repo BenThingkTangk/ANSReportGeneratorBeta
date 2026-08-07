@@ -19,7 +19,7 @@
  */
 
 import {
-  AGE_RATIO_REFERENCE,
+  ratioBandForAge,
   type EwingRatioKey,
 } from "../../shared/colomboNorms.js";
 
@@ -32,6 +32,13 @@ export interface BandedThreshold {
   abnormalBelow: number;
   /** Threshold below which the value is considered SEVERELY abnormal. */
   severeBelow: number;
+  /** True for the age-unavailable vendor-floor fallback row. */
+  ageUnknownFallback?: boolean;
+  /**
+   * PhysioPS page 5 reports these ratios as a binary Normal/Low result.
+   * Custom threshold sets may omit this to retain mild/severe subdivision.
+   */
+  binaryLow?: boolean;
 }
 
 export interface CardiovagalThresholds {
@@ -85,12 +92,31 @@ export interface Thresholds {
  * how three mutually inconsistent normal-limit sets ended up in one report.
  */
 function bandsFrom(key: EwingRatioKey): BandedThreshold[] {
-  return AGE_RATIO_REFERENCE[key].bands.map((b) => ({
-    ageMin: b.ageMin,
-    ageMax: b.ageMax,
-    abnormalBelow: b.normalAtOrAbove,
-    severeBelow: b.severeBelow,
-  }));
+  const fallback = ratioBandForAge(key, null);
+  const ageBands = Array.from({ length: 120 }, (_, index) => {
+    const age = index + 1;
+    const band = ratioBandForAge(key, age);
+    return {
+      ageMin: age,
+      ageMax: age + 1,
+      abnormalBelow: band.normalAtOrAbove,
+      // PhysioPS page 5 supplies only a Normal/Low boundary. Do not invent a
+      // second "severe" cutoff from the paired verification corpus.
+      severeBelow: Number.NEGATIVE_INFINITY,
+      binaryLow: true,
+    } satisfies BandedThreshold;
+  });
+  return [
+    {
+      ageMin: 0,
+      ageMax: 0,
+      abnormalBelow: fallback.normalAtOrAbove,
+      severeBelow: Number.NEGATIVE_INFINITY,
+      ageUnknownFallback: true,
+      binaryLow: true,
+    },
+    ...ageBands,
+  ];
 }
 
 export const DEFAULT_THRESHOLDS: Thresholds = {
@@ -128,14 +154,17 @@ export function bandForAge(
   age: number | null,
 ): BandedThreshold {
   if (age == null || !isFinite(age)) {
-    // Pick the broadest band (largest age window) as a safe fallback.
+    const explicitFallback = bands.find((b) => b.ageUnknownFallback);
+    if (explicitFallback) return explicitFallback;
+    // Backward-compatible behavior for custom threshold sets.
     return bands.reduce((widest, b) =>
       (b.ageMax - b.ageMin) > (widest.ageMax - widest.ageMin) ? b : widest,
     bands[0]);
   }
-  for (const b of bands) {
+  const ageBands = bands.filter((b) => !b.ageUnknownFallback);
+  for (const b of ageBands) {
     if (age >= b.ageMin && age < b.ageMax) return b;
   }
   // Out of range — clamp to the closest band.
-  return age < bands[0].ageMin ? bands[0] : bands[bands.length - 1];
+  return age < ageBands[0].ageMin ? ageBands[0] : ageBands[ageBands.length - 1];
 }

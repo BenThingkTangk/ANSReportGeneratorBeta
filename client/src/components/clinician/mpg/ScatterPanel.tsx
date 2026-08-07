@@ -156,7 +156,7 @@ function BaselineLfaRfa({ mpg, est }: { mpg: MultiParameterGraphical; est: boole
       testId="chart-baseline-lfa-rfa"
     >
       <ResponsiveContainer width="100%" height={180}>
-        <ScatterChart margin={{ top: 8, right: 12, left: 4, bottom: 22 }}>
+        <ScatterChart margin={{ top: 8, right: 12, left: 12, bottom: 22 }}>
           <CartesianGrid stroke="hsl(var(--border) / 0.15)" strokeDasharray="2 4" />
           <XAxis
             type="number"
@@ -179,7 +179,7 @@ function BaselineLfaRfa({ mpg, est }: { mpg: MultiParameterGraphical; est: boole
             tickMargin={6}
             fontSize={AXIS_TICK_FONT_SIZE}
             label={{ value: "RFa (Parasympathetic)", angle: -90, fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideLeft" }}
-            width={44}
+            width={52}
           />
           <ZAxis range={[120, 120]} />
           {/* Normal zone: ratio 0.4 - 1.0, RFa 0.5 - 6, LFa 0 - 8.
@@ -258,7 +258,7 @@ function DeepBreathingRfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age
       testId="chart-db-rfa"
     >
       <ResponsiveContainer width="100%" height={180}>
-        <ScatterChart margin={{ top: 8, right: 12, left: 4, bottom: 22 }}>
+        <ScatterChart margin={{ top: 8, right: 12, left: 12, bottom: 22 }}>
           <CartesianGrid stroke="hsl(var(--border) / 0.15)" strokeDasharray="2 4" />
           <XAxis
             type="number"
@@ -276,10 +276,10 @@ function DeepBreathingRfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age
             domain={[0, Math.max(10, band.hi * 1.3, val * 1.3)]}
             stroke={AXIS_LINE_COLOR}
             tick={AXIS_TICK}
+            tickFormatter={(value: number) => Number(value.toFixed(2)).toString()}
             tickMargin={6}
             fontSize={AXIS_TICK_FONT_SIZE}
-            width={44}
-            label={{ value: "RFa (bpm²)", angle: -90, fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideLeft" }}
+            width={52}
           />
           {/* Age-normal band: SUPPRESSED for estimates. */}
           {(est ? [] : bandData).map((b) => (
@@ -363,7 +363,7 @@ function ValsalvaLfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age: num
       testId="chart-valsalva-lfa"
     >
       <ResponsiveContainer width="100%" height={180}>
-        <ScatterChart margin={{ top: 8, right: 12, left: 4, bottom: 22 }}>
+        <ScatterChart margin={{ top: 8, right: 12, left: 12, bottom: 22 }}>
           <CartesianGrid stroke="hsl(var(--border) / 0.15)" strokeDasharray="2 4" />
           <XAxis
             type="number"
@@ -381,10 +381,10 @@ function ValsalvaLfa({ mpg, age, est }: { mpg: MultiParameterGraphical; age: num
             domain={[0, Math.max(20, band.hi * 1.3, val * 1.3)]}
             stroke={AXIS_LINE_COLOR}
             tick={AXIS_TICK}
+            tickFormatter={(value: number) => Number(value.toFixed(2)).toString()}
             tickMargin={6}
             fontSize={AXIS_TICK_FONT_SIZE}
-            width={44}
-            label={{ value: "LFa (bpm²)", angle: -90, fill: AXIS_TICK_COLOR, fontSize: AXIS_TITLE_FONT_SIZE, fontWeight: 500, position: "insideLeft" }}
+            width={52}
           />
           {/* Age-normal band: SUPPRESSED for estimates. */}
           {(est ? [] : bandData).map((b) => (

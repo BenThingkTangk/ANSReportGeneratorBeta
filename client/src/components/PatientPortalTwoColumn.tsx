@@ -85,6 +85,12 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
   // unavailable. The visible % is NEVER shown (gauge shows "Not assessed").
   const visSymp = spectralAvailable ? (ab.sympathetic ?? 50) : 50;
   const visPara = spectralAvailable ? (ab.parasympathetic ?? 50) : 50;
+  const balanceLabel =
+    !spectralAvailable
+      ? "Not assessed"
+      : notScorable
+        ? "Recorded balance"
+        : (tier ?? "Recorded balance");
 
   // Optional AI enrichment. Runs in the background and only ever UPGRADES the
   // text on success; any failure is swallowed so the deterministic synopsis stays
@@ -218,7 +224,7 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
                 hrvRmssdMs={rmssd}
                 hrvSdnnMs={sdnn}
                 lfHfRatio={lfHf}
-                balanceLabel={spectralAvailable ? (tier ?? "Not scorable") : "Not assessed"}
+                balanceLabel={balanceLabel}
                 available={spectralAvailable}
                 vendorReportAttached={vendorReportAttached}
                 // AUTHORIZED PhysioPS OUTPUT PROTOCOL: this is the PATIENT

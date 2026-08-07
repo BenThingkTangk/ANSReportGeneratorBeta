@@ -81,7 +81,7 @@ describe("vendor findings threaded into summaries (BLOCKER B)", () => {
       // Honest about the raw recording's limits.
       expect(withVendor).toMatch(/blood-pressure|spectral/i);
       expect(withVendor).toMatch(/attached vendor report was processed/i);
-      expect(withVendor).toMatch(/readable LFa\/RFa values were not recovered/i);
+      expect(withVendor).toMatch(/readable LFa\/RFa spectral values were not recovered/i);
       expect(withVendor).not.toMatch(/supply the paired vendor|unless the paired vendor/i);
     });
 
@@ -120,8 +120,8 @@ describe("vendor findings threaded into summaries (BLOCKER B)", () => {
         } as any,
       } satisfies Partial<ANSReport>;
       const synopsis = buildPatientSynopsis(unsafe);
-      expect(synopsis).toMatch(/composite wellness score is not available/i);
-      expect(synopsis).toMatch(/ECG quality gate did not pass/i);
+      expect(synopsis).toMatch(/overall wellness score is not available/i);
+      expect(synopsis).toMatch(/ECG signal-quality check did not pass/i);
       expect(synopsis).not.toMatch(/captured clean/i);
       expect(synopsis).not.toMatch(/None of the specific autonomic dysfunction patterns/i);
       expect(synopsis).not.toMatch(/responding as expected/i);

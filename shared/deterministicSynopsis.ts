@@ -83,7 +83,7 @@ export function vendorFindingsPatientSentence(v: VendorFindingsInput | undefined
   if (phrases.length === 0) return null;
   return (
     `Your attached vendor report (reviewed by the clinic) flagged ${humanList(phrases)}. ` +
-    "These come from the signed vendor report, not from this device's raw recording, which did not capture blood-pressure or the sympathetic/parasympathetic spectral values — so these findings must be reviewed with your clinician."
+    "These are document-level findings from the signed vendor report. They may corroborate measurements stored in the .ans or supplement fields absent from it, and should be reviewed with your clinician."
   );
 }
 
@@ -208,8 +208,8 @@ export function ewingRatioReadings(
 /**
  * Whether the vendor's proprietary spectral branch-balance aggregates
  * (LFa/RFa and their sympathovagal-balance ratio SB) are available. They live
- * only in the signed vendor report, not in the raw .ans export, so absence is
- * an EXPORT-FORMAT limitation — not "insufficient heart-rhythm signal".
+ * either as exact values stored in supported PhysioPS .ans files or as
+ * identity-matched values from a signed vendor report.
  */
 export function hasVendorSpectral(report: Partial<ANSReport>): boolean {
   // Explicit flag wins when present; otherwise fall back to the balance check.
@@ -345,9 +345,9 @@ export function buildPatientSynopsis(report: Partial<ANSReport>, vendor?: Vendor
     sentences.push(
       ecgUsable
         ? vendorAttached
-          ? `${name}, this upload contains measured ECG results and cardiovagal (Ewing) reflex ratios, shown below. The attached vendor report was processed, but readable LFa/RFa values were not recovered, so sympathetic-vs-parasympathetic branch balance remains "Not assessed." Your clinician can verify those values against the signed report.`
-          : `${name}, this upload contains measured ECG results and cardiovagal (Ewing) reflex ratios, shown below. The sympathetic-vs-parasympathetic "branch balance" split comes from the device vendor's proprietary spectral analysis (LFa/RFa), which is not contained in the raw .ans export, so it remains "Not assessed." A paired vendor report with readable LFa/RFa values is required to populate it.`
-        : `${name}, a composite wellness score is not available for this study because the ECG quality gate did not pass and the vendor's proprietary spectral analysis values for sympathetic-vs-parasympathetic balance (LFa/RFa) are not contained in the raw .ans export. Measured values that remain traceable to the file are shown below as observations, not as an overall autonomic assessment.`,
+          ? `${name}, this upload contains measured ECG results and cardiovagal (Ewing) reflex ratios, shown below. The attached vendor report was processed, but readable LFa/RFa spectral values were not recovered, so sympathetic-vs-parasympathetic branch balance remains "Not assessed." Your clinician can verify those values against the signed report.`
+          : `${name}, this upload contains measured ECG results and cardiovagal reflex ratios, shown below. This specific file did not provide clinically usable LFa/RFa/SB spectral branch-balance values, so that domain remains "Not assessed." Some PhysioPS .ans files store those values directly; a matched vendor report can supplement them when absent.`
+        : `${name}, an overall wellness score is not available because the ECG signal-quality check did not pass and this recording did not provide all required usable inputs. Measurements that remain traceable to the file are shown below as observations; absent spectral or other domains remain "Not assessed" and no value is guessed.`,
     );
   }
 
@@ -363,7 +363,7 @@ export function buildPatientSynopsis(report: Partial<ANSReport>, vendor?: Vendor
         allNormal && ecgUsable
           ? " All three are within the normal range — your heart's calming (vagal) reflexes are responding as expected."
           : allNormal
-            ? " The file's ratio values fall within their listed reference ranges, but the failed ECG quality gate means they must not be used to imply a normal overall autonomic result."
+            ? " The file's ratio values fall within their listed reference ranges, but the ECG signal-quality check did not pass, so they must not be used to imply a normal overall autonomic result."
             : ""
       }`,
     );
