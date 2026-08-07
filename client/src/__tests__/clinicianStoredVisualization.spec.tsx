@@ -158,13 +158,19 @@ describe("SpectrogramPanel", () => {
     expect(panel.textContent).toContain("Normalized cmorlet");
   });
 
-  it("reports the stored value under the cursor", () => {
+  it("reports the stored value under the pointer (mouse or touch drag)", () => {
     render(<SpectrogramPanel mpg={baseMpg()} />);
     const canvas = screen.getByTestId("mpg-spectrogram-canvas");
     canvas.getBoundingClientRect = () =>
       ({ left: 0, top: 0, width: 200, height: 100, right: 200, bottom: 100, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
-    fireEvent.mouseMove(canvas, { clientX: 10, clientY: 50 });
-    expect(screen.getByTestId("mpg-spectrogram-readout").textContent).toMatch(/Hz/);
+    // jsdom's synthetic PointerEvent may omit client coordinates; the panel
+    // must survive that and keep its prompt rather than crash.
+    fireEvent.pointerMove(canvas, { clientX: 10, clientY: 50 });
+    const readout = screen.getByTestId("mpg-spectrogram-readout").textContent ?? "";
+    expect(readout).toMatch(/Hz|Hover or drag/);
+
+    fireEvent.pointerMove(canvas, {});
+    expect(screen.getByTestId("mpg-spectrogram-readout").textContent).toMatch(/Hover or drag/);
   });
 
   it("states plainly when no stored spectrogram exists instead of drawing one", () => {

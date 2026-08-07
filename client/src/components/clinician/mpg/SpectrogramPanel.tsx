@@ -138,9 +138,10 @@ export function SpectrogramPanel({ mpg }: SpectrogramPanelProps) {
     );
   }
 
-  const freqTicks = [0, 0.1, 0.15, 0.25, 0.4, 0.6, 0.8, 1.0].filter((f) => f <= maxFreq + 1e-9);
+  const freqTicks = [0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9].filter((f) => f <= maxFreq + 1e-9);
   const timeTicks: number[] = [];
-  for (let t = 0; t <= totalSec; t += 120) timeTicks.push(t);
+  const tickStep = totalSec > 900 ? 180 : 120;
+  for (let t = 0; t <= totalSec - tickStep / 2; t += tickStep) timeTicks.push(t);
 
   return (
     <motion.div
@@ -170,65 +171,95 @@ export function SpectrogramPanel({ mpg }: SpectrogramPanelProps) {
         <SeriesProvenanceChip provenance="ans_stored" testId="mpg-spectrogram-provenance" />
       </div>
 
+      {/* Axis ticks are positioned PROPORTIONALLY: the frequency axis is linear
+          in hertz and the time axis linear in seconds, so evenly spaced labels
+          would misreport where a feature sits. */}
       <div className="flex gap-2">
-        <div
-          className="flex flex-col justify-between text-[12px] text-muted-foreground tabular-nums py-0.5"
-          aria-hidden="true"
-        >
-          {[...freqTicks].reverse().map((tick) => (
-            <span key={tick}>{tick.toFixed(2)}</span>
+        <div className="relative w-11 shrink-0" style={{ height: 240 }} aria-hidden="true">
+          {freqTicks.map((tick) => (
+            <span
+              key={tick}
+              className="absolute right-0 -translate-y-1/2 text-[12px] text-muted-foreground tabular-nums"
+              style={{ top: `${(1 - tick / maxFreq) * 100}%` }}
+            >
+              {tick.toFixed(2)}
+            </span>
           ))}
         </div>
         <div className="relative flex-1 min-w-0">
           <canvas
             ref={canvasRef}
-            className="w-full rounded-md border border-border/40"
-            style={{ height: 240, imageRendering: "auto" }}
+            className="w-full touch-none rounded-md border border-border/40"
+            style={{ height: 240 }}
             role="img"
             aria-label={`Stored PhysioPS wavelet spectrogram: ${payload.rows} time slices every ${payload.dtSec} seconds by ${payload.cols} frequency bins up to ${maxFreq.toFixed(2)} hertz, read directly from the uploaded file.`}
             data-testid="mpg-spectrogram-canvas"
-            onMouseLeave={() => setHover(null)}
-            onMouseMove={(event) => {
+            onPointerLeave={() => setHover(null)}
+            onPointerMove={(event) => {
               const target = event.currentTarget;
               const rect = target.getBoundingClientRect();
               if (rect.width === 0 || rect.height === 0) return;
               const xFraction = (event.clientX - rect.left) / rect.width;
               const yFraction = (event.clientY - rect.top) / rect.height;
+              if (!Number.isFinite(xFraction) || !Number.isFinite(yFraction)) {
+                setHover(null);
+                return;
+              }
               const row = Math.min(payload.rows - 1, Math.max(0, Math.floor(xFraction * payload.rows)));
               const col = Math.min(
                 payload.cols - 1,
                 Math.max(0, Math.floor((1 - yFraction) * payload.cols)),
               );
+              const power = decoded.values[row * payload.cols + col];
+              if (!Number.isFinite(power)) {
+                setHover(null);
+                return;
+              }
               setHover({
                 timeSec: row * payload.dtSec,
                 freqHz: payload.freqStartHz + col * payload.freqStepHz,
-                power: decoded.values[row * payload.cols + col],
+                power,
               });
             }}
           />
           {/* Phase boundaries drawn over the stored image. */}
           <div className="pointer-events-none absolute inset-0" aria-hidden="true">
             {mpg.phases.map((phase) =>
-              totalSec > 0 ? (
+              totalSec > 0 && phase.startSec < totalSec ? (
                 <div
                   key={`spectrogram-phase-${phase.name}`}
                   className="absolute top-0 bottom-0 border-l border-dashed border-white/45"
-                  style={{ left: `${Math.min(100, (phase.startSec / totalSec) * 100)}%` }}
+                  style={{ left: `${(phase.startSec / totalSec) * 100}%` }}
                 >
-                  <span className="absolute -top-0.5 left-1 text-[12px] font-bold text-white/90">
+                  <span className="absolute top-0.5 left-1 text-[12px] font-bold text-white/90">
                     {phase.name}
                   </span>
                 </div>
               ) : null,
             )}
           </div>
+          <div className="relative mt-1 h-4" aria-hidden="true">
+            {timeTicks.map((tick, index) => {
+              // The first label is left-aligned and the last right-aligned so
+              // neither is clipped by the plot edge on a narrow viewport.
+              const isFirst = index === 0;
+              const isLast = index === timeTicks.length - 1;
+              return (
+                <span
+                  key={tick}
+                  className={`absolute text-[12px] text-muted-foreground tabular-nums ${
+                    isFirst ? "" : isLast ? "-translate-x-full" : "-translate-x-1/2"
+                  } ${!isFirst && !isLast && index % 2 === 1 ? "hidden sm:inline" : ""}`}
+                  style={{
+                    left: `${Math.min(100, (tick / Math.max(totalSec, 1)) * 100)}%`,
+                  }}
+                >
+                  {formatClock(tick)}
+                </span>
+              );
+            })}
+          </div>
         </div>
-      </div>
-
-      <div className="mt-1 flex items-center justify-between text-[12px] text-muted-foreground tabular-nums pl-8">
-        {timeTicks.map((tick) => (
-          <span key={tick}>{formatClock(tick)}</span>
-        ))}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
@@ -250,7 +281,7 @@ export function SpectrogramPanel({ mpg }: SpectrogramPanelProps) {
         >
           {hover
             ? `t = ${formatClock(hover.timeSec)} · ${hover.freqHz.toFixed(3)} Hz · ${hover.power.toPrecision(4)}`
-            : "Hover the image for the stored value at a time and frequency"}
+            : "Hover or drag across the image to read the stored value at a time and frequency"}
         </div>
       </div>
 
