@@ -47,6 +47,11 @@ import {
   type MetricProvenance,
 } from "../shared/metricProvenance.js";
 import type { VendorPhaseMetrics } from "./_ans/vendorStored.js";
+import type {
+  MpgSeriesProvenance,
+  StoredSeriesPayload,
+  VendorVisualization,
+} from "../shared/vendorVisualization.js";
 import { roundHalfEven } from "./_ans/vendorStored.js";
 import {
   estimatePhaseSpectral,
@@ -182,6 +187,12 @@ interface ParsedANSData {
   baselineDiastolicBP?: number;
   /** Exact six-phase PhysioPS analysis summary embedded in supported .ans files. */
   vendorStoredPhases?: VendorPhaseMetrics[];
+  /**
+   * Stored PhysioPS visualization series (4 Hz HR/breathing, the eleven
+   * 4-second spectral trend arrays and the wavelet spectrogram) when the file
+   * carries them. Absent for older, truncated or unknown-schema files.
+   */
+  vendorVisualization?: VendorVisualization;
   /**
    * ECG signal-usability verdict from the deterministic parser. Interpretation
    * is GATED on this: an unusable recording may not produce a wellness score,
@@ -441,6 +452,10 @@ interface MultiParameterGraphical {
   };
   coupling: CardioRespiratoryWindow[];
   wavelet: { type: string; cycles: number; spectralUpdateSec: number };
+  /** Per-series provenance so no surface can present stored and estimated data alike. */
+  seriesProvenance?: MpgSeriesProvenance;
+  /** Stored PhysioPS trend/spectrogram payload, when the file carried one. */
+  vendorVisualization?: VendorVisualization | null;
 }
 
 interface ANSReport {
@@ -2043,6 +2058,101 @@ function computeMultiParameterGraphical(
       ? Math.round(((other - base) / base) * 100 * 10) / 10
       : null;
   const ecgAvailable = hasRealEcg(data.ecgData);
+
+  // ---- Stored PhysioPS visualization path ----------------------------------
+  // When the uploaded file carries the vendor's own analysis block we plot the
+  // stored arrays themselves: the same 4 Hz heart-rate and breathing series,
+  // the same 4-second LFa/RFa trend arrays and the same wavelet spectrogram
+  // the PhysioPS report is drawn from. Nothing here is re-derived from the
+  // waveform, so the clinician view is the vendor view, not an approximation.
+  const stored = data.vendorVisualization;
+  if (stored && stored.source === "ans_stored" && data.vendorStoredPhases?.length === 6) {
+    const storedTotalSec = Math.max(
+      ...data.vendorStoredPhases.map((phase) => phase.endSec),
+      data.dataPointCount * data.samplingInterval,
+    );
+    const phaseLabelFor = (code: string, label: string): string =>
+      label && label.trim().length ? label.trim() : code;
+    const phases: PhaseBoundary[] = data.vendorStoredPhases.map((phase) => ({
+      name: phase.code,
+      label: phaseLabelFor(phase.code, phase.label),
+      startSec: phase.startSec,
+      endSec: phase.endSec,
+    }));
+    const seriesFor = (role: string): StoredSeriesPayload | null =>
+      stored.trend.channels.find((channel) => channel.role === role)?.series ?? null;
+    const toTimeSeries = (payload: StoredSeriesPayload | null): TimeSeries =>
+      payload ? { t: payload.t, v: payload.v } : { t: [], v: [] };
+    const lfaSeries = seriesFor("lfa_bpm2");
+    const rfaSeries = seriesFor("rfa_bpm2");
+    const spectralPlottable = Boolean(lfaSeries && rfaSeries);
+    const seriesProvenance: MpgSeriesProvenance = {
+      heartRate: stored.heartRate ? "ans_stored" : "unavailable",
+      breathing: stored.breathing ? "ans_stored" : "unavailable",
+      lfaRfa: spectralPlottable ? "ans_stored" : "unavailable",
+      spectrogram: stored.spectrogram ? stored.spectrogram.source : "unavailable",
+    };
+    const A = phaseEvents[0], B = phaseEvents[1], D = phaseEvents[3], F = phaseEvents[5];
+    const testClock = parseTestStartClockSec(data);
+    const samplingRate = 1 / data.samplingInterval;
+    const couplingSpecs: Array<{
+      phase: CardioRespiratoryWindow["phase"];
+      label: string;
+      storedIndex: number;
+      win: number;
+      annots: () => string[];
+    }> = [
+      { phase: "Baseline", label: "Baseline (1 min)", storedIndex: 2, win: 60, annots: () => [`RFa = ${A.RFa == null ? "Not assessed" : A.RFa.toFixed(2)}`, `LFa/RFa = ${A.SB == null ? "Not assessed" : A.SB.toFixed(2)}`] },
+      { phase: "DeepBreathing", label: "Deep Breathing (1 min)", storedIndex: 1, win: 60, annots: () => [`E/I Ratio = ${data.eiRatio == null ? "Not assessed" : data.eiRatio.toFixed(2)}`, ratioReferenceLabel("eiRatio", data.age || null)] },
+      { phase: "Valsalva", label: "Valsalva (1 min)", storedIndex: 3, win: 60, annots: () => [`Valsalva Ratio = ${data.valsalvaRatio == null ? "Not assessed" : data.valsalvaRatio.toFixed(2)}`, ratioReferenceLabel("valsalvaRatio", data.age || null)] },
+      { phase: "Stand", label: "Stand (1 min)", storedIndex: 5, win: 90, annots: () => [`30:15 Ratio = ${data.thirtyFifteenRatio == null ? "Not assessed" : data.thirtyFifteenRatio.toFixed(2)}`, ratioReferenceLabel("thirtyFifteenRatio", data.age || null)] },
+    ];
+    const coupling: CardioRespiratoryWindow[] = ecgAvailable
+      ? couplingSpecs.map((spec) => {
+          const phase = data.vendorStoredPhases![spec.storedIndex];
+          return buildCouplingWindow(
+            spec.phase,
+            spec.label,
+            data.ecgData,
+            samplingRate,
+            phase.startSec,
+            phase.endSec,
+            testClock,
+            spec.win,
+            spec.annots(),
+          );
+        })
+      : [];
+
+    return {
+      ecgAvailable,
+      totalSec: storedTotalSec,
+      phases,
+      heartRateTrend: toTimeSeries(stored.heartRate),
+      breathingTrend: toTimeSeries(stored.breathing),
+      lfaTrend: toTimeSeries(lfaSeries),
+      rfaTrend: toTimeSeries(rfaSeries),
+      scatter: {
+        baselineLFa: A.LFa, baselineRFa: A.RFa,
+        dbRFa: B.RFa,
+        valsalvaLFa: D.LFa,
+        standLFa: F.LFa, standRFa: F.RFa,
+        rfaChangeValsalvaPct: rfaChangePct(A.RFa, D.RFa),
+        rfaChangeStandPct: rfaChangePct(A.RFa, F.RFa),
+      },
+      coupling,
+      wavelet: {
+        type: stored.spectrogram?.wavelet ?? "PhysioPS stored",
+        // Cycle count (Q) is printed only in the vendor PDF; it is not stored
+        // in the binary, so it is reported as unknown rather than invented.
+        cycles: 0,
+        spectralUpdateSec: stored.trend.dtSec,
+      },
+      seriesProvenance,
+      vendorVisualization: stored,
+    };
+  }
+
   // Short-circuit if the file has no real ECG — still emit scatter/ratios so
   // the clinician panels that rely on header metrics keep working.
   if (!ecgAvailable) {

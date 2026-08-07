@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import { TrendPanel } from "./mpg/TrendPanel";
+import { SpectrogramPanel } from "./mpg/SpectrogramPanel";
 import { ScatterPanel } from "./mpg/ScatterPanel";
 import { CouplingGrid } from "./mpg/CouplingGrid";
 import { RatiosPanel } from "./mpg/RatiosPanel";
@@ -74,6 +75,13 @@ export function MultiParameterGraphical({ report }: MultiParameterGraphicalProps
           ) : (
             <EcgUnavailableNotice />
           )}
+
+          {/* Stored PhysioPS wavelet spectrogram. Rendered whenever the file
+              carries one (it does not depend on the raw ECG being usable),
+              with an explicit state when it is absent or unreadable. */}
+          {mpg.vendorVisualization || mpg.seriesProvenance ? (
+            <SpectrogramPanel mpg={mpg} />
+          ) : null}
 
           <ScatterPanel
             mpg={mpg}
@@ -168,7 +176,11 @@ function MethodFooter({ mpg }: { mpg: NonNullable<ANSReport["multiParameter"]> }
     >
       <div className="text-[12px] text-muted-foreground tabular-nums">
         <span className="font-semibold text-foreground/90">Spectral method:</span>{" "}
-        {mpg.wavelet.type} wavelet · {mpg.wavelet.cycles} cycles · spectral update every {mpg.wavelet.spectralUpdateSec}s
+        {mpg.wavelet.type} wavelet ·{" "}
+        {mpg.wavelet.cycles > 0
+          ? `${mpg.wavelet.cycles} cycles`
+          : "cycle count not stored in this file"}{" "}
+        · spectral update every {mpg.wavelet.spectralUpdateSec}s
       </div>
       <ColomboExplainer chartKey="waveletMethod" />
     </motion.div>

@@ -7,6 +7,10 @@
 
 import type { MetricProvenance } from "./metricProvenance.js";
 import type { PatternStates, Scorability } from "./clinicalStates.js";
+import type {
+  MpgSeriesProvenance,
+  VendorVisualization,
+} from "./vendorVisualization.js";
 
 export interface ANSPatientData {
   lastName: string;
@@ -322,6 +326,20 @@ export interface MultiParameterGraphical {
   coupling: CardioRespiratoryWindow[];
   /** Wavelet analysis metadata for the footer. */
   wavelet: { type: string; cycles: number; spectralUpdateSec: number };
+  /**
+   * Where each plotted series came from. `ans_stored` means the exact vendor
+   * array was read out of the uploaded file; `humanos_estimated` means the
+   * waveform fallback produced it and every surface must label it as an
+   * estimate; `unavailable` and `malformed` must render an explicit empty
+   * state, never a zeroed chart.
+   */
+  seriesProvenance?: MpgSeriesProvenance;
+  /**
+   * Stored PhysioPS visualization payload: labelled 4-second trend channels and
+   * the byte-exact wavelet spectrogram. Null/absent on files that do not carry
+   * the stored analysis block.
+   */
+  vendorVisualization?: VendorVisualization | null;
 }
 
 export interface ANSReport {

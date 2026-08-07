@@ -107,6 +107,21 @@ function pickDataFile(): { bytes: Buffer; name: string; isReal: boolean } {
 }
 
 /** Recursively flatten every string in the report into one blob for scanning. */
+/**
+ * Opaque binary transport is skipped when scanning narrative text: a
+ * `base64_f32be` payload is the stored PhysioPS spectrogram matrix, not prose,
+ * and its base64 alphabet can spell any two-letter token by chance. Only that
+ * one declared-binary field is skipped - every label, note, evidence string and
+ * unit around it is still scanned.
+ */
+function isOpaqueBinaryPayload(value: unknown): boolean {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    (value as { encoding?: unknown }).encoding === "base64_f32be"
+  );
+}
+
 function collectStrings(value: unknown, out: string[] = []): string[] {
   if (value == null) return out;
   if (typeof value === "string") {
@@ -114,7 +129,8 @@ function collectStrings(value: unknown, out: string[] = []): string[] {
   } else if (Array.isArray(value)) {
     for (const v of value) collectStrings(v, out);
   } else if (typeof value === "object") {
-    for (const v of Object.values(value as Record<string, unknown>)) {
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "values" && isOpaqueBinaryPayload(value)) continue;
       collectStrings(v, out);
     }
   }

@@ -52,11 +52,31 @@ function alex() {
   return { buf, data, study: parseStudy({ buffer: buf, fileName: "pare_deid.ans" }), report: generateColomboReport(data) };
 }
 
+/**
+ * Opaque binary transport is skipped when scanning narrative text: a
+ * `base64_f32be` payload is the stored PhysioPS spectrogram matrix, not prose,
+ * and its base64 alphabet can spell any two-letter token by chance. Only that
+ * one declared-binary field is skipped - every label, note, evidence string and
+ * unit around it is still scanned.
+ */
+function isOpaqueBinaryPayload(value: unknown): boolean {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    (value as { encoding?: unknown }).encoding === "base64_f32be"
+  );
+}
+
 /** Recursively collect every string value in an object graph. */
 function allStrings(v: unknown, out: string[] = []): string[] {
   if (typeof v === "string") out.push(v);
   else if (Array.isArray(v)) v.forEach((x) => allStrings(x, out));
-  else if (v && typeof v === "object") Object.values(v as Record<string, unknown>).forEach((x) => allStrings(x, out));
+  else if (v && typeof v === "object") {
+    Object.entries(v as Record<string, unknown>).forEach(([key, x]) => {
+      if (key === "values" && isOpaqueBinaryPayload(v)) return;
+      allStrings(x, out);
+    });
+  }
   return out;
 }
 

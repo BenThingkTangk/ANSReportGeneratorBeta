@@ -38,60 +38,27 @@
  * summary values.
  */
 
+import type {
+  TrendChannelMapping,
+  TrendMappingDiagnostics,
+  TrendMappingMethod,
+  TrendRole,
+} from "../../shared/vendorVisualization.js";
 import type { VendorPhaseMetrics, VendorStoredSeries } from "./vendorStored.js";
 
-export type TrendRole =
-  | "frf_hz"
-  | "lfa_bpm2"
-  | "rfa_bpm2"
-  | "lfa_rfa_ratio"
-  | "lf_power_raw"
-  | "rf_power_raw"
-  | "total_power_raw"
-  | "lf_percent"
-  | "rf_percent"
-  | "lf_rf_raw_ratio"
-  | "unmapped";
-
-export type TrendMappingMethod =
-  | "structural_invariant"
-  | "stored_summary_agreement"
-  | "unresolved";
-
-export interface TrendChannelMapping {
-  /** Stored array index, 0-based, in file order. */
-  index: number;
-  role: TrendRole;
-  /** Display label for a clinician chart. Null when unmapped. */
-  label: string | null;
-  unit: string | null;
-  method: TrendMappingMethod;
-  /** Human-readable justification, always populated. */
-  evidence: string;
-  /** Byte offset of the stored array (audit trail). */
-  offset: number;
-  sampleCount: number;
-}
+export type {
+  TrendChannelMapping,
+  TrendMappingDiagnostics,
+  TrendMappingMethod,
+  TrendRole,
+} from "../../shared/vendorVisualization.js";
 
 export interface TrendMappingResult {
   channels: TrendChannelMapping[];
   /** True when LFa, RFa, the LFa/RFa ratio and FRF were all resolved. */
   clinicalChannelsResolved: boolean;
   warnings: string[];
-  diagnostics: {
-    ratioTriples: Array<{ numerator: number; denominator: number; ratio: number; agreement: number }>;
-    percentPairs: Array<{ a: number; b: number; agreement: number }>;
-    sumTriples: Array<{ a: number; b: number; total: number; agreement: number }>;
-    /** Median relative error of the chosen bpm^2 family against the stored summary. */
-    bpm2FamilyScore: number | null;
-    /** Same score for the rejected family; used to prove the decision margin. */
-    alternateFamilyScore: number | null;
-    frfScore: number | null;
-    /** Rank-correlation margin used to orient the raw power pair. */
-    rawOrientationMargin: number | null;
-    /** Corroboration of the bpm^2 channels against the stored spectrogram bands. */
-    bpm2BandAgreement: { lfa: number | null; rfa: number | null } | null;
-  };
+  diagnostics: TrendMappingDiagnostics;
 }
 
 const RELATIVE_TOLERANCE = 1e-3;
@@ -284,12 +251,13 @@ const ROLE_LABELS: Record<Exclude<TrendRole, "unmapped">, { label: string; unit:
   lfa_bpm2: { label: "LFa (sympathetic) trend", unit: "bpm^2" },
   rfa_bpm2: { label: "RFa (parasympathetic) trend", unit: "bpm^2" },
   lfa_rfa_ratio: { label: "LFa/RFa trend", unit: "ratio" },
-  lf_power_raw: { label: "Low-frequency spectral power (vendor internal units)", unit: null },
-  rf_power_raw: { label: "Respiratory-frequency spectral power (vendor internal units)", unit: null },
-  total_power_raw: { label: "Total spectral power (vendor internal units)", unit: null },
-  lf_percent: { label: "Low-frequency share of spectral power", unit: "%" },
-  rf_percent: { label: "Respiratory-frequency share of spectral power", unit: "%" },
-  lf_rf_raw_ratio: { label: "Low/respiratory raw power ratio", unit: "ratio" },
+  // PhysioPS vocabulary only: LFa / RFa, never the HRV band tokens.
+  lfa_area_raw: { label: "LFa-band area (vendor internal units)", unit: null },
+  rfa_area_raw: { label: "RFa-band area (vendor internal units)", unit: null },
+  combined_area_raw: { label: "Combined LFa+RFa area (vendor internal units)", unit: null },
+  lfa_share_percent: { label: "LFa share of combined area", unit: "%" },
+  rfa_share_percent: { label: "RFa share of combined area", unit: "%" },
+  lfa_rfa_area_ratio: { label: "LFa/RFa area ratio (vendor internal units)", unit: "ratio" },
 };
 
 /**
@@ -544,25 +512,25 @@ export function resolveTrendMapping(
         : null;
       if (!orientationResolved) {
         warnings.push(
-          "The second stored power pair could not be oriented against the stored spectrogram bands; " +
-            "those arrays and their percent split stay unlabelled.",
+          "The second stored area pair could not be oriented against the stored spectrogram bands; " +
+            "those arrays and their share split stay unlabelled.",
         );
       }
       const numeratorIsLf = numeratorIsLfScore >= denominatorIsLfScore;
       const lfRaw = numeratorIsLf ? alternate.numerator : alternate.denominator;
       const rfRaw = numeratorIsLf ? alternate.denominator : alternate.numerator;
       const rawEvidence =
-        "Second power family identified by the same exact ratio identity; orientation fixed by rank " +
-        `correlation against the stored wavelet-spectrogram bands (margin ${orientationMargin.toFixed(2)}).`;
+        "Second stored area family identified by the same exact ratio identity; LFa/RFa orientation " +
+        `fixed by rank correlation against the stored wavelet-spectrogram bands (margin ${orientationMargin.toFixed(2)}).`;
       if (orientationResolved) {
-        assign(lfRaw, "lf_power_raw", "structural_invariant", rawEvidence);
-        assign(rfRaw, "rf_power_raw", "structural_invariant", rawEvidence);
+        assign(lfRaw, "lfa_area_raw", "structural_invariant", rawEvidence);
+        assign(rfRaw, "rfa_area_raw", "structural_invariant", rawEvidence);
       }
       assign(
         alternate.ratio,
-        "lf_rf_raw_ratio",
+        "lfa_rfa_area_ratio",
         "structural_invariant",
-        "Stored array equals the pointwise quotient of the raw power pair.",
+        "Stored array equals the pointwise quotient of the vendor-internal area pair.",
       );
 
       const totalTriple = diagnostics.sumTriples.find(
@@ -573,15 +541,15 @@ export function resolveTrendMapping(
       if (totalTriple) {
         assign(
           totalTriple.total,
-          "total_power_raw",
+          "combined_area_raw",
           "structural_invariant",
-          "Stored array equals the pointwise sum of the raw low- and respiratory-frequency power arrays.",
+          "Stored array equals the pointwise sum of the two vendor-internal LFa and RFa area arrays.",
         );
       }
 
       const percentEvidence =
-        "Stored array equals 100 x (member / total) of the resolved raw power pair, and the two " +
-        "percent arrays sum to 100 at every stored sample.";
+        "Stored array equals 100 x (member / combined) of the resolved vendor-internal area pair, " +
+        "and the two share arrays sum to 100 at every stored sample.";
       const percentOf = (candidate: number, source: number): boolean =>
         agreementFraction(usableLength, (index) => {
           const total = channels[lfRaw].values[index] + channels[rfRaw].values[index];
@@ -595,8 +563,8 @@ export function resolveTrendMapping(
         }) >= MIN_AGREEMENT;
       if (orientationResolved) {
         for (const member of percentMembers) {
-          if (percentOf(member, lfRaw)) assign(member, "lf_percent", "structural_invariant", percentEvidence);
-          else if (percentOf(member, rfRaw)) assign(member, "rf_percent", "structural_invariant", percentEvidence);
+          if (percentOf(member, lfRaw)) assign(member, "lfa_share_percent", "structural_invariant", percentEvidence);
+          else if (percentOf(member, rfRaw)) assign(member, "rfa_share_percent", "structural_invariant", percentEvidence);
         }
       }
     } else {

@@ -22,69 +22,22 @@ import type {
   VendorPhaseMetrics,
   VendorStoredSeries,
 } from "./vendorStored.js";
-import { resolveTrendMapping, type TrendChannelMapping } from "./vendorTrendMapping.js";
+import type {
+  StoredSeriesPayload,
+  StoredSpectrogramPayload,
+  StoredTrendChannelPayload,
+  TrendChannelMapping,
+  VendorVisualization,
+} from "../../shared/vendorVisualization.js";
+import { resolveTrendMapping } from "./vendorTrendMapping.js";
 
-export type VisualizationProvenance =
-  | "ans_stored"
-  | "humanos_estimated"
-  | "unavailable"
-  | "malformed";
-
-export interface StoredSeriesPayload {
-  /** Seconds from the start of the recording. */
-  t: number[];
-  v: number[];
-  /** 1 when every stored sample is transported; n when every nth sample is. */
-  strideFactor: number;
-  storedSampleCount: number;
-  unit: string | null;
-}
-
-export interface StoredTrendChannelPayload extends TrendChannelMapping {
-  /** Present only for channels a clinician surface plots. */
-  series?: StoredSeriesPayload;
-}
-
-export interface StoredSpectrogramPayload {
-  source: VisualizationProvenance;
-  reason?: string;
-  /** Wavelet family recorded by the vendor in the same file. */
-  wavelet: string;
-  rows: number;
-  cols: number;
-  /** Seconds from the start of the recording for row 0. */
-  t0Sec: number;
-  dtSec: number;
-  freqStartHz: number;
-  freqStepHz: number;
-  /** Row-major time x frequency, big-endian float32, base64. Byte-exact. */
-  encoding: "base64_f32be";
-  values: string;
-  /** >1 when time rows were strided down for transport. */
-  strideFactor: number;
-  /** Rows actually transported after striding. */
-  transportedRows: number;
-  byteLength: number;
-}
-
-export interface VendorVisualization {
-  source: VisualizationProvenance;
-  reason?: string;
-  /** Absolute LabVIEW seconds for sample 0 of every stored series. */
-  t0Abs: number;
-  heartRate: StoredSeriesPayload | null;
-  breathing: StoredSeriesPayload | null;
-  trend: {
-    dtSec: number;
-    sampleCount: number;
-    channels: StoredTrendChannelPayload[];
-    /** True when LFa, RFa, LFa/RFa and FRF were all resolved from in-file evidence. */
-    clinicalChannelsResolved: boolean;
-    warnings: string[];
-    diagnostics: ReturnType<typeof resolveTrendMapping>["diagnostics"];
-  };
-  spectrogram: StoredSpectrogramPayload | null;
-}
+export type {
+  StoredSeriesPayload,
+  StoredSpectrogramPayload,
+  StoredTrendChannelPayload,
+  VendorVisualization,
+  VisualizationProvenance,
+} from "../../shared/vendorVisualization.js";
 
 /** Roles that a clinician chart plots directly. */
 const PLOTTED_ROLES = new Set([
@@ -92,8 +45,8 @@ const PLOTTED_ROLES = new Set([
   "rfa_bpm2",
   "lfa_rfa_ratio",
   "frf_hz",
-  "lf_percent",
-  "rf_percent",
+  "lfa_share_percent",
+  "rfa_share_percent",
 ]);
 
 /** Hard transport ceilings. Exceeding one strides the series, never truncates it. */

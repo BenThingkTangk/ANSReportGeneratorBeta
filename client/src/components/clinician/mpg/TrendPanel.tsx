@@ -13,6 +13,7 @@ import {
   Tooltip,
 } from "recharts";
 import type { ANSReport, MultiParameterGraphical, TimeSeries } from "@shared/schema";
+import type { MpgSeriesProvenance } from "@shared/vendorVisualization";
 import { ColomboExplainer } from "../ColomboExplainer";
 import { SpectralUnavailableCard } from "./SpectralUnavailableCard";
 import { SpectralEstimateBanner } from "./SpectralEstimateBanner";
@@ -24,6 +25,7 @@ import {
 } from "@/lib/spectralProvenance";
 import { PhaseBandLabel } from "./PhaseBandLabel";
 import { TrendSeriesLegend } from "./TrendSeriesLegend";
+import { SeriesProvenanceChip } from "./SeriesProvenanceChip";
 import {
   AXIS_LINE_COLOR,
   AXIS_TICK,
@@ -133,6 +135,8 @@ export function TrendPanel({
   spectralEstimated = false,
   report,
 }: TrendPanelProps) {
+  const provenance = mpg.seriesProvenance;
+  const storedTrend = provenance?.lfaRfa === "ans_stored";
   const hrData = toChartData(mpg.heartRateTrend);
   const breathData = toChartData(mpg.breathingTrend);
   const plotSpectral =
@@ -180,7 +184,12 @@ export function TrendPanel({
 
       {/* HR */}
       <div data-testid="mpg-hr-chart">
-        <RowLabel left="Heart Rate" right="bpm" />
+        <RowLabel
+          left="Heart Rate"
+          right="bpm"
+          provenance={provenance?.heartRate}
+          testId="mpg-hr-provenance"
+        />
         <ResponsiveContainer width="100%" height={168}>
           <LineChart data={hrData} margin={TREND_CHART_MARGIN}>
             <CartesianGrid stroke={GRID_STROKE} strokeWidth={GRID_STROKE_WIDTH} strokeDasharray="2 4" />
@@ -252,7 +261,12 @@ export function TrendPanel({
 
       {/* Breathing */}
       <div className="mt-6" data-testid="mpg-breathing-chart">
-        <RowLabel left="Breathing Envelope" right="EDR (a.u.)" />
+        <RowLabel
+          left="Breathing"
+          right={provenance?.breathing === "ans_stored" ? "stored sensor units" : "EDR (a.u.)"}
+          provenance={provenance?.breathing}
+          testId="mpg-breathing-provenance"
+        />
         <ResponsiveContainer width="100%" height={128}>
           <AreaChart data={breathData} margin={TREND_CHART_MARGIN_PLAIN}>
             <defs>
@@ -296,7 +310,12 @@ export function TrendPanel({
       {/* LFa vs RFa */}
       {!plotSpectral ? (
         <div className="mt-6">
-          <RowLabel left="LFa (Sympathetic) vs RFa (Parasympathetic)" right="bpm²" />
+          <RowLabel
+            left="LFa (Sympathetic) vs RFa (Parasympathetic)"
+            right="bpm²"
+            provenance={provenance?.lfaRfa}
+            testId="mpg-lfa-rfa-provenance"
+          />
           <SpectralUnavailableCard
             title="Rolling LFa/RFa spectral trend — not established (no usable waveform and no vendor value)"
             testId="mpg-lfa-rfa-unavailable"
@@ -317,7 +336,19 @@ export function TrendPanel({
               : "LFa (Sympathetic) vs RFa (Parasympathetic)"
           }
           right="bpm²"
+          provenance={provenance?.lfaRfa}
+          testId="mpg-lfa-rfa-provenance"
         />
+        {storedTrend ? (
+          <p
+            className="mb-2 text-[12px] leading-relaxed text-emerald-100/90"
+            data-testid="mpg-lfa-rfa-stored-note"
+          >
+            Plotted from the vendor's own 4-second LFa and RFa trend arrays stored in this .ans
+            file. Array identity was verified against the file's stored per-phase summary and its
+            exact LFa/RFa ratio identity, not assumed from an index position.
+          </p>
+        ) : null}
         {spectralEstimated ? (
           <p
             className="mb-2 text-[12px] leading-relaxed text-violet-100"
@@ -434,10 +465,23 @@ function PhaseLegend({ phases }: { phases: MultiParameterGraphical["phases"] }) 
   );
 }
 
-function RowLabel({ left, right }: { left: string; right: string }) {
+function RowLabel({
+  left,
+  right,
+  provenance,
+  testId,
+}: {
+  left: string;
+  right: string;
+  provenance?: MpgSeriesProvenance[keyof MpgSeriesProvenance];
+  testId?: string;
+}) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 mb-2">
-      <span className="text-[13px] font-semibold text-foreground">{left}</span>
+      <span className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-foreground">
+        {left}
+        {provenance ? <SeriesProvenanceChip provenance={provenance} testId={testId} /> : null}
+      </span>
       <span className="text-[12px] font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">
         {right}
       </span>

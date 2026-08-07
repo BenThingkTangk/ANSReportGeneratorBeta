@@ -22,6 +22,8 @@ import {
   parseVendorStoredAnalysis,
   type VendorPhaseMetrics,
 } from "./vendorStored.js";
+import { buildVendorVisualization } from "./vendorVisualization.js";
+import type { VendorVisualization } from "../../shared/vendorVisualization.js";
 
 /** Mirror of ParsedANSData defined inline in api/upload.ts. */
 export interface LegacyEcgQuality {
@@ -60,6 +62,8 @@ export interface LegacyParsedANSData {
   baselineDiastolicBP?: number;
   /** Exact six-phase PhysioPS analysis summary embedded in supported .ans files. */
   vendorStoredPhases?: VendorPhaseMetrics[];
+  /** Stored PhysioPS visualization series read out of the same analysis block. */
+  vendorVisualization?: VendorVisualization;
   ecgQuality?: LegacyEcgQuality;
   /**
    * Seconds past midnight of the earliest real time-of-day stamp found in the
@@ -200,10 +204,21 @@ function extractEctopicBeats(study: AnsStudy): number {
 export function ansStudyToLegacy(study: AnsStudy, buffer: Buffer): LegacyParsedANSData {
   const baselineBp = study.baseline.bp;
   let vendorStoredPhases: VendorPhaseMetrics[] | undefined;
+  let vendorVisualization: VendorVisualization | undefined;
   try {
     const binary = parseBinaryHeader(buffer);
     if (binary.sampling) {
-      vendorStoredPhases = parseVendorStoredAnalysis(buffer, binary.sampling).phases;
+      const stored = parseVendorStoredAnalysis(buffer, binary.sampling, {
+        collectSeries: true,
+      });
+      vendorStoredPhases = stored.phases;
+      if (stored.series) {
+        vendorVisualization = buildVendorVisualization(
+          stored.series,
+          stored.phases,
+          stored.waveletName,
+        );
+      }
     }
   } catch {
     // Older, truncated, and unknown-schema files continue through the explicit
@@ -238,6 +253,7 @@ export function ansStudyToLegacy(study: AnsStudy, buffer: Buffer): LegacyParsedA
     baselineSystolicBP: baselineBp.sbp.value ?? undefined,
     baselineDiastolicBP: baselineBp.dbp.value ?? undefined,
     vendorStoredPhases,
+    vendorVisualization,
     ecgQuality: {
       snrDb: study.ecg.quality.snrDb,
       motionFraction: study.ecg.quality.motionFraction,
