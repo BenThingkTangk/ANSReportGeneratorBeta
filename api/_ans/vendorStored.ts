@@ -45,6 +45,8 @@ export interface VendorPhaseMetrics {
 export interface StoredUniformSeries {
   /** Byte offset of the first stored value. */
   offset: number;
+  /** Byte offset of the u32 element count that precedes the values. */
+  countOffset: number;
   /** Absolute LabVIEW seconds of the first sample. */
   t0Abs: number;
   /** Sample spacing in seconds. */
@@ -82,7 +84,16 @@ export interface StoredSpectrogram {
  */
 export interface VendorStoredSeries {
   /** Beat-to-beat interval series (seconds), non-uniform in time. */
-  rrIntervalsSec: { offset: number; t0Abs: number; values: number[] };
+  rrIntervalsSec: {
+    /** Byte offset of the first stored value. */
+    offset: number;
+    /** Byte offset of the block header (the f64 time base). */
+    blockOffset: number;
+    /** Byte offset of the u32 element count. */
+    countOffset: number;
+    t0Abs: number;
+    values: number[];
+  };
   /** 4 Hz heart-rate series (bpm). */
   heartRate: StoredUniformSeries;
   /** 4 Hz breathing series (unitless sensor units). */
@@ -99,7 +110,16 @@ export interface VendorStoredSeries {
   trends: {
     t0Abs: number;
     dtSec: number;
-    channels: Array<{ index: number; offset: number; values: number[] }>;
+    /** Byte offset of the block header (the f64 time base). */
+    blockOffset: number;
+    channels: Array<{
+      index: number;
+      /** Byte offset of the first stored value. */
+      offset: number;
+      /** Byte offset of the u32 element count. */
+      countOffset: number;
+      values: number[];
+    }>;
   };
   spectrogram: StoredSpectrogram;
 }
@@ -456,7 +476,9 @@ export function parseVendorStoredAnalysis(
     sampling.dataStartOffset + sampling.dataPointCount * 2,
   );
 
+  const rrBlockOffset = cursor.offset;
   const rrT0 = cursor.f64("rr.t0");
+  const rrCountOffset = cursor.offset;
   const rrCount = cursor.u32("rr.values.count");
   const rrOffset = cursor.offset;
   const rrValues = collect
@@ -466,11 +488,13 @@ export function parseVendorStoredAnalysis(
   const hrT0 = cursor.f64("hr4.t0");
   const hrDt = cursor.f64("hr4.dt");
   if (Math.abs(hrDt - 0.25) > 1e-9) throw new RangeError(`unexpected hr4 dt ${hrDt}`);
+  const hrCountOffset = cursor.offset;
   const hrCount = cursor.u32("hr4.values.count");
   const hrOffset = cursor.offset;
   const hrValues = collect
     ? cursor.f32Array(hrCount, "hr4.values")
     : (cursor.skip(checkedArrayBytes(hrCount, 4, "hr4.values"), "hr4.values"), []);
+  const breathingCountOffset = cursor.offset;
   const breathingCount = cursor.u32("breathing4.values.count");
   const breathingOffset = cursor.offset;
   const breathingValues = collect
@@ -497,15 +521,22 @@ export function parseVendorStoredAnalysis(
     throw new RangeError("BP marker/value array counts disagree");
   }
 
+  const trendBlockOffset = cursor.offset;
   const trendT0 = cursor.f64("trends.t0");
   const trendDt = cursor.f64("trends.dt");
   if (Math.abs(trendDt - 4) > 1e-9) throw new RangeError(`unexpected trend dt ${trendDt}`);
-  const trendChannels: Array<{ index: number; offset: number; values: number[] }> = [];
+  const trendChannels: VendorStoredSeries["trends"]["channels"] = [];
   for (let index = 0; index < TREND_COUNT; index += 1) {
+    const countOffset = cursor.offset;
     const count = cursor.u32(`trends[${index}].count`);
     const offset = cursor.offset;
     if (collect) {
-      trendChannels.push({ index, offset, values: cursor.f32Array(count, `trends[${index}]`) });
+      trendChannels.push({
+        index,
+        offset,
+        countOffset,
+        values: cursor.f32Array(count, `trends[${index}]`),
+      });
     } else {
       cursor.skip(checkedArrayBytes(count, 4, `trends[${index}]`), `trends[${index}]`);
     }
@@ -632,10 +663,23 @@ export function parseVendorStoredAnalysis(
 
   const series: VendorStoredSeries | undefined = collect
     ? {
-        rrIntervalsSec: { offset: rrOffset, t0Abs: rrT0, values: rrValues },
-        heartRate: { offset: hrOffset, t0Abs: hrT0, dtSec: hrDt, values: hrValues },
+        rrIntervalsSec: {
+          offset: rrOffset,
+          blockOffset: rrBlockOffset,
+          countOffset: rrCountOffset,
+          t0Abs: rrT0,
+          values: rrValues,
+        },
+        heartRate: {
+          offset: hrOffset,
+          countOffset: hrCountOffset,
+          t0Abs: hrT0,
+          dtSec: hrDt,
+          values: hrValues,
+        },
         breathing: {
           offset: breathingOffset,
+          countOffset: breathingCountOffset,
           t0Abs: hrT0,
           dtSec: hrDt,
           values: breathingValues,
@@ -647,7 +691,12 @@ export function parseVendorStoredAnalysis(
           diastolic,
           map: maps,
         },
-        trends: { t0Abs: trendT0, dtSec: trendDt, channels: trendChannels },
+        trends: {
+          t0Abs: trendT0,
+          dtSec: trendDt,
+          blockOffset: trendBlockOffset,
+          channels: trendChannels,
+        },
         spectrogram: {
           headerOffset: spectrogramHeaderOffset,
           valuesOffset: spectrogramValuesOffset,

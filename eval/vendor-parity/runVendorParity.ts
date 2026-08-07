@@ -9,7 +9,10 @@ import {
   parseVendorStoredAnalysis,
   roundHalfEven,
   type VendorPhaseMetrics,
+  type VendorStoredSeries,
 } from "../../api/_ans/vendorStored.ts";
+import { resolveTrendMapping } from "../../api/_ans/vendorTrendMapping.ts";
+import { buildVendorVisualization } from "../../api/_ans/vendorVisualization.ts";
 import type { AnsStudy, PhaseBlock, ProvField } from "../../shared/ansStudy.ts";
 
 type Status = "pass" | "mismatch" | "not_implemented" | "unavailable";
@@ -39,11 +42,41 @@ type OraclePhaseRow = {
   PP: OracleField<number | null>;
   MAP: OracleField<number | null>;
 };
+type OracleTrendArray = {
+  index: number;
+  offset: string;
+  count: number;
+  min: number;
+  max: number;
+  mean: number;
+  first4: number[];
+};
 type OracleCase = {
   ans_binary_structure: {
     bytes: number;
     sha256: string;
     ekg: { dt_sec: number; rate_hz: number; sample_count: number };
+    beat_interval_series?: { offset: string; count: number; min: number; max: number; mean: number };
+    sample_4hz_group?: {
+      dt_sec: number;
+      arrays: Array<{ offset: string; count: number; min: number; max: number; mean: number }>;
+      array_semantics: string[];
+    };
+    trend_group_4sec?: {
+      dt_sec: number;
+      arrays: OracleTrendArray[];
+      identified_semantics?: Record<string, string>;
+    };
+    spectrogram?: {
+      dt_sec: number;
+      f_param_1: number;
+      f_param_2: number;
+      rows: number;
+      cols: number;
+      dtype: string;
+      bytes_needed: number;
+    };
+    tail?: { offset: string; preview_hex: string };
   };
   demographics: {
     sex: OracleField<string>;
@@ -329,6 +362,388 @@ function compareStoredPhase(
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Phase 3: stored visualization parity
+//
+// These are real scored checks, not placeholders. The oracle records the byte
+// offset, sample count, min/max/mean and first four values of every stored
+// array, plus the spectrogram block's declared geometry and a byte-exact hex
+// preview of its header. HumanOS must reproduce all of it from the file alone.
+// ---------------------------------------------------------------------------
+
+/** Oracle statistics are transcribed to 4 decimal places. */
+const STAT_TOLERANCE = 5e-5;
+
+function hexOffset(input: string | undefined): number | null {
+  if (!input) return null;
+  const parsed = Number.parseInt(input, 16);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function seriesStats(values: number[]): { count: number; min: number; max: number; mean: number } {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  let total = 0;
+  for (const value of values) {
+    if (value < min) min = value;
+    if (value > max) max = value;
+    total += value;
+  }
+  return {
+    count: values.length,
+    min: values.length ? round4(min) : 0,
+    max: values.length ? round4(max) : 0,
+    mean: values.length ? round4(total / values.length) : 0,
+  };
+}
+
+function round4(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
+
+function statsTolerantEqual(
+  expected: { count: number; min: number; max: number; mean: number },
+  actual: { count: number; min: number; max: number; mean: number },
+): boolean {
+  return (
+    expected.count === actual.count &&
+    // Oracle statistics are 4-dp transcriptions of float32 values, so the last
+    // transcribed digit is a rounding artefact at large magnitudes.
+    Math.abs(expected.min - actual.min) <= Math.max(STAT_TOLERANCE, Math.abs(expected.min) * 1e-6) &&
+    Math.abs(expected.max - actual.max) <= Math.max(STAT_TOLERANCE, Math.abs(expected.max) * 1e-6) &&
+    // The oracle mean is a 4-dp transcription of a float32 average; allow the
+    // last transcribed digit plus float32 accumulation noise.
+    Math.abs(expected.mean - actual.mean) <= Math.max(STAT_TOLERANCE, Math.abs(expected.mean) * 2e-5)
+  );
+}
+
+function pushStatus(
+  rows: Comparison[],
+  row: Omit<Comparison, "status">,
+  ok: boolean,
+): void {
+  rows.push({ ...row, status: ok ? "pass" : "mismatch" });
+}
+
+/** Rebuild the spectrogram block header exactly as it must appear on disk. */
+function spectrogramHeaderHex(series: VendorStoredSeries): string {
+  const header = Buffer.alloc(48);
+  header.writeDoubleBE(series.spectrogram.t0Abs, 0);
+  header.writeDoubleBE(series.spectrogram.dtSec, 8);
+  header.writeDoubleBE(series.spectrogram.freqStartHz, 16);
+  header.writeDoubleBE(series.spectrogram.freqStepHz, 24);
+  header.writeUInt32BE(series.spectrogram.rows, 32);
+  header.writeUInt32BE(series.spectrogram.cols, 36);
+  header.writeFloatBE(series.spectrogram.values[0] ?? 0, 40);
+  header.writeFloatBE(series.spectrogram.values[1] ?? 0, 44);
+  return header.toString("hex");
+}
+
+function compareVisualization(
+  rows: Comparison[],
+  caseId: string,
+  deidentifiedFile: string,
+  oracleCase: OracleCase,
+  series: VendorStoredSeries,
+  phases: VendorPhaseMetrics[],
+  waveletName: string,
+): void {
+  const base = { caseId, deidentifiedFile };
+  const binary = oracleCase.ans_binary_structure;
+
+  // ---- 4 Hz series ---------------------------------------------------------
+  const fast = binary.sample_4hz_group;
+  if (fast) {
+    const actualFast = [series.heartRate, series.breathing];
+    compare(rows, {
+      ...base,
+      category: "stored_series_4hz",
+      metric: "dt_sec",
+      expected: fast.dt_sec,
+      actual: series.heartRate.dtSec,
+      note: "Stored 4 Hz time base for the heart-rate and breathing arrays.",
+    }, 1e-9);
+    fast.arrays.forEach((expected, index) => {
+      const actual = actualFast[index];
+      const label = fast.array_semantics[index] ?? `array_${index}`;
+      compare(rows, {
+        ...base,
+        category: "stored_series_4hz",
+        metric: `array_${index}_offset`,
+        expected: hexOffset(expected.offset),
+        actual: actual?.countOffset ?? null,
+        note: `Byte offset of the stored ${label} array descriptor.`,
+      });
+      const stats = seriesStats(actual?.values ?? []);
+      pushStatus(rows, {
+        ...base,
+        category: "stored_series_4hz",
+        metric: `array_${index}_stats`,
+        expected: { count: expected.count, min: expected.min, max: expected.max, mean: expected.mean },
+        actual: stats,
+        note: `Count, min, max and mean of the stored ${label} array.`,
+      }, statsTolerantEqual(expected, stats));
+    });
+  }
+
+  // ---- beat-to-beat interval series ---------------------------------------
+  const beats = binary.beat_interval_series;
+  if (beats) {
+    compare(rows, {
+      ...base,
+      category: "stored_series_rr",
+      metric: "offset",
+      expected: hexOffset(beats.offset),
+      actual: series.rrIntervalsSec.blockOffset,
+      note: "Byte offset of the stored beat-to-beat interval series.",
+    });
+    const stats = seriesStats(series.rrIntervalsSec.values);
+    pushStatus(rows, {
+      ...base,
+      category: "stored_series_rr",
+      metric: "stats",
+      expected: { count: beats.count, min: beats.min, max: beats.max, mean: beats.mean },
+      actual: stats,
+      note: "Count, min, max and mean of the stored interval series.",
+    }, statsTolerantEqual(beats, stats));
+  }
+
+  // ---- 4-second trend arrays ----------------------------------------------
+  const trends = binary.trend_group_4sec;
+  const mapping = resolveTrendMapping(series, phases);
+  if (trends) {
+    compare(rows, {
+      ...base,
+      category: "vendor_trend_arrays",
+      metric: "dt_sec",
+      expected: trends.dt_sec,
+      actual: series.trends.dtSec,
+    }, 1e-9);
+    compare(rows, {
+      ...base,
+      category: "vendor_trend_arrays",
+      metric: "array_count",
+      expected: trends.arrays.length,
+      actual: series.trends.channels.length,
+    });
+    trends.arrays.forEach((expected) => {
+      const actual = series.trends.channels.find((channel) => channel.index === expected.index);
+      compare(rows, {
+        ...base,
+        category: "vendor_trend_arrays",
+        metric: `trend_${expected.index}_offset`,
+        expected: hexOffset(expected.offset),
+        actual: actual?.countOffset ?? null,
+        note: "Byte offset of the stored trend array descriptor.",
+      });
+      const stats = seriesStats(actual?.values ?? []);
+      pushStatus(rows, {
+        ...base,
+        category: "vendor_trend_arrays",
+        metric: `trend_${expected.index}_stats`,
+        expected: { count: expected.count, min: expected.min, max: expected.max, mean: expected.mean },
+        actual: stats,
+      }, statsTolerantEqual(expected, stats));
+      const firstFour = (actual?.values ?? []).slice(0, 4).map(round4);
+      pushStatus(rows, {
+        ...base,
+        category: "vendor_trend_arrays",
+        metric: `trend_${expected.index}_first4`,
+        expected: expected.first4,
+        actual: firstFour,
+      },
+        firstFour.length === expected.first4.length &&
+          expected.first4.every((value, index) => Math.abs(value - firstFour[index]) <= STAT_TOLERANCE),
+      );
+    });
+  }
+
+  // ---- index-to-metric mapping --------------------------------------------
+  const semantics = trends?.identified_semantics ?? {};
+  const indexOfRole = (role: string): number | null =>
+    mapping.channels.find((channel) => channel.role === role)?.index ?? null;
+  const parseIndices = (key: string): number[] =>
+    key
+      .split(/[^0-9]+/)
+      .map((part) => Number.parseInt(part, 10))
+      .filter((value) => Number.isInteger(value));
+  const semanticIndices = (needle: RegExp): number[] => {
+    const key = Object.keys(semantics).find((candidate) => needle.test(semantics[candidate]));
+    return key ? parseIndices(key) : [];
+  };
+
+  const frfExpected = semanticIndices(/^FRF/i);
+  compare(rows, {
+    ...base,
+    category: "vendor_trend_array_mapping",
+    metric: "frf_index",
+    expected: frfExpected.length === 1 ? frfExpected[0] : null,
+    actual: indexOfRole("frf_hz"),
+    note: "Resolved from in-file evidence only; compared against the oracle's identified semantics.",
+  });
+
+  const bpm2Expected = semanticIndices(/LFa \/ RFa spectral power/i).slice().sort((a, b) => a - b);
+  const bpm2Actual = [indexOfRole("lfa_bpm2"), indexOfRole("rfa_bpm2")]
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b);
+  pushStatus(rows, {
+    ...base,
+    category: "vendor_trend_array_mapping",
+    metric: "lfa_rfa_index_pair",
+    expected: bpm2Expected,
+    actual: bpm2Actual,
+    note:
+      "The oracle left the LFa/RFa index ORDER unresolved; HumanOS resolves the order from the " +
+      "stored per-phase summary and reports both indices.",
+  }, bpm2Expected.length === 2 && JSON.stringify(bpm2Expected) === JSON.stringify(bpm2Actual));
+
+  const percentExpected = semanticIndices(/percent split/i).slice().sort((a, b) => a - b);
+  const percentActual = [indexOfRole("lfa_share_percent"), indexOfRole("rfa_share_percent")]
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b);
+  pushStatus(rows, {
+    ...base,
+    category: "vendor_trend_array_mapping",
+    metric: "share_index_pair",
+    expected: percentExpected,
+    actual: percentActual,
+  }, percentExpected.length === 2 && JSON.stringify(percentExpected) === JSON.stringify(percentActual));
+
+  const ratioExpected = semanticIndices(/ratio candidate/i);
+  compare(rows, {
+    ...base,
+    category: "vendor_trend_array_mapping",
+    metric: "vendor_internal_ratio_index",
+    expected: ratioExpected.length === 1 ? ratioExpected[0] : null,
+    actual: indexOfRole("lfa_rfa_area_ratio"),
+  });
+
+  compare(rows, {
+    ...base,
+    category: "vendor_trend_array_mapping",
+    metric: "clinical_channels_resolved",
+    expected: true,
+    actual: mapping.clinicalChannelsResolved,
+    note: mapping.warnings.join(" ") || "LFa, RFa, the LFa/RFa ratio and FRF were all resolved.",
+  });
+
+  // Every resolved channel must carry a method that is not a guess.
+  compare(rows, {
+    ...base,
+    category: "vendor_trend_array_mapping",
+    metric: "no_unjustified_labels",
+    expected: true,
+    actual: mapping.channels.every(
+      (channel) =>
+        (channel.role === "unmapped" && channel.method === "unresolved") ||
+        (channel.role !== "unmapped" && channel.method !== "unresolved" && channel.evidence.length > 0),
+    ),
+  });
+
+  // Exact pointwise identity: the mapped ratio channel IS LFa / RFa.
+  const lfaIndex = indexOfRole("lfa_bpm2");
+  const rfaIndex = indexOfRole("rfa_bpm2");
+  const ratioIndex = indexOfRole("lfa_rfa_ratio");
+  let identityAgreement: number | null = null;
+  if (lfaIndex !== null && rfaIndex !== null && ratioIndex !== null) {
+    const lfa = series.trends.channels[lfaIndex].values;
+    const rfa = series.trends.channels[rfaIndex].values;
+    const ratio = series.trends.channels[ratioIndex].values;
+    let comparable = 0;
+    let agreeing = 0;
+    for (let index = 0; index < ratio.length; index += 1) {
+      if (rfa[index] === 0 || ratio[index] === 0) continue;
+      comparable += 1;
+      if (Math.abs(lfa[index] / rfa[index] - ratio[index]) / Math.abs(ratio[index]) <= 1e-3) {
+        agreeing += 1;
+      }
+    }
+    identityAgreement = comparable ? Math.round((agreeing / comparable) * 10_000) / 10_000 : null;
+  }
+  pushStatus(rows, {
+    ...base,
+    category: "vendor_trend_array_mapping",
+    metric: "ratio_identity_agreement",
+    expected: ">= 0.99",
+    actual: identityAgreement,
+  }, identityAgreement !== null && identityAgreement >= 0.99);
+
+  // ---- wavelet spectrogram -------------------------------------------------
+  const spectrogram = binary.spectrogram;
+  if (spectrogram) {
+    const category = "vendor_wavelet_spectrogram";
+    compare(rows, { ...base, category, metric: "rows", expected: spectrogram.rows, actual: series.spectrogram.rows });
+    compare(rows, { ...base, category, metric: "cols", expected: spectrogram.cols, actual: series.spectrogram.cols });
+    compare(rows, { ...base, category, metric: "dt_sec", expected: spectrogram.dt_sec, actual: series.spectrogram.dtSec }, 1e-9);
+    compare(rows, { ...base, category, metric: "frequency_start_hz", expected: spectrogram.f_param_1, actual: series.spectrogram.freqStartHz }, 1e-12);
+    compare(rows, { ...base, category, metric: "frequency_step_hz", expected: spectrogram.f_param_2, actual: series.spectrogram.freqStepHz }, 1e-12);
+    compare(rows, {
+      ...base,
+      category,
+      metric: "value_bytes",
+      expected: spectrogram.bytes_needed,
+      actual: series.spectrogram.values.length * 4,
+      note: "Every declared float32 cell must be materialized.",
+    });
+    compare(rows, {
+      ...base,
+      category,
+      metric: "values_finite",
+      expected: true,
+      actual: series.spectrogram.values.every((value) => Number.isFinite(value)),
+    });
+    const tail = binary.tail;
+    if (tail) {
+      compare(rows, {
+        ...base,
+        category,
+        metric: "block_offset",
+        expected: hexOffset(tail.offset),
+        actual: series.spectrogram.headerOffset,
+      });
+      // Byte-exact reproduction: rebuild the stored header plus the first two
+      // stored cells and compare against the oracle's raw hex preview.
+      compare(rows, {
+        ...base,
+        category,
+        metric: "block_header_bytes_hex",
+        expected: tail.preview_hex.toLowerCase(),
+        actual: spectrogramHeaderHex(series),
+        note: "Header doubles, row/column counts and the first two stored cells, byte for byte.",
+      });
+    }
+
+    // Transport must not alter a single stored value.
+    const visualization = buildVendorVisualization(series, phases, waveletName);
+    const payload = visualization.spectrogram;
+    let transportExact = false;
+    if (payload && payload.source === "ans_stored" && payload.strideFactor === 1) {
+      const decoded = Buffer.from(payload.values, "base64");
+      transportExact =
+        decoded.byteLength === series.spectrogram.values.length * 4 &&
+        series.spectrogram.values.every(
+          (value, index) => decoded.readFloatBE(index * 4) === value,
+        );
+    }
+    pushStatus(rows, {
+      ...base,
+      category,
+      metric: "transport_roundtrip_exact",
+      expected: true,
+      actual: transportExact,
+      note: "Base64 float32 transport decoded back to the stored matrix without loss.",
+    }, transportExact);
+    compare(rows, {
+      ...base,
+      category,
+      metric: "wavelet_name_present",
+      expected: true,
+      actual: typeof waveletName === "string" && waveletName.length > 0,
+    });
+  }
+}
+
 function compareCase(
   caseId: string,
   oracleCase: OracleCase,
@@ -352,7 +767,9 @@ function compareCase(
   const study = parseStudy({ buffer: source.buffer, fileName: deidentifiedFile });
   const binaryHeader = parseBinaryHeader(source.buffer);
   if (!binaryHeader.sampling) throw new Error(`Binary sampling block missing for ${caseId}`);
-  const stored = parseVendorStoredAnalysis(source.buffer, binaryHeader.sampling);
+  const stored = parseVendorStoredAnalysis(source.buffer, binaryHeader.sampling, {
+    collectSeries: true,
+  });
   const rows: Comparison[] = [];
   const binary = oracleCase.ans_binary_structure;
   const demo = oracleCase.demographics;
@@ -457,18 +874,25 @@ function compareCase(
     note: "Direct binary and ratio evidence recognizes a valid file even without ASCII phase headings.",
   });
 
-  for (const [metric, note] of [
-    ["vendor_trend_array_mapping", "Exact LFa/RFa trend-array indices remain unresolved."],
-    ["vendor_wavelet_spectrogram", "Vendor wavelet/spectrogram reproduction is not implemented."],
-  ] as const) {
+  if (stored.series) {
+    compareVisualization(
+      rows,
+      caseId,
+      deidentifiedFile,
+      oracleCase,
+      stored.series,
+      stored.phases,
+      stored.waveletName,
+    );
+  } else {
     rows.push({
       ...base,
-      category: "residual_vendor_parity",
-      metric,
-      status: "not_implemented",
-      expected: "vendor parity",
+      category: "vendor_visualization",
+      metric: "stored_series_available",
+      status: "unavailable",
+      expected: "stored trend and spectrogram arrays",
       actual: null,
-      note,
+      note: "The stored analysis block did not yield the visualization series.",
     });
   }
   return rows;
