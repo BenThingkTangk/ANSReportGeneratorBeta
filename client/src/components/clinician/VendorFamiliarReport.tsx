@@ -23,6 +23,7 @@
 import { motion } from "framer-motion";
 import type { VendorReportExtraction, VendorField, VendorPhaseTable, VendorPhaseRow, VendorOrthostaticObservation, VendorNarrativeFinding } from "@shared/vendorExtraction";
 import { crossCheckTestDate } from "@shared/vendorExtraction";
+import { ProvenanceChip } from "../ProvenanceChip";
 import {
   COLOMBO_NORMS,
   EWING_THRESHOLDS,
@@ -95,10 +96,13 @@ function ValueCell({
           <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{interpretation}</span>
         )}
         {read ? (
-          <span className="tabular-nums text-base font-semibold" style={{ color: "hsl(var(--foreground))" }}>
-            {field.value!.toFixed(digits)}
-            {field.unit ? <span className="text-[10px] text-muted-foreground ml-1">{field.unit}</span> : null}
-          </span>
+          <>
+            <span className="tabular-nums text-base font-semibold" style={{ color: "hsl(var(--foreground))" }}>
+              {field.value!.toFixed(digits)}
+              {field.unit ? <span className="text-[10px] text-muted-foreground ml-1">{field.unit}</span> : null}
+            </span>
+            <ProvenanceChip value="Imported from paired vendor PDF" />
+          </>
         ) : (
           <span className="text-xs italic text-muted-foreground/60">not read</span>
         )}

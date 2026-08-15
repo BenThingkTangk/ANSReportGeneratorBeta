@@ -7,12 +7,13 @@
 // becomes writable, fold the synopsis change (deterministic init + best-effort,
 // failure-swallowing AI enrichment) back into the original file and delete this
 // shim. The ONLY change vs. the original is synopsis sourcing — no other logic.
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
 import type { VendorReportExtraction } from "@shared/vendorExtraction";
 import { apiRequest } from "@/lib/queryClient";
+import { approveClinicalAiDraft, createClinicalAiDraft, type ClinicalAiDraft } from "@/lib/clinicalAiDraft";
 import { buildClinicianSynopsis } from "@shared/deterministicSynopsis";
 import { VendorFamiliarReport } from "./clinician/VendorFamiliarReport";
 import { VendorReconciliationBanner } from "./VendorReconciliationBanner";
@@ -34,6 +35,7 @@ import { CollapsibleSection } from "./clinician/CollapsibleSection";
 import { IndicationsPanel } from "./clinician/IndicationsPanel";
 import { WhyConclusionsPanel } from "./clinician/WhyConclusionsPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { ProvenanceChip } from "./ProvenanceChip";
 
 interface ClinicianPortalProps {
   report: ANSReport;
@@ -93,25 +95,21 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
   const vendorFindings = vendorExtraction?.narrative
     ? { findings: vendorExtraction.narrative.findings, printedNumbers: vendorExtraction.narrative.printedNumbers }
     : undefined;
-  // Clinician synopsis is built deterministically from the report's phase metrics
-  // and Colombo patterns, so it renders instantly with no network dependency.
-  // Optional AI enrichment (below) only ever swaps in richer prose on success.
-  const [synopsis, setSynopsis] = useState<string>(
-    () => report.clinicianSynopsis ?? buildClinicianSynopsis(report, vendorFindings),
-  );
-  // Non-blocking flag: the deterministic synopsis is already on screen; this
-  // only drives a small "Enhancing with AI…" badge while the fetch runs.
+  const deterministicSynopsis = report.clinicianSynopsis ?? buildClinicianSynopsis(report, vendorFindings);
+  // Deliberately local, clinician-only review state. There is no persistence
+  // backend for drafts, and the patient portal never receives or reads it.
+  const [aiDraft, setAiDraft] = useState<ClinicalAiDraft | null>(null);
   const [enhancing, setEnhancing] = useState(false);
 
-  // Best-effort AI enrichment. Failures are swallowed so the deterministic
-  // synopsis is never replaced by a "Connection error".
-  const enrichSynopsis = async () => {
+  // AI is opt-in. It produces a clinician review draft, never an automatic
+  // replacement for deterministic or patient-facing text.
+  const generateAiDraft = async () => {
     setEnhancing(true);
     try {
       const res = await apiRequest("POST", "/api/synopsis", { report });
       const data = await res.json();
       if (data.success && data.clinicianSynopsis) {
-        setSynopsis(data.clinicianSynopsis);
+        setAiDraft(createClinicalAiDraft(data.clinicianSynopsis));
       }
     } catch {
       // Keep the deterministic synopsis on any failure.
@@ -119,17 +117,6 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
       setEnhancing(false);
     }
   };
-
-  useEffect(() => {
-    // Skip vendor-blind AI enrichment when a vendor report has findings, so the
-    // deterministic vendor-aware synopsis (with the verbatim vendor block) is
-    // never overwritten by /api/synopsis prose that omits it.
-    const hasVendorFindings = (vendorFindings?.findings?.length ?? 0) > 0 || (vendorFindings?.printedNumbers?.length ?? 0) > 0;
-    if (!report.clinicianSynopsis && !hasVendorFindings) {
-      enrichSynopsis();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   return (
     <div
@@ -140,6 +127,18 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
       <ClinicianHeader report={report} />
 
       <VendorReconciliationBanner report={report} />
+
+      <div className="flex flex-wrap items-center gap-2" data-testid="clinician-provenance-summary">
+        <ProvenanceChip value="Measured from .ans" />
+        <ProvenanceChip value="Derived from raw ECG" />
+        <ProvenanceChip value="Generic research threshold" />
+        {report.vendorReconciliation?.status === "matched" && (
+          <ProvenanceChip value="Imported from paired vendor PDF" />
+        )}
+        {report.clinicalPipeline?.mode === "canonical" && (
+          <ProvenanceChip value="Not assessed" />
+        )}
+      </div>
 
       {hasVendor && (
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -164,11 +163,14 @@ export function ClinicianPortalLive({ report, ansStudy, vendorExtraction, vendor
       {(!hasVendor || view === "humanos") && (
       <>
       <ClinicianSynopsis
-        synopsis={synopsis}
+        synopsis={aiDraft?.status === "approved" ? aiDraft.text : deterministicSynopsis}
         loading={false}
         error={null}
-        onRetry={enrichSynopsis}
+        onRetry={generateAiDraft}
         enhancing={enhancing}
+        aiDraft={aiDraft}
+        onGenerateAiDraft={generateAiDraft}
+        onApproveAiDraft={() => setAiDraft((draft) => draft ? approveClinicalAiDraft(draft) : draft)}
       />
 
       {/* PR2 — Data Quality & Confidence panel slots in above clinical content. */}

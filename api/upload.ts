@@ -21,6 +21,14 @@ import {
   mayInterpretClinically,
   type MetricProvenance,
 } from "../shared/metricProvenance.js";
+import { DIAGNOSTIC_DISCLAIMER, type DiagnosticSummary } from "../shared/diagnosticSummary.js";
+
+/**
+ * Escape hatch for an audited legacy presentation only. It is intentionally
+ * opt-in: production uploads default to the canonical scoring pipeline.
+ */
+export const LEGACY_CLINICAL_INTERPRETATION_ENABLED =
+  process.env.LEGACY_CLINICAL_INTERPRETATION_ENABLED === "true";
 
 /**
  * Vendor-reported metrics parsed verbatim from the paired signed PDF
@@ -246,11 +254,11 @@ interface MultiParameterGraphical {
 
 interface ANSReport {
   patientData: ParsedANSData;
-  wellnessScore: number;
-  wellnessTier: "Optimal" | "Resilient" | "Balanced" | "Stressed" | "Depleted" | "Critical";
+  wellnessScore: number | null;
+  wellnessTier: "Optimal" | "Resilient" | "Balanced" | "Stressed" | "Depleted" | "Critical" | "Not assessed";
   wellnessBreakdown: WellnessBreakdown;
   riskLevel: string;
-  energyLevel: "Low" | "Moderate" | "High";
+  energyLevel: "Low" | "Moderate" | "High" | "Not assessed";
   /**
    * True only when the proprietary spectral aggregates (LFa/RFa/SB) are
    * available at a clinically-usable provenance tier. For raw ECG-only .ans
@@ -312,6 +320,21 @@ interface ANSReport {
    * Absent when no vendor metrics were supplied.
    */
   vendorReconciliation?: VendorReconciliationStatus;
+  diagnosticSummary?: DiagnosticSummary;
+  clinicalPipeline?: {
+    mode: "canonical" | "legacy";
+    legacyClinicalInterpretationEnabled: boolean;
+    nonDiagnosticDisclaimer: string;
+    clinicianReviewRequired: true;
+    missingOrNotAssessedDomains: string[];
+  };
+  metricSources?: Record<string, {
+    directAns?: number;
+    vendorReported?: number;
+    displayed?: number;
+    displayedProvenance: "Measured from .ans" | "Imported from paired vendor PDF" | "Not assessed";
+    precedence: "direct_ans" | "paired_vendor_pdf" | "not_assessed";
+  }>;
 }
 
 // ---- Multipart Parser -------------------------------------------------------
@@ -2464,6 +2487,169 @@ export function clinicalSnapshot(report: ANSReport): Omit<ANSReport, "generatedA
   return rest;
 }
 
+/**
+ * Compatibility envelope for the canonical clinical pipeline.
+ *
+ * The inlined Colombo engine above remains available for the explicitly enabled
+ * legacy path, but its wellness/tier/pattern/therapy/phase-impression outputs
+ * must never leak through the default upload response. This adapter preserves
+ * source measurements and vendor provenance while replacing every legacy
+ * clinical conclusion with empty or Not-assessed compatibility values.
+ */
+export function canonicalClinicalReport(
+  legacy: ANSReport,
+  summary: DiagnosticSummary,
+  vendorMetrics?: VendorReportedMetrics,
+): ANSReport {
+  const directSbp = legacy.patientData.baselineSystolicBP;
+  const directDbp = legacy.patientData.baselineDiastolicBP;
+  const metricSources: NonNullable<ANSReport["metricSources"]> = {
+    "baseline.SBP": {
+      directAns: directSbp,
+      vendorReported: vendorMetrics?.SBP,
+      displayed: vendorMetrics?.SBP ?? directSbp,
+      displayedProvenance: vendorMetrics?.SBP != null
+        ? "Imported from paired vendor PDF"
+        : directSbp != null ? "Measured from .ans" : "Not assessed",
+      precedence: vendorMetrics?.SBP != null
+        ? "paired_vendor_pdf"
+        : directSbp != null ? "direct_ans" : "not_assessed",
+    },
+    "baseline.DBP": {
+      directAns: directDbp,
+      vendorReported: vendorMetrics?.DBP,
+      displayed: vendorMetrics?.DBP ?? directDbp,
+      displayedProvenance: vendorMetrics?.DBP != null
+        ? "Imported from paired vendor PDF"
+        : directDbp != null ? "Measured from .ans" : "Not assessed",
+      precedence: vendorMetrics?.DBP != null
+        ? "paired_vendor_pdf"
+        : directDbp != null ? "direct_ans" : "not_assessed",
+    },
+    "baseline.LFa": {
+      vendorReported: vendorMetrics?.LFa,
+      displayed: vendorMetrics?.LFa,
+      displayedProvenance: vendorMetrics?.LFa != null
+        ? "Imported from paired vendor PDF" : "Not assessed",
+      precedence: vendorMetrics?.LFa != null ? "paired_vendor_pdf" : "not_assessed",
+    },
+    "baseline.RFa": {
+      vendorReported: vendorMetrics?.RFa,
+      displayed: vendorMetrics?.RFa,
+      displayedProvenance: vendorMetrics?.RFa != null
+        ? "Imported from paired vendor PDF" : "Not assessed",
+      precedence: vendorMetrics?.RFa != null ? "paired_vendor_pdf" : "not_assessed",
+    },
+    "baseline.SB": {
+      vendorReported: vendorMetrics?.SB,
+      displayed: vendorMetrics?.SB,
+      displayedProvenance: vendorMetrics?.SB != null
+        ? "Imported from paired vendor PDF" : "Not assessed",
+      precedence: vendorMetrics?.SB != null ? "paired_vendor_pdf" : "not_assessed",
+    },
+  };
+
+  const notAssessedBodySystems: BodySystemImpact[] = [
+    "cardiovascular", "respiratory", "digestive", "nervous",
+    "endocrine", "musculoskeletal", "immune",
+  ].map((system) => ({
+    system: system as BodySystemImpact["system"],
+    impact: 0,
+    label: "Not assessed",
+    description: "No body-system impact conclusion is produced by the canonical upload pipeline.",
+    assessed: false,
+  }));
+  const unavailableSubScore = (): SubScore => ({
+    score: null as unknown as number,
+    weight: null as unknown as number,
+    contribution: null as unknown as number,
+    drivers: [],
+    notes: ["Not assessed"],
+    available: false,
+  });
+  // JSON serializes the NaN-like typed null placeholders as null, preserving
+  // the legacy shape without retaining a wellness interpretation.
+  const unavailableWellnessBreakdown: WellnessBreakdown = {
+    baselineAutonomic: unavailableSubScore(),
+    sympathovagalBalance: unavailableSubScore(),
+    reflexIntegrity: unavailableSubScore(),
+    orthostaticResponse: unavailableSubScore(),
+    hrvReserve: unavailableSubScore(),
+    patternPenalty: { total: null as unknown as number, items: [] },
+    ageMultiplier: null as unknown as number,
+    rawTotal: null as unknown as number,
+    ageAdjusted: null as unknown as number,
+    final: null as unknown as number,
+    topPositiveDrivers: [],
+    topNegativeDrivers: [],
+    headline: "Not assessed",
+  };
+
+  return {
+    ...legacy,
+    // Compatibility fields: no wellness score/tier, risk, energy label, pattern,
+    // therapeutic, or overall conclusion is emitted by the canonical path.
+    wellnessScore: null,
+    wellnessTier: "Not assessed",
+    wellnessBreakdown: unavailableWellnessBreakdown,
+    riskLevel: "Not assessed",
+    energyLevel: "Not assessed",
+    autonomicBalance: {
+      parasympathetic: null,
+      sympathetic: null,
+      balance: null,
+      available: false,
+      interpretation: "Not assessed in the canonical clinical pipeline.",
+    },
+    phaseFindings: [],
+    dysfunctionPatterns: {
+      parasympatheticDominance: false,
+      parasympatheticExcess: false,
+      parasympatheticWithdrawal: false,
+      sympatheticExcess: false,
+      sympatheticWithdrawal: false,
+      maskedSW: false,
+      advancedAutonomicDysfunction: false,
+      CAN: false,
+      POTS: false,
+      orthostaticHypotension: false,
+      vasovagalRisk: false,
+      preSyncopeRisk: false,
+      bradycardia: false,
+      highFRF: false,
+    },
+    therapyRecommendations: [],
+    contraindications: [],
+    followUp: {
+      retestInterval: "Not assessed",
+      rationale: "Clinician review required.",
+      monitorParameters: [],
+    },
+    bodySystemImpact: notAssessedBodySystems,
+    clinicalFlags: [
+      "Non-diagnostic measured-data report.",
+      "Clinician review required.",
+    ],
+    overallImpression:
+      "Non-diagnostic measured-data report. Clinical findings and conclusions are limited to the canonical diagnostic summary; clinician review required.",
+    respiratoryFrequency: null,
+    // Graphical aggregates are legacy presentation outputs. The canonical
+    // response keeps phase measurements but does not ship an inferred
+    // multi-parameter interpretation surface.
+    multiParameter: undefined,
+    indications: [],
+    diagnosticSummary: summary,
+    clinicalPipeline: {
+      mode: "canonical",
+      legacyClinicalInterpretationEnabled: false,
+      nonDiagnosticDisclaimer: DIAGNOSTIC_DISCLAIMER,
+      clinicianReviewRequired: true,
+      missingOrNotAssessedDomains: summary.missingDomains,
+    },
+    metricSources,
+  };
+}
+
 // ---- Handler ----------------------------------------------------------------
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -2626,11 +2812,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         diagnosticSummary = undefined;
       }
     }
-    // Embed on the report for back-compat consumers that only look at
-    // `result.report`, AND surface at the top level for new consumers.
-    const reportWithSummary = diagnosticSummary
-      ? { ...report, diagnosticSummary }
-      : report;
+    // Fail closed: the canonical response contract requires the deterministic
+    // summary. Do not fall back to the inlined legacy interpreter when scoring
+    // fails or is unavailable.
+    if (!diagnosticSummary && !LEGACY_CLINICAL_INTERPRETATION_ENABLED) {
+      return res.status(422).json({
+        success: false,
+        error: "Canonical diagnostic summary could not be computed; no clinical interpretation was generated.",
+      });
+    }
+    // The canonical scorer is the sole creator of clinical findings,
+    // phenotypes, confidence, and deterministic conclusions. The legacy
+    // formatter is retained only behind an explicit environment flag. A raw
+    // .ans upload is *always* canonical, even when that escape hatch is enabled.
+    // This ensures it cannot emit wellness/tier labels, CAN/baroreflex/POTS/
+    // vasovagal assertions, body impacts, therapy topics, phase impressions, or
+    // a vendor-equivalent conclusion.
+    const rawAnsOnly = !vendorMetrics;
+    const useLegacyClinicalInterpretation =
+      LEGACY_CLINICAL_INTERPRETATION_ENABLED && !rawAnsOnly;
+    const reportWithSummary: ANSReport = diagnosticSummary && !useLegacyClinicalInterpretation
+      ? canonicalClinicalReport(report, diagnosticSummary, vendorMetrics)
+      : {
+          ...report,
+          diagnosticSummary,
+          clinicalPipeline: {
+            mode: "legacy",
+            legacyClinicalInterpretationEnabled: true,
+            nonDiagnosticDisclaimer: DIAGNOSTIC_DISCLAIMER,
+            clinicianReviewRequired: true,
+            missingOrNotAssessedDomains: diagnosticSummary?.missingDomains ?? [],
+          },
+        };
     return res.status(200).json({
       success: true,
       patientData: wirePatient,

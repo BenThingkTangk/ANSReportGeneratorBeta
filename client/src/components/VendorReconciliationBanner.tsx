@@ -25,7 +25,7 @@ export function VendorReconciliationBanner({ report }: { report: ANSReport }) {
       >
         <span className="mt-0.5 text-emerald-300" aria-hidden="true">✓</span>
         <div className="min-w-0">
-          <div className="text-[12px] font-semibold text-emerald-200">Vendor report matched</div>
+          <div className="text-[12px] font-semibold text-emerald-200">Vendor report matched — Imported from paired vendor report</div>
           <p className="text-[11px] text-emerald-200/80 leading-relaxed">
             The attached vendor PDF was verified against this study
             {recon.matchedName ? ` for ${recon.matchedName}` : ""}

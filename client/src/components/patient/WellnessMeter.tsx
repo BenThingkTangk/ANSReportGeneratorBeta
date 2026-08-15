@@ -17,8 +17,8 @@ const tierConfig: Record<WellnessTier, { color: string; bg: string; glow: string
 
 export function WellnessMeter({ report }: WellnessMeterProps) {
   const [displayScore, setDisplayScore] = useState(0);
-  const tier = tierConfig[report.wellnessTier] ?? tierConfig.Balanced;
-  const score = report.wellnessScore;
+  const tier = tierConfig[report.wellnessTier as WellnessTier] ?? tierConfig.Balanced;
+  const score = report.wellnessScore ?? 0;
 
   useEffect(() => {
     const duration = 1800;

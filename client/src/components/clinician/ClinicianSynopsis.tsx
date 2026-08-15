@@ -1,5 +1,6 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { RefreshCw, Sparkles } from "lucide-react";
+import type { ClinicalAiDraft } from "@/lib/clinicalAiDraft";
 
 interface ClinicianSynopsisProps {
   synopsis: string | null;
@@ -9,9 +10,16 @@ interface ClinicianSynopsisProps {
   /** True while the best-effort AI enrichment is in flight. The deterministic
    *  synopsis stays fully visible; only a small non-blocking badge appears. */
   enhancing?: boolean;
+  /** Session-only clinician review draft. Never supplied to the patient portal. */
+  aiDraft?: ClinicalAiDraft | null;
+  onGenerateAiDraft?: () => void;
+  onApproveAiDraft?: () => void;
 }
 
-export function ClinicianSynopsis({ synopsis, loading, error, onRetry, enhancing }: ClinicianSynopsisProps) {
+export function ClinicianSynopsis({
+  synopsis, loading, error, onRetry, enhancing,
+  aiDraft, onGenerateAiDraft, onApproveAiDraft,
+}: ClinicianSynopsisProps) {
   const reduce = useReducedMotion();
   return (
     <motion.div
@@ -23,8 +31,29 @@ export function ClinicianSynopsis({ synopsis, loading, error, onRetry, enhancing
     >
       <div className="flex items-center justify-between gap-3 mb-3">
         <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium">
-          Clinical Interpretation — Atom Summary
+          Clinical interpretation
         </h3>
+        <div className="flex items-center gap-2">
+          {aiDraft && (
+            <span
+              className="text-[10px] px-2 py-0.5 rounded-full border border-amber-500/35 text-amber-300"
+              data-testid="ai-draft-provenance"
+            >
+              {aiDraft.status === "approved" ? "Clinician-approved conclusion" : "AI draft explanation"}
+            </span>
+          )}
+          {onGenerateAiDraft && (
+            <button
+              type="button"
+              onClick={onGenerateAiDraft}
+              disabled={enhancing}
+              className="text-[10px] px-2 py-1 rounded-md border border-cyan-500/35 text-cyan-200 hover:bg-cyan-500/10 disabled:opacity-60"
+              data-testid="generate-ai-draft"
+            >
+              {enhancing ? "Generating AI draft…" : "Generate AI draft explanation"}
+            </button>
+          )}
+        </div>
         {enhancing && (
           <motion.span
             data-testid="synopsis-enhancing"
@@ -65,8 +94,32 @@ export function ClinicianSynopsis({ synopsis, loading, error, onRetry, enhancing
       {synopsis && !loading && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
           <p className="text-sm leading-6 text-foreground/85 whitespace-pre-wrap">{synopsis}</p>
+          {aiDraft && aiDraft.status === "draft" && onApproveAiDraft && (
+            <div
+              className="mt-3 p-3 rounded-lg border border-amber-500/30 bg-amber-500/5"
+              data-testid="ai-draft-review-state"
+            >
+              <p className="text-xs text-amber-100/90 mb-2">
+                Saved as clinician review draft — session-only, not patient-visible. Created {new Date(aiDraft.createdAt).toLocaleString()}.
+              </p>
+              <button
+                type="button"
+                onClick={onApproveAiDraft}
+                className="text-xs px-3 py-1.5 rounded-md bg-amber-500/15 border border-amber-400/40 text-amber-100 hover:bg-amber-500/25"
+                data-testid="approve-ai-draft"
+              >
+                Approve clinician rendering
+              </button>
+            </div>
+          )}
+          {aiDraft?.status === "approved" && (
+            <p className="text-[10px] text-teal-200 mt-3" data-testid="ai-draft-approved-state">
+              Clinician-approved conclusion — approved {aiDraft.approvedAt ? new Date(aiDraft.approvedAt).toLocaleString() : "now"}.
+              This session-only draft is not patient-visible because no durable patient-publication workflow exists.
+            </p>
+          )}
           <p className="text-[10px] text-muted-foreground mt-3 pt-3 border-t border-border/20">
-            — Powered by ATOM
+            — Deterministic report content; AI text requires clinician approval
           </p>
         </motion.div>
       )}

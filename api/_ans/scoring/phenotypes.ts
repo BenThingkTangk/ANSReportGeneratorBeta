@@ -377,6 +377,21 @@ function detectSympatheticExcess(ctx: PhenotypeContext): PhenotypeFlag | Blocked
 
 function detectPossibleCanRisk(ctx: PhenotypeContext): PhenotypeFlag | BlockedClaim {
   // Cardiovascular autonomic neuropathy risk: combined cardiovagal + adrenergic impairment.
+  // A cuff-only orthostatic screen cannot establish the adrenergic/baroreflex
+  // component required for any CAN-risk phenotype. This is a hard safety gate:
+  // even an abnormal screen must be reported as not assessed for CAN risk.
+  if (ctx.adrenergic.score.screenOnly) {
+    return {
+      claim: "Possible cardiovascular autonomic neuropathy (CAN) risk",
+      missingFields: [
+        "adrenergic.beatToBeatBP.valsalvaLatePhaseII",
+        "adrenergic.beatToBeatBP.valsalvaPhaseIV",
+        "adrenergic.pressureRecoveryTime",
+      ],
+      explanation:
+        "CAN risk not evaluated: the available adrenergic result is an orthostatic cuff-BP screen only. A full beat-to-beat BP/baroreflex assessment (including Valsalva late phase II, phase IV, and pressure recovery) is required.",
+    } as BlockedClaim;
+  }
   if (!ctx.cardiovagal.score.assessable || !ctx.adrenergic.score.assessable) {
     const missing: string[] = [];
     if (!ctx.cardiovagal.score.assessable) missing.push(...ctx.cardiovagal.score.sourceFields);

@@ -143,7 +143,7 @@ describe("Clinician charts never fabricate spectral values (FOURTH FINAL-QA)", (
   it("confirms the input state: spectral + BP unavailable, ECG present", () => {
     expect(report.spectralAvailable).toBe(false);
     expect(report.bpAvailable).toBe(false);
-    expect(report.multiParameter?.ecgAvailable).toBe(true);
+    expect(report.multiParameter).toBeUndefined();
     // Ratios are healthy (Normal) in the source data.
     expect(report.ratios.eiRatio.classification.severity).toBe("Normal");
     expect(report.ratios.valsalvaRatio.classification.severity).toBe("Normal");
@@ -177,20 +177,17 @@ describe("Clinician charts never fabricate spectral values (FOURTH FINAL-QA)", (
     cleanup();
   });
 
-  it("shows explicit unavailable states for every spectral chart", async () => {
+  it("does not mount the legacy graphical interpretation surface", async () => {
     const { cleanup, screen } = await import("@testing-library/react");
     await renderClinician();
 
-    // Scatter/response-maps section replaced with a not-reproducible card.
-    expect(screen.getByTestId("mpg-scatter-unavailable")).toBeTruthy();
-    // Rolling LFa/RFa trend replaced with a not-reproducible card...
-    expect(screen.getByTestId("mpg-lfa-rfa-unavailable")).toBeTruthy();
-    // ...and the real LFa/RFa chart must NOT be mounted.
+    // Canonical raw uploads deliberately omit the legacy multi-parameter
+    // calculation surface rather than presenting a vendor-like interpretation.
+    expect(screen.getByTestId("mpg-unavailable")).toBeTruthy();
     expect(screen.queryByTestId("mpg-lfa-rfa-chart")).toBeNull();
 
-    // HR + breathing trends (legitimately ECG-derived) remain present.
-    const portal = screen.getByTestId("clinician-portal");
-    expect(portal.textContent).toMatch(/Heart Rate|HR/);
+    // Direct phase HR data remains available in the measurements table.
+    expect(screen.getByTestId("phase-event-table").textContent).toMatch(/HR/);
 
     cleanup();
   });
@@ -220,15 +217,14 @@ describe("Clinician charts never fabricate spectral values (FOURTH FINAL-QA)", (
     cleanup();
   });
 
-  it("Ewing ratio tiles report Normal, never abnormal, under source thresholds", async () => {
-    const { cleanup, screen } = await import("@testing-library/react");
-    await renderClinician();
-
-    for (const id of ["ratio-tile-ei", "ratio-tile-valsalva", "ratio-tile-3015"]) {
-      const status = screen.getByTestId(`${id}-status`);
-      expect(status.textContent).toContain("Normal");
-      expect(status.textContent).not.toMatch(/High|Low|Abnormal|Borderline/);
+  it("retains source-threshold Ewing classifications without mounting a legacy graph", () => {
+    for (const ratio of [
+      report.ratios.eiRatio,
+      report.ratios.valsalvaRatio,
+      report.ratios.thirtyFifteenRatio,
+    ]) {
+      expect(ratio.classification.severity).toBe("Normal");
+      expect(ratio.classification.label).not.toMatch(/High|Low|Abnormal|Borderline/);
     }
-    cleanup();
   });
 });

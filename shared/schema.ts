@@ -241,11 +241,13 @@ export interface MultiParameterGraphical {
 
 export interface ANSReport {
   patientData: ANSPatientData;
-  wellnessScore: number;
-  wellnessTier: WellnessTier;
+  /** Legacy-only composite. Null in the canonical pipeline. */
+  wellnessScore: number | null;
+  wellnessTier: WellnessTier | "Not assessed";
+  /** Legacy-only composite detail. Null-like compatibility values in canonical mode. */
   wellnessBreakdown: WellnessBreakdown;
   riskLevel: string;
-  energyLevel: "Low" | "Moderate" | "High";
+  energyLevel: "Low" | "Moderate" | "High" | "Not assessed";
   /**
    * True only when the proprietary spectral aggregates (LFa/RFa/SB) are
    * available at a clinically-usable provenance tier. False for raw ECG-only
@@ -298,6 +300,32 @@ export interface ANSReport {
     checks?: { name: boolean | null; testDate: boolean | null; dob: boolean | null };
     reason?: string;
   };
+  /**
+   * Explicit safety boundary for consumers that still accept the legacy report
+   * shape. `canonical` contains measured data plus the deterministic summary;
+   * its compatibility fields are deliberately non-clinical.
+   */
+  clinicalPipeline?: {
+    mode: "canonical" | "legacy";
+    legacyClinicalInterpretationEnabled: boolean;
+    nonDiagnosticDisclaimer: string;
+    clinicianReviewRequired: true;
+    missingOrNotAssessedDomains: string[];
+  };
+  /**
+   * Retains both direct .ans and paired-PDF values when both exist. `displayed`
+   * is never an implicit overwrite: its precedence and provenance are stated.
+   */
+  metricSources?: Record<string, {
+    directAns?: number;
+    vendorReported?: number;
+    displayed?: number;
+    displayedProvenance:
+      | "Measured from .ans"
+      | "Imported from paired vendor PDF"
+      | "Not assessed";
+    precedence: "direct_ans" | "paired_vendor_pdf" | "not_assessed";
+  }>;
 }
 
 export interface UploadResponse {

@@ -179,7 +179,7 @@ describe("POST /api/upload — spectral/BP unavailable safety contract (SECOND F
     expect(indicationCodes).not.toContain("AAN");
   });
 
-  it("recommends clinician review instead of ALA / salt / pharmacology", async () => {
+  it("emits no therapy recommendations; clinician review is the only safe next step", async () => {
     const { bytes, name } = pickDataFile();
     const { json } = await invokeHandler(bytes, name);
     const therapies: any[] = json.report.therapyRecommendations ?? [];
@@ -206,9 +206,9 @@ describe("POST /api/upload — spectral/BP unavailable safety contract (SECOND F
     const wholeBlob = collectStrings(therapies).join(" \u2029 ");
     expect(wholeBlob).not.toMatch(/\d+\s*mg\s*(?:TID|BID|QD|daily|once|twice)/i);
 
-    // The explicit safe fallback must be present.
-    expect(wholeBlob).toMatch(/insufficient data/i);
-    expect(wholeBlob).toMatch(/clinician review/i);
+    // Canonical reports do not emit a legacy treatment fallback card at all.
+    expect(therapies).toEqual([]);
+    expect(json.report.overallImpression).toMatch(/clinician review required/i);
   });
 
   it("body-system impact is qualitative — no unexplained negative score", async () => {

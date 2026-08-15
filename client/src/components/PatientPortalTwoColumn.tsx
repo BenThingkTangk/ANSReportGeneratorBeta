@@ -7,11 +7,9 @@
 // to the original. RECONCILE: when patient/ becomes writable, fold the hero grid
 // change back into patient/PatientPortal.tsx, restore the ./AutonomicBalanceGauge
 // import, and delete this shim + AutonomicBalanceGaugeFixed.tsx.
-import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
-import { apiRequest } from "@/lib/queryClient";
 import { buildPatientSynopsis, hasAutonomicBalance } from "@shared/deterministicSynopsis";
 import { NervousSystemBody } from "./patient/NervousSystemBody";
 import { AutonomicBalanceGauge } from "./AutonomicBalanceGaugeFixed";
@@ -23,6 +21,7 @@ import { BodyHeatmap } from "./patient/BodyHeatmap";
 import { SupplementsPanel } from "./patient/SupplementsPanel";
 import { TreatmentsPanel } from "./patient/TreatmentsPanel";
 import { NextTestCard } from "./patient/NextTestCard";
+import { ProvenanceChip } from "./ProvenanceChip";
 
 interface PatientPortalProps {
   report: ANSReport;
@@ -40,14 +39,9 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
   const vendorHasNotableFindings = (vendorFindings?.findings ?? []).some(
     (f) => f.classification === "abnormal" || f.classification === "high" || f.classification === "low" || f.key === "stand.presyncope",
   );
-  // The deterministic synopsis is computed offline from the report, so it is shown
-  // immediately — the patient is never blocked by (or left waiting on) the network.
-  // Optional AI enrichment quietly swaps in richer prose over the top when it lands.
-  const [synopsis, setSynopsis] = useState<string>(
-    () => report.patientSynopsis ?? buildPatientSynopsis(report, vendorFindings),
-  );
-  // Non-blocking enrichment indicator; deterministic synopsis is already shown.
-  const [enhancing, setEnhancing] = useState(false);
+  // Patient-visible text is deterministic only. AI output can exist solely as a
+  // clinician review draft and is never read from this component.
+  const synopsis = report.patientSynopsis ?? buildPatientSynopsis(report, vendorFindings);
 
   const p = report.patientData;
   const ab = report.autonomicBalance;
@@ -77,36 +71,6 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
   // unavailable. The visible % is NEVER shown (gauge shows "Not assessed").
   const visSymp = spectralAvailable ? (ab.sympathetic ?? 50) : 50;
   const visPara = spectralAvailable ? (ab.parasympathetic ?? 50) : 50;
-
-  // Optional AI enrichment. Runs in the background and only ever UPGRADES the
-  // text on success; any failure is swallowed so the deterministic synopsis stays
-  // on screen. It must never surface a "Connection error" in place of real content.
-  const enrichSynopsis = async () => {
-    setEnhancing(true);
-    try {
-      const res = await apiRequest("POST", "/api/synopsis", { report });
-      const data = await res.json();
-      if (data.success && data.patientSynopsis) {
-        setSynopsis(data.patientSynopsis);
-      }
-    } catch {
-      // AI enrichment is best-effort; keep the deterministic synopsis.
-    } finally {
-      setEnhancing(false);
-    }
-  };
-
-  useEffect(() => {
-    // Do NOT enrich when a vendor report flagged notable findings: /api/synopsis
-    // is vendor-blind, so its prose would OVERWRITE the vendor-aware deterministic
-    // synopsis and reintroduce the "nothing flagged" contradiction. Keep the
-    // deterministic vendor-aware text in that case.
-    const hasNotableVendor = (vendorFindings?.findings ?? []).some(
-      (f) => f.classification === "abnormal" || f.classification === "high" || f.classification === "low" || f.key === "stand.presyncope",
-    );
-    if (!report.patientSynopsis && !hasNotableVendor) enrichSynopsis();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const testDateStr = p.testDate
     ? new Date(p.testDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
@@ -157,6 +121,14 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
               {report.diagnosticSummary.reportConfidence.toLowerCase()}
             </span>
           </span>
+        )}
+        <ProvenanceChip value="Measured from .ans" />
+        <ProvenanceChip value="Derived from raw ECG" />
+        {report.vendorReconciliation?.status === "matched" && (
+          <ProvenanceChip value="Imported from paired vendor PDF" />
+        )}
+        {report.clinicalPipeline?.mode === "canonical" && (
+          <ProvenanceChip value="Not assessed" />
         )}
       </motion.div>
 
@@ -254,8 +226,8 @@ export function PatientPortalTwoColumn({ report, vendorExtraction }: PatientPort
           synopsis={synopsis}
           loading={false}
           error={null}
-          onRetry={enrichSynopsis}
-          enhancing={enhancing}
+          onRetry={() => undefined}
+          enhancing={false}
         />
       </motion.div>
 

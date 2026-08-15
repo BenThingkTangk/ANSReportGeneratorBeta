@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
 import { apiRequest } from "@/lib/queryClient";
+import { approveClinicalAiDraft, createClinicalAiDraft, type ClinicalAiDraft } from "@/lib/clinicalAiDraft";
+import { buildClinicianSynopsis } from "@shared/deterministicSynopsis";
 import { ClinicianHeader } from "./ClinicianHeader";
 import { ClinicianSynopsis } from "./ClinicianSynopsis";
 import { DataQualityPanel } from "./DataQualityPanel";
@@ -26,43 +28,44 @@ interface ClinicianPortalProps {
 }
 
 export function ClinicianPortal({ report, ansStudy }: ClinicianPortalProps) {
-  const [synopsis, setSynopsis] = useState<string | null>(report.clinicianSynopsis ?? null);
-  const [synopsisLoading, setSynopsisLoading] = useState(!report.clinicianSynopsis);
+  const deterministicSynopsis = report.clinicianSynopsis ?? buildClinicianSynopsis(report);
+  const [aiDraft, setAiDraft] = useState<ClinicalAiDraft | null>(null);
+  const [synopsisLoading, setSynopsisLoading] = useState(false);
   const [synopsisError, setSynopsisError] = useState<string | null>(null);
 
-  const fetchSynopsis = async () => {
+  // Explicit clinician action only. This legacy portal intentionally has no
+  // page-load effect that can call /api/synopsis.
+  const generateAiDraft = async () => {
     setSynopsisLoading(true);
     setSynopsisError(null);
     try {
       const res = await apiRequest("POST", "/api/synopsis", { report });
       const data = await res.json();
       if (data.success && data.clinicianSynopsis) {
-        setSynopsis(data.clinicianSynopsis);
+        setAiDraft(createClinicalAiDraft(data.clinicianSynopsis));
       } else {
-        setSynopsisError("Unable to generate clinical synopsis. Please try again.");
+        setSynopsisError("Unable to generate AI draft explanation. Please try again.");
       }
     } catch {
-      setSynopsisError("Connection error. Please retry.");
+      setSynopsisError("Unable to generate AI draft explanation. Please retry.");
     } finally {
       setSynopsisLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (!report.clinicianSynopsis) {
-      fetchSynopsis();
-    }
-  }, []);
 
   return (
     <div className="space-y-4 pb-16" data-testid="clinician-portal">
       <ClinicianHeader report={report} />
 
       <ClinicianSynopsis
-        synopsis={synopsis}
+        synopsis={aiDraft?.status === "approved" ? aiDraft.text : deterministicSynopsis}
         loading={synopsisLoading}
         error={synopsisError}
-        onRetry={fetchSynopsis}
+        onRetry={generateAiDraft}
+        enhancing={synopsisLoading}
+        aiDraft={aiDraft}
+        onGenerateAiDraft={generateAiDraft}
+        onApproveAiDraft={() => setAiDraft((draft) => draft ? approveClinicalAiDraft(draft) : draft)}
       />
 
       {/* PR2 — Data Quality & Confidence panel slots in above clinical content. */}

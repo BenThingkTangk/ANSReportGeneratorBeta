@@ -37,7 +37,7 @@ function classLabel(c: Cls): string {
 function provenanceBadge(method: string | undefined): { label: string; color: string } | null {
   switch (method) {
     case "vendor_reported":
-      return { label: "Vendor-reported", color: "hsl(160 60% 55%)" };
+      return { label: "Imported from paired vendor PDF", color: "hsl(160 60% 55%)" };
     case "derived_from_vendor":
       return { label: "Derived from vendor", color: "hsl(190 70% 55%)" };
     case "measured":

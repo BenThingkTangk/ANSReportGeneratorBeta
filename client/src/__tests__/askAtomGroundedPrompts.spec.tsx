@@ -144,10 +144,10 @@ describe("Ask ATOM header + prompts stay within report evidence (FIFTH FINAL-QA)
   // Unmount between cases so testid queries never see a stale prior render.
   afterEach(() => rtlCleanup());
 
-  it("confirms the input: score present in data but spectral/BP unavailable, no indication", () => {
-    // The raw score/tier exist in the report object (that is exactly why the
-    // drawer must GATE them rather than print them blindly).
-    expect(typeof report.wellnessScore).toBe("number");
+  it("confirms the canonical input: wellness is not assessed, spectral/BP unavailable, no indication", () => {
+    // The canonical response removes the legacy wellness score rather than
+    // relying on a client-side gate to hide it.
+    expect(report.wellnessScore).toBeNull();
     expect(report.spectralAvailable).toBe(false);
     expect(report.bpAvailable).toBe(false);
     expect(report.indications.length).toBe(0);

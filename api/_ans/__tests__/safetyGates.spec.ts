@@ -118,6 +118,32 @@ describe("G2 — sudomotor requires QSART/TST (never assessed from .ans)", () =>
 });
 
 describe("G3 — no definitive CAN / POTS / dysautonomia", () => {
+  it("blocks CAN-risk when adrenergic data is screen-only, even if both screen scores are abnormal", () => {
+    const summary = computeDiagnosticSummary(
+      study({
+        ratios: {
+          eiRatio: prov<number>(1.04),
+          valsalvaRatio: prov<number>(1.10),
+          thirtyFifteenRatio: prov<number>(0.99),
+        },
+        baseline: phase({ hr: 70, sbp: 130, dbp: 82 }),
+        standOrTilt: phase({ hr: 90, sbp: 100, dbp: 70 }),
+      }),
+    );
+    expect(summary.adrenergicScore.screenOnly).toBe(true);
+    expect(summary.phenotypeFlags.some((f) => f.id === "possible_can_risk")).toBe(false);
+    const blocked = summary.unsafeOrUnsupportedClaimsBlocked.find(
+      (claim) => /CAN\) risk/i.test(claim.claim),
+    );
+    expect(blocked).toBeTruthy();
+    expect(blocked?.missingFields).toEqual(expect.arrayContaining([
+      "adrenergic.beatToBeatBP.valsalvaLatePhaseII",
+      "adrenergic.beatToBeatBP.valsalvaPhaseIV",
+      "adrenergic.pressureRecoveryTime",
+    ]));
+    expect(blocked?.explanation).toMatch(/beat-to-beat BP\/baroreflex/i);
+  });
+
   it("phenotype flags are framed as 'pattern consistent with', never a diagnosis", () => {
     // POTS-like HR rise without OH.
     const summary = computeDiagnosticSummary(

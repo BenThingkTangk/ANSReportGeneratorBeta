@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import type { DomainScore } from "@shared/diagnosticSummary";
 import { ConfidenceBadge } from "@/components/ConfidenceBadge";
+import { ProvenanceChip } from "../ProvenanceChip";
 
 interface EwingRatiosTableProps {
   ratios: ANSReport["ratios"];
@@ -58,9 +59,13 @@ export function EwingRatiosTable({ ratios, cardiovagalScore }: EwingRatiosTableP
               <tr key={row.label} className={`border-b border-border/20 ${i % 2 === 0 ? "bg-card/20" : ""}`}>
                 <td className="py-2.5 pr-4 font-medium">{row.label}</td>
                 <td className="py-2.5 pr-4 tabular-nums font-semibold" style={{ color }}>
-                  {row.value.toFixed(2)}
+                  <div>{row.value.toFixed(2)}</div>
+                  <ProvenanceChip value="Derived from raw ECG" className="mt-1" />
                 </td>
-                <td className="py-2.5 pr-4 text-muted-foreground tabular-nums">{row.normal}</td>
+                <td className="py-2.5 pr-4 text-muted-foreground tabular-nums">
+                  <div>{row.normal}</div>
+                  <ProvenanceChip value="Generic research threshold" className="mt-1" />
+                </td>
                 <td className="py-2.5 pr-4">
                   <span
                     className="px-2 py-0.5 rounded-full text-[10px] font-semibold"

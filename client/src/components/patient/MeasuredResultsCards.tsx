@@ -17,6 +17,7 @@ import { motion } from "framer-motion";
 import { Activity, HeartPulse, MoveVertical, Info } from "lucide-react";
 import type { ANSReport } from "@shared/schema";
 import { ewingRatioReadings, hasVendorSpectral } from "@shared/deterministicSynopsis";
+import { ProvenanceChip } from "../ProvenanceChip";
 
 const ICONS: Record<string, typeof Activity> = {
   eiRatio: HeartPulse,
@@ -84,6 +85,10 @@ export function MeasuredResultsCards({ report }: { report: ANSReport }) {
                 {e.value.toFixed(2)}
               </div>
               <div className="text-[10px] text-muted-foreground">normal {e.normal}</div>
+              <div className="flex flex-wrap gap-1">
+                <ProvenanceChip value="Derived from raw ECG" />
+                <ProvenanceChip value="Generic research threshold" />
+              </div>
               <p className="text-xs text-foreground/70 leading-relaxed mt-1">{e.plain}</p>
             </div>
           );
@@ -100,8 +105,8 @@ export function MeasuredResultsCards({ report }: { report: ANSReport }) {
             The sympathetic-vs-parasympathetic <strong>branch-balance</strong> split
             (the vendor's proprietary LFa/RFa spectral aggregates) is <strong>not
             contained in the raw .ans export</strong>, so it is shown as
-            “Not assessed.” Supplying the paired vendor PDF adds those vendor-reported
-            values and unlocks the full branch-balance interpretation.
+            “Not assessed.” A matched paired vendor PDF may display its imported
+            vendor-reported values with explicit provenance.
           </span>
         </div>
       )}

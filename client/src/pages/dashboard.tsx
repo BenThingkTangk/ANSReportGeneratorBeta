@@ -252,12 +252,14 @@ export default function Dashboard() {
             }}
           />
         )}
+        {/* Vendor PDF content is passed to report views only after the server
+            reconciles its identity to this .ans study. */}
         {appState === "report" && report && (
           <ReportDashboard
             report={report}
             ansStudy={ansStudy ?? undefined}
-            vendorExtraction={vendorExtraction ?? undefined}
-            vendorSource={vendorSource ?? undefined}
+            vendorExtraction={report.vendorReconciliation?.status === "matched" ? vendorExtraction ?? undefined : undefined}
+            vendorSource={report.vendorReconciliation?.status === "matched" ? vendorSource ?? undefined : undefined}
             onReset={handleReset}
           />
         )}

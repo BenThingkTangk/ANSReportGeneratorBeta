@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 import { RefreshCw, Sparkles } from "lucide-react";
 import type { ANSReport } from "@shared/schema";
+import { ProvenanceChip } from "../ProvenanceChip";
 
 interface PlainEnglishSynopsisProps {
   report: ANSReport;
@@ -27,6 +28,7 @@ export function PlainEnglishSynopsis({ report: _report, synopsis, loading, error
         <h3 className="text-xs tracking-[0.15em] uppercase text-muted-foreground font-medium">
           Your Report — Plain English
         </h3>
+        <ProvenanceChip value={_report.clinicalPipeline?.mode === "canonical" ? "Not assessed" : "Clinician-approved conclusion"} />
         {enhancing && (
           <motion.span
             data-testid="synopsis-enhancing"

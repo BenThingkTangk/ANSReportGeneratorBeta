@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import type { ANSReport } from "@shared/schema";
 import type { AnsStudy } from "@shared/ansStudy";
-import { apiRequest } from "@/lib/queryClient";
+import { buildPatientSynopsis } from "@shared/deterministicSynopsis";
 import { NervousSystemBody } from "./NervousSystemBody";
 import { AutonomicBalanceGauge } from "./AutonomicBalanceGauge";
 import { CinematicEcg } from "./CinematicEcg";
@@ -21,9 +20,9 @@ interface PatientPortalProps {
 }
 
 export function PatientPortal({ report }: PatientPortalProps) {
-  const [synopsis, setSynopsis] = useState<string | null>(report.patientSynopsis ?? null);
-  const [synopsisLoading, setSynopsisLoading] = useState(!report.patientSynopsis);
-  const [synopsisError, setSynopsisError] = useState<string | null>(null);
+  // Patient-visible summary is deterministic only. This component never
+  // receives, creates, or renders a clinician AI draft.
+  const synopsis = report.patientSynopsis ?? buildPatientSynopsis(report);
 
   const p = report.patientData;
   const ab = report.autonomicBalance;
@@ -64,29 +63,6 @@ export function PatientPortal({ report }: PatientPortalProps) {
   // % is NEVER shown to the user (the gauge renders "Not assessed").
   const visSymp = spectralAvailable ? (ab.sympathetic ?? 50) : 50;
   const visPara = spectralAvailable ? (ab.parasympathetic ?? 50) : 50;
-
-  const fetchSynopsis = async () => {
-    setSynopsisLoading(true);
-    setSynopsisError(null);
-    try {
-      const res = await apiRequest("POST", "/api/synopsis", { report });
-      const data = await res.json();
-      if (data.success && data.patientSynopsis) {
-        setSynopsis(data.patientSynopsis);
-      } else {
-        setSynopsisError("Unable to generate synopsis. Please try again.");
-      }
-    } catch {
-      setSynopsisError("Connection error. Please retry.");
-    } finally {
-      setSynopsisLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!report.patientSynopsis) fetchSynopsis();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const testDateStr = p.testDate
     ? new Date(p.testDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
@@ -212,9 +188,9 @@ export function PatientPortal({ report }: PatientPortalProps) {
         <PlainEnglishSynopsis
           report={report}
           synopsis={synopsis}
-          loading={synopsisLoading}
-          error={synopsisError}
-          onRetry={fetchSynopsis}
+          loading={false}
+          error={null}
+          onRetry={() => undefined}
         />
       </motion.div>
 
